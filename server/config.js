@@ -26,6 +26,23 @@ function int(name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+// Turns TRUST_PROXY into the value Express expects.
+//
+//   unset / 0 / false          -> false   (no proxy; trust nothing)
+//   1 / true                   -> 1       (one hop; only safe when the app is
+//                                          ONLY reachable through the proxy)
+//   "172.16.0.0/12,10.0.0.0/8" -> array   (trust these peers only)
+function parseTrustProxy(raw) {
+  const value = (raw || '').trim();
+  if (value === '' || value === '0' || value.toLowerCase() === 'false') return false;
+  if (value === '1' || value.toLowerCase() === 'true') return 1;
+  const list = value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return list.length > 0 ? list : false;
+}
+
 const spotifyClientId = process.env.SPOTIFY_CLIENT_ID || '';
 const spotifyClientSecret = process.env.SPOTIFY_CLIENT_SECRET || '';
 
@@ -39,7 +56,21 @@ export const config = {
   // Trailing slashes cause double-slash redirect URIs, which Spotify rejects as
   // a mismatch. Normalise once here so nothing downstream has to think about it.
   publicUrl: (process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
-  trustProxy: bool('TRUST_PROXY', false),
+
+  // Which peers are allowed to speak for someone else via X-Forwarded-For.
+  //
+  // This is a security setting, not a convenience one: whatever Express trusts
+  // here becomes req.ip, and req.ip is what the rate limiter buckets on. Trust
+  // too much and any client can rotate its apparent address and walk past the
+  // login limiter.
+  //
+  // Accepts a list of trusted proxy addresses or CIDRs (preferred), or a plain
+  // hop count. Prefer the list: this app can be reachable BOTH through a proxy
+  // and directly on its published port at the same time, and a hop count cannot
+  // tell those two cases apart - it would trust the header on the direct path
+  // too. A CIDR covering only the proxy means the header is honoured when the
+  // peer really is the proxy, and ignored otherwise.
+  trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
 
   session: {
     cookieName: 'syncmypod_sid',

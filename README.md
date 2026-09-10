@@ -95,10 +95,59 @@ no accounts; after that it becomes a sign-in form.
 | `0.0.0.0` | Every interface. **Only do this behind HTTPS.** |
 
 Pairing codes and device tokens travel over the network. Over plain HTTP they are
-readable in transit, so put a TLS terminator (Caddy, nginx, Cloudflare Tunnel) in
-front before exposing this to the internet, and set `TRUST_PROXY=1` when you do —
-otherwise `req.ip` is the proxy's address and the rate limiter cannot tell clients
-apart.
+readable in transit, so put TLS in front before exposing this to the internet.
+There is a bundled way to do that — see below.
+
+### Publishing it over HTTPS on your own domain
+
+An optional Compose profile adds a Caddy reverse proxy that terminates TLS with a
+real Let's Encrypt certificate. It is off by default, because "reachable from the
+internet" should be a deliberate switch.
+
+The unusual part: it obtains certificates via the **DNS-01** challenge rather
+than the usual HTTP-01. HTTP-01 needs inbound port 80 and TLS-ALPN-01 needs 443;
+DNS-01 needs no inbound port at all. That makes this work on a host where 80 and
+443 are already taken by something else, and it means the certificate can be
+issued before any port is opened. It currently ships with the DuckDNS provider
+compiled in (`caddy/Dockerfile`); swapping in another DNS host is a one-line
+change to the `xcaddy build` line plus the `acme_dns` directive.
+
+In `.env`:
+
+```bash
+PUBLIC_HOSTNAME=pod.example.org     # bare hostname, no scheme or port
+PUBLIC_PORT=8444                    # must be open inbound
+DUCKDNS_TOKEN=...                   # from duckdns.org, for the DNS-01 challenge
+ACME_EMAIL=you@example.com          # required: renewal-failure warnings go here
+PUBLIC_URL=https://pod.example.org:8444
+TRUST_PROXY=172.16.0.0/12           # trust the bundled proxy, and only it
+```
+
+Then:
+
+```bash
+docker compose --profile public up -d --build
+```
+
+Three things to get right:
+
+1. **Open the port in both places.** A host firewall rule is not enough on a
+   cloud VM — the provider's own security rules (AWS security group, OCI security
+   list, GCP firewall) drop the traffic first. Check both.
+2. **`TRUST_PROXY` should be a CIDR, not `1`.** The app stays published on
+   `BIND_ADDR` for local/VPN access, so it has two paths in. A hop count would
+   make the app believe `X-Forwarded-For` on the direct path too, letting any
+   client rotate its apparent IP and walk past the login rate limiter. A CIDR
+   covering only the proxy is honoured when the peer really is the proxy.
+3. **Leave `HSTS_MAX_AGE=0` until the certificate works**, then set it to
+   `31536000`. HSTS is a promise the browser remembers, and there is no quick
+   undo if you enable it on a host that cannot serve HTTPS.
+
+Caddy refuses to start if `PUBLIC_HOSTNAME`, `DUCKDNS_TOKEN` or `ACME_EMAIL` is
+missing, or if the hostname has a scheme or port in it. That check is in the
+container entrypoint rather than in Compose, because Compose interpolates
+variables for every service even when its profile is inactive — a required
+variable in the compose file would break the ordinary non-public deployment.
 
 ---
 

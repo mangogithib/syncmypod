@@ -29,8 +29,9 @@ const app = express();
 
 // Behind a reverse proxy, req.ip and req.secure must come from X-Forwarded-*,
 // and without one they must not - otherwise any client can spoof its own IP and
-// walk straight past the rate limiter.
-app.set('trust proxy', config.trustProxy ? 1 : false);
+// walk straight past the rate limiter. See parseTrustProxy in config.js for why
+// a CIDR list is preferred over a hop count.
+app.set('trust proxy', config.trustProxy);
 app.disable('x-powered-by');
 
 // 1MB is generous for the largest legitimate body (a 200-item batch add) and

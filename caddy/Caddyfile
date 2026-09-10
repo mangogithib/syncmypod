@@ -1,0 +1,63 @@
+# SyncMyPod's own reverse proxy. Independent of anything else on the host.
+#
+# Its whole job is to terminate TLS for the public hostname and hand the request
+# to the app container over the internal compose network. When this is running
+# the app is not published to the host at all, so this is the only way in and its
+# X-Forwarded-For can be trusted.
+
+{
+	# No admin API. Nothing needs to reconfigure this at runtime, and an
+	# unauthenticated admin socket on a shared host is a liability.
+	admin off
+
+	# The ACME account contact. Required, not optional: Let's Encrypt only sends
+	# expiry warnings to a registered contact, and on an unattended self-hosted
+	# service that email is the backstop for renewal having silently broken.
+	#
+	# It is also required for a mundane reason - a Caddyfile has no conditionals,
+	# so an unset value would leave a bare `email` directive and fail to parse.
+	# Better to demand it up front, in the entrypoint, with a clear message.
+	email {$ACME_EMAIL}
+
+	# DNS-01 for every certificate.
+	#
+	# Let's Encrypt offers three ways to prove control of a name. HTTP-01 needs
+	# inbound port 80 and TLS-ALPN-01 needs inbound port 443; on this host both
+	# are already taken by an unrelated application. DNS-01 needs no inbound
+	# port at all - it answers with a TXT record - so it is the only option, and
+	# it is why this image is a custom build (see caddy/Dockerfile).
+	acme_dns duckdns {$DUCKDNS_TOKEN}
+}
+
+# ---- The public site ------------------------------------------------------
+#
+# Hostname and port come from separate variables so the port is stated once and
+# matches the published port in docker-compose.yml. Caddy serves this hostname
+# on this port and still requests a certificate for the bare hostname.
+{$PUBLIC_HOSTNAME}:{$PUBLIC_PORT} {
+	encode gzip
+
+	# HSTS belongs here, not in the app: this is the layer that knows the
+	# connection is really HTTPS. Deliberately opt-in via env, because enabling
+	# it is a promise the browser remembers with no quick undo - set
+	# HSTS_MAX_AGE=31536000 once the certificate is confirmed working.
+	header Strict-Transport-Security "max-age={$HSTS_MAX_AGE:0}"
+
+	# Everything else - CSP, X-Frame-Options, nosniff, Referrer-Policy - is set
+	# by the app itself, in one place, so a proxy change cannot silently drop a
+	# security header. Not duplicated here on purpose.
+
+	reverse_proxy app:8080 {
+		header_up X-Forwarded-Proto https
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}
+
+# There is deliberately no plain-HTTP site here. Tailnet and local access go
+# straight to the app's own published port (BIND_ADDR:HOST_PORT), so this proxy
+# has exactly one job - terminating TLS for the public hostname - and the only
+# listener it opens to the world is the encrypted one.

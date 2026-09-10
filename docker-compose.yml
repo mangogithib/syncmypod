@@ -71,8 +71,72 @@ services:
     # BIND_ADDR decides who can reach this. Default is loopback only, which is
     # the safe thing to be wrong about: set it to a private/VPN address (or
     # 0.0.0.0 behind your own TLS terminator) deliberately, not by accident.
+    #
+    # When the `public` profile is enabled, Caddy fronts the app instead and
+    # this mapping should be removed (set APP_PORTS_ENABLED=false and use the
+    # caddy service's ports), so that Caddy is the only way in and its
+    # X-Forwarded-For can be trusted.
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${HOST_PORT:-3010}:8080"
 
+  # ---- Optional: public HTTPS on your own domain ---------------------------
+  #
+  # Not started by default. `docker compose up -d` brings up just the app and
+  # its database, reachable only on BIND_ADDR above. To publish it:
+  #
+  #   docker compose --profile public up -d --build
+  #
+  # An off-by-default profile rather than a commented-out block, because
+  # "exposed to the internet" should be something you switch on deliberately,
+  # and because leaving it in the file means it stays tested and maintained.
+  caddy:
+    build: ./caddy
+    restart: unless-stopped
+    profiles: ["public"]
+    depends_on:
+      app:
+        condition: service_healthy
+    mem_limit: ${CADDY_MEM_LIMIT:-256m}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      # These deliberately do NOT use Compose's `${VAR:?error}` required syntax.
+      # Compose interpolates every service's variables even when the service's
+      # profile is inactive, so a required variable here would make a plain
+      # `docker compose up` fail for anyone not publishing publicly. The check
+      # happens in the container's entrypoint instead - see caddy/Dockerfile.
+      #
+      # The bare hostname, e.g. syncmypod.example.org. No scheme, no port.
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:-}
+      # Stated once and used for both the listener and the published port below,
+      # so the two can never drift apart.
+      PUBLIC_PORT: ${PUBLIC_PORT:-8444}
+      # DuckDNS token, used for the DNS-01 certificate challenge.
+      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN:-}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      # 0 until the certificate is confirmed working. See caddy/Caddyfile.
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-0}
+    ports:
+      # Public HTTPS. 0.0.0.0 is intentional here - this is the listener that is
+      # meant to be reachable, and the only one terminating TLS.
+      #
+      # The app's own port mapping above stays as it is: it serves the tailnet
+      # directly over plain HTTP, which is useful and costs nothing. That is
+      # also why TRUST_PROXY should be set to the Docker subnet rather than to
+      # a hop count - the app has two paths in, and only one of them (this one)
+      # may be believed about X-Forwarded-For.
+      - "0.0.0.0:${PUBLIC_PORT:-8444}:${PUBLIC_PORT:-8444}"
+    volumes:
+      # Certificates and ACME account keys. Losing this volume means re-issuing
+      # certificates, which Let's Encrypt rate-limits, so it is a named volume
+      # rather than anything ephemeral.
+      - syncmypod-caddy-data:/data
+      - syncmypod-caddy-config:/config
+
 volumes:
   syncmypod-db:
+  syncmypod-caddy-data:
+  syncmypod-caddy-config:
