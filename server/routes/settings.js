@@ -4,7 +4,6 @@ import { badRequest, handler } from '../lib/api.js';
 import * as deezer from '../providers/deezer.js';
 import * as itunes from '../providers/itunes.js';
 import * as musicbrainz from '../providers/musicbrainz.js';
-import * as spotify from '../providers/spotify.js';
 import { describe, SETTING_KEYS, setMany } from '../services/app-settings.js';
 
 export const settingsRoutes = Router();
@@ -15,18 +14,10 @@ settingsRoutes.use(requireUser);
 // One table describing every provider, rather than a chain of if-blocks. Adding
 // a provider means adding a row here and nothing else in this file.
 //
-// `probe` is deliberately a real search rather than a credential check: for
-// Spotify in particular, credentials can authenticate perfectly and still be
-// refused by the data API, and it is the data API that matters.
+// `probe` is deliberately a real search rather than a reachability check - a
+// provider can look healthy and still refuse the data API, and it is the data
+// API that matters.
 const PROVIDERS = {
-  spotify: {
-    label: 'Spotify',
-    module: spotify,
-    unconfigured: 'No Client ID and Client Secret are set.',
-    probe: () => spotify.searchAll('a', { types: 'track', limit: 1 }),
-    count: (found) => found.tracks.length,
-    hint: spotifyHint,
-  },
   deezer: {
     label: 'Deezer',
     module: deezer,
@@ -135,18 +126,3 @@ settingsRoutes.post(
   })
 );
 
-// Spotify's own wording is the most useful thing to show, but it needs
-// translating into what to actually do about it.
-function spotifyHint(err) {
-  const message = String(err.message || '');
-  if (/premium/i.test(message)) {
-    return 'Spotify requires the account that owns the app to have an active Premium subscription before it will serve the Web API. The credentials themselves are fine. Deezer and iTunes need no account and cover most of the same catalogue.';
-  }
-  if (err.status === 401 || /invalid client/i.test(message)) {
-    return 'The Client ID or Client Secret is wrong. Check for a stray space, and confirm the secret has not been rotated.';
-  }
-  if (err.status === 429) {
-    return 'Rate limited. Wait a minute and try again.';
-  }
-  return null;
-}

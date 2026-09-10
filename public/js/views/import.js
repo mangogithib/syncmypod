@@ -1,259 +1,263 @@
 import { api } from '../lib/api.js';
-import { h, icon, mount } from '../lib/dom.js';
+import { h, mount } from '../lib/dom.js';
 import {
-  artwork,
   badge,
-  emptyState,
+  debounce,
   formatNumber,
   formatRelative,
   modal,
   notice,
-  spinner,
   toast,
 } from '../lib/ui.js';
 
-// Importing from Spotify: link the account, pick playlists, watch the job run.
+// Bulk import.
+//
+// Two sources, neither needing an account or a key:
+//
+//   * A pasted list of tracks, one per line. The universal route - it works for
+//     a library held anywhere, including a Spotify export, a spreadsheet, or
+//     something typed out by hand.
+//   * A public Deezer playlist, by URL.
+//
+// There is no "connect your account" step any more. The Spotify integration
+// that used to be here needed OAuth, and went when Spotify started refusing Web
+// API access to apps whose owner is not a Premium subscriber.
 
 export async function renderImport(view, context) {
-  const body = h('div');
-  mount(view, body);
-  await load();
+  const jobsSlot = h('div');
 
-  async function load() {
+  mount(
+    view,
+    notice(
+      h(
+        'div',
+        h('strong', 'Every imported track is re-resolved. '),
+        h(
+          'span',
+          'Whatever you paste is treated as a hint, not as metadata. Each line is matched against a real catalogue, so a rough "Artist - Title" still lands with proper credits, artwork and a track number.'
+        )
+      ),
+      '',
+      'info'
+    ),
+    h('div.grid-2', trackListCard(), deezerCard()),
+    jobsSlot
+  );
+
+
+  await loadJobs();
+
+  async function loadJobs() {
     if (!context.isCurrent()) return;
-    mount(body, spinner('Checking Spotify...'));
-
     try {
-      const [status, { jobs }] = await Promise.all([
-        api.spotifyStatus(),
-        api.importJobs().catch(() => ({ jobs: [] })),
-      ]);
+      const { jobs } = await api.importJobs();
       if (!context.isCurrent()) return;
-
-      const blocks = [];
-
-      // Three distinct states, each with a different fix: no credentials on the
-      // server, credentials but no linked account, or ready.
-      if (!status.configured) {
-        blocks.push(notConfigured());
-      } else if (!status.linked) {
-        blocks.push(notLinked(status));
-      } else {
-        blocks.push(linked(status));
-        blocks.push(h('div', { id: 'playlist-slot' }, spinner('Loading your Spotify playlists...')));
-      }
-
-      if (jobs.length > 0) blocks.push(jobHistory(jobs));
-
-      mount(body, blocks);
-
-      if (status.configured && status.linked) loadPlaylists();
-    } catch (err) {
-      if (err.status === 401) return;
-      mount(body, notice(err.message, 'danger', 'warn'));
+      mount(jobsSlot, jobs.length > 0 ? jobHistory(jobs) : null);
+    } catch {
+      // History is informational; a failure here should not break the page.
     }
   }
 
-  function notConfigured() {
-    return h(
-      'div.card.card-pad',
-      h('h2', { style: { fontSize: '15px', marginBottom: '8px' } }, 'Spotify is not configured'),
-      h(
-        'p.muted',
-        { style: { marginBottom: '16px' } },
-        'Importing playlists needs a Spotify app of your own. It takes a couple of minutes and is free.'
-      ),
-      h(
-        'ol.muted',
-        { style: { paddingLeft: '20px', display: 'grid', gap: '6px' } },
-        h('li', h('span', 'Open '), h('a', { href: 'https://developer.spotify.com/dashboard', target: '_blank', rel: 'noopener noreferrer' }, 'developer.spotify.com/dashboard'), h('span', ' and create an app.')),
-        h('li', 'Copy its Client ID and Client Secret.'),
-        h('li', h('span', 'Add them to this instance as '), h('code', 'SPOTIFY_CLIENT_ID'), h('span', ' and '), h('code', 'SPOTIFY_CLIENT_SECRET'), h('span', ', then restart it.')),
-        h('li', h('span', 'Register the redirect URI shown in '), h('a', { href: '#/settings' }, 'Settings'), h('span', ' on the Spotify app.'))
-      ),
-      h(
-        'p.small.subtle',
-        { style: { marginTop: '16px' } },
-        'Search and metadata resolution work with just the id and secret. The redirect URI is only needed to read your own playlists.'
-      )
+  // --- pasted list ---------------------------------------------------------
+
+  function trackListCard() {
+    const textarea = h('textarea.textarea', {
+      rows: 9,
+      placeholder: 'Arijit Singh - Kesariya\nRadiohead - Karma Police\nSid Sriram - Uyire',
+      style: { fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)' },
+    });
+
+    const orderSelect = h(
+      'select.select',
+      h('option', { value: 'artist-title' }, 'Artist - Title'),
+      h('option', { value: 'title-artist' }, 'Title - Artist')
     );
-  }
 
-  function notLinked(status) {
-    return h(
-      'div.card.card-pad',
-      h('h2', { style: { fontSize: '15px', marginBottom: '8px' } }, 'Link your Spotify account'),
-      h(
-        'p.muted',
-        { style: { marginBottom: '16px' } },
-        'Your own playlists and saved songs are private, so importing them needs your permission. SyncMyPod asks for read-only access.'
-      ),
-      h(
-        'button.btn.btn-primary',
-        {
-          type: 'button',
-          onclick: async () => {
-            try {
-              const { url } = await api.spotifyAuthorize();
-              window.location.href = url;
-            } catch (err) {
-              toast(err.message, 'error');
-            }
-          },
-        },
-        icon('link', 15),
-        'Connect Spotify'
-      ),
-      status.redirectUri
-        ? h(
-            'p.small.subtle',
-            { style: { marginTop: '16px' } },
-            h('span', 'This must be registered as a Redirect URI on your Spotify app: '),
-            h('code', status.redirectUri)
-          )
-        : null
-    );
-  }
+    const playlistName = h('input.input', { type: 'text', placeholder: 'Optional' });
+    const previewSlot = h('div');
+    const submit = h('button.btn.btn-primary', { type: 'submit' }, 'Import list');
 
-  function linked(status) {
-    return h(
-      'div.card',
-      h(
-        'div.card-head',
-        h('h2', 'Spotify'),
-        badge('Connected', 'ok'),
-        h('div.spacer'),
-        h(
-          'button.btn.btn-sm',
-          {
-            type: 'button',
-            onclick: async () => {
-              try {
-                await api.spotifyUnlink();
-                toast('Spotify disconnected.', 'ok');
-                load();
-              } catch (err) {
-                toast(err.message, 'error');
-              }
-            },
-          },
-          'Disconnect'
-        )
-      ),
-      h(
-        'div.card-body',
-        h(
-          'div.row-between',
-          h(
-            'div',
-            h('div', `Connected as ${status.account?.displayName || 'unknown'}`),
-            h('div.small.subtle', `Linked ${formatRelative(status.account?.linkedAt)}`)
-          ),
-          h(
-            'button.btn',
-            {
-              type: 'button',
-              onclick: () => startImport(() => api.importSpotifySaved({ createPlaylist: false }), 'Liked Songs'),
-            },
-            icon('download', 15),
-            'Import Liked Songs'
-          )
-        )
-      )
-    );
-  }
-
-  async function loadPlaylists() {
-    const slot = document.getElementById('playlist-slot');
-    if (!slot) return;
-
-    try {
-      const { playlists } = await api.spotifyPlaylists();
-      if (!context.isCurrent()) return;
-
-      if (playlists.length === 0) {
-        mount(
-          slot,
-          emptyState({
-            iconName: 'list',
-            title: 'No playlists found',
-            body: 'This Spotify account has no playlists to import.',
-          })
-        );
+    // Live preview of how the lines will be read.
+    //
+    // "Artist - Title" and "Title - Artist" are indistinguishable to a machine,
+    // and getting it backwards across 300 lines is tedious to undo. Showing the
+    // first few parsed rows makes the right choice obvious before committing.
+    const preview = debounce(async () => {
+      const text = textarea.value;
+      if (!text.trim()) {
+        mount(previewSlot);
         return;
       }
-
-      mount(
-        slot,
-        h(
-          'div.card',
-          h('div.card-head', h('h2', 'Your Spotify playlists'), h('div.spacer'),
-            h('span.small.subtle', `${playlists.length} found`)),
+      try {
+        const result = await api.previewTrackList(text, orderSelect.value);
+        mount(
+          previewSlot,
           h(
-            'div.list',
-            playlists.map((playlist) =>
+            'div',
+            { style: { marginTop: '4px' } },
+            h(
+              'div.small.muted',
+              { style: { marginBottom: '6px' } },
+              `${formatNumber(result.total)} line${result.total === 1 ? '' : 's'} understood as:`
+            ),
+            h(
+              'div.card',
               h(
-                'div.list-row',
-                artwork(playlist.imageUrl, { size: 42 }),
-                h(
-                  'div.list-main',
-                  h('div.list-title', playlist.name),
+                'div.list',
+                result.sample.map((entry) =>
                   h(
-                    'div.list-sub',
-                    [
-                      `${playlist.trackCount ?? '?'} songs`,
-                      playlist.owner ? `by ${playlist.owner}` : null,
-                    ]
-                      .filter(Boolean)
-                      .join(' - ')
-                  )
-                ),
-                h(
-                  'div.list-actions',
-                  // Already-imported playlists get the softer label: re-running
-                  // is legitimate (to pick up new additions) but it should be
-                  // clear it is not the first time.
-                  playlist.importedAs
-                    ? h(
-                        'a.badge.badge-accent',
-                        { href: `#/playlists/${playlist.importedAs.id}` },
-                        'Imported'
-                      )
-                    : null,
-                  h(
-                    'button.btn.btn-sm',
-                    {
-                      type: 'button',
-                      onclick: () =>
-                        startImport(
-                          () =>
-                            api.importSpotifyPlaylist(playlist.spotifyId, {
-                              createPlaylist: true,
-                            }),
-                          playlist.name
-                        ),
-                    },
-                    playlist.importedAs ? 'Re-import' : 'Import'
+                    'div.list-row',
+                    { style: { padding: '6px 12px' } },
+                    h(
+                      'div.list-main',
+                      h('div.small', { style: { fontWeight: 500 } }, entry.title || '(no title)'),
+                      h('div.small.subtle', entry.artist || 'no artist - will search on title alone')
+                    )
                   )
                 )
               )
-            )
+            ),
+            result.total > result.sample.length
+              ? h('div.small.subtle', { style: { marginTop: '6px' } },
+                  `and ${formatNumber(result.total - result.sample.length)} more`)
+              : null
           )
+        );
+      } catch (err) {
+        mount(previewSlot, notice(err.message, 'danger', 'warn'));
+      }
+    }, 400);
+
+    textarea.addEventListener('input', preview);
+    orderSelect.addEventListener('change', preview);
+
+    return h(
+      'div.card',
+      h('div.card-head', h('h2', 'Paste a list of tracks'), h('div.spacer'), badge('No account needed', 'ok')),
+      h(
+        'div.card-body',
+        h(
+          'form.stack',
+          {
+            onsubmit: async (event) => {
+              event.preventDefault();
+              if (!textarea.value.trim()) {
+                toast('Paste some tracks first.', 'error');
+                return;
+              }
+              submit.disabled = true;
+              try {
+                const name = playlistName.value.trim();
+                const response = await api.importTrackList({
+                  text: textarea.value,
+                  order: orderSelect.value,
+                  playlistName: name || undefined,
+                  createPlaylist: Boolean(name),
+                });
+                watchJob(response.jobId, name || 'Pasted list');
+                textarea.value = '';
+                playlistName.value = '';
+                mount(previewSlot);
+              } catch (err) {
+                toast(err.message, 'error');
+              } finally {
+                submit.disabled = false;
+              }
+            },
+          },
+          h(
+            'div.field',
+            h('label', 'One track per line'),
+            textarea,
+            h(
+              'span.hint',
+              'Also accepts tab-separated columns and quoted CSV, so a spreadsheet or a Spotify export pasted straight in will work.'
+            )
+          ),
+          h('div.field', h('label', 'Each line reads as'), orderSelect),
+          previewSlot,
+          h(
+            'div.field',
+            h('label', 'Also create a playlist called'),
+            playlistName,
+            h('span.hint', 'Leave blank to add to your library only. An existing playlist with the same name is added to rather than duplicated.')
+          ),
+          h('div', submit)
         )
-      );
-    } catch (err) {
-      if (err.status === 401) return;
-      mount(slot, notice(err.message, 'danger', 'warn'));
-    }
+      )
+    );
   }
 
-  // Kicks off an import and shows live progress.
+  // --- Deezer playlist -----------------------------------------------------
+
+  function deezerCard() {
+    const input = h('input.input', {
+      type: 'text',
+      placeholder: 'https://www.deezer.com/playlist/1234567890',
+    });
+    const createPlaylist = h('input', { type: 'checkbox', checked: true });
+    const submit = h('button.btn.btn-primary', { type: 'submit' }, 'Import playlist');
+
+    return h(
+      'div.card',
+      h('div.card-head', h('h2', 'Import a Deezer playlist'), h('div.spacer'), badge('No account needed', 'ok')),
+      h(
+        'div.card-body',
+        h(
+          'form.stack',
+          {
+            onsubmit: async (event) => {
+              event.preventDefault();
+              if (!input.value.trim()) {
+                toast('Paste a Deezer playlist link.', 'error');
+                return;
+              }
+              submit.disabled = true;
+              try {
+                const response = await api.importDeezerPlaylist({
+                  playlist: input.value.trim(),
+                  createPlaylist: createPlaylist.checked,
+                });
+                watchJob(response.jobId, 'Deezer playlist');
+                input.value = '';
+              } catch (err) {
+                toast(err.message, 'error');
+              } finally {
+                submit.disabled = false;
+              }
+            },
+          },
+          h(
+            'div.field',
+            h('label', 'Playlist link or id'),
+            input,
+            h('span.hint', 'The playlist must be public. A full URL or just the numeric id both work.')
+          ),
+          h(
+            'label.checkbox',
+            createPlaylist,
+            h('span', 'Recreate it as a playlist here')
+          ),
+          notice(
+            'Playlist entries already carry a Deezer track id, so these resolve by direct lookup rather than by search - a long playlist imports quickly and accurately.',
+            '',
+            'info'
+          ),
+          h('div', submit)
+        )
+      )
+    );
+  }
+
+  // --- job progress --------------------------------------------------------
+
+  // Shows live progress for a running import.
   //
   // The server runs the job in the background and returns an id immediately, so
   // this polls. Closing the dialog does not cancel anything - the import keeps
-  // going server-side, which is the behaviour that makes a 300-track import
-  // survive a closed laptop.
-  async function startImport(starter, label) {
+  // going server-side, which is what makes a 300-track import survive a closed
+  // laptop.
+  function watchJob(jobId, label) {
     const progressBar = h('div.progress-bar', { style: { width: '0%' } });
     const statusLine = h('p.muted', 'Starting...');
     const detail = h('div');
@@ -264,23 +268,9 @@ export async function renderImport(view, context) {
         statusLine,
         h('div.progress', progressBar),
         detail,
-        notice(
-          'This runs on the server. You can close this and it will carry on.',
-          '',
-          'info'
-        ),
+        notice('This runs on the server. You can close this and it will carry on.', '', 'info'),
       ],
     });
-
-    let jobId;
-    try {
-      const response = await starter();
-      jobId = response.jobId;
-    } catch (err) {
-      mount(detail, notice(err.message, 'danger', 'warn'));
-      statusLine.textContent = 'Could not start the import.';
-      return;
-    }
 
     let stopped = false;
     const poll = async () => {
@@ -341,8 +331,8 @@ export async function renderImport(view, context) {
           context.refreshStats();
           if (job.status === 'done') {
             toast(`Imported ${label}: ${job.added} added.`, 'ok');
-            load();
           }
+          loadJobs();
           return;
         }
 
@@ -365,6 +355,11 @@ export async function renderImport(view, context) {
   }
 
   function jobHistory(jobs) {
+    const sourceLabel = {
+      'track-list': 'Pasted list',
+      'deezer-playlist': 'Deezer playlist',
+    };
+
     return h(
       'div.card',
       { style: { marginTop: '24px' } },
@@ -376,7 +371,7 @@ export async function renderImport(view, context) {
             'div.list-row',
             h(
               'div.list-main',
-              h('div.list-title', job.sourceName || job.source),
+              h('div.list-title', job.sourceName || sourceLabel[job.source] || job.source),
               h(
                 'div.list-sub',
                 `${formatNumber(job.added)} added, ${formatNumber(job.skipped)} skipped${
@@ -395,4 +390,5 @@ export async function renderImport(view, context) {
       )
     );
   }
+
 }

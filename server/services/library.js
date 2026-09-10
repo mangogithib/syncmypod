@@ -19,7 +19,6 @@ const TRACK_COLUMNS = `
   t.disc_no                AS "discNo",
   t.duration_ms            AS "durationMs",
   t.isrc,
-  t.spotify_id             AS "spotifyId",
   t.mbid,
   t.explicit,
   t.metadata_state         AS "metadataState",
@@ -141,7 +140,7 @@ export async function getTrack(userId, trackId) {
   if (!track) return null;
 
   track.artists = await many(
-    `SELECT a.id, a.name, a.spotify_id AS "spotifyId", a.mbid,
+    `SELECT a.id, a.name, a.mbid,
             a.image_url AS "imageUrl", ta.role, ta.position
        FROM track_artists ta
        JOIN artists a ON a.id = ta.artist_id
@@ -222,7 +221,6 @@ export async function listArtists(userId, { search, limit = 100, offset = 0 } = 
     `SELECT a.id,
             a.name,
             a.image_url  AS "imageUrl",
-            a.spotify_id AS "spotifyId",
             count(DISTINCT t.id)::int AS "trackCount",
             count(DISTINCT t.album_id)::int AS "albumCount",
             (fa.user_id IS NOT NULL) AS "followed"

@@ -119,7 +119,7 @@ export async function renderLibrary(view, context) {
         body:
           state.q || state.state
             ? 'Try a different search, or clear the filter.'
-            : 'Search for songs to add, or import a playlist from Spotify.',
+            : 'Search for songs to add, or import a list of tracks.',
         action:
           state.q || state.state
             ? h('button.btn', {

@@ -17,7 +17,7 @@ import { renderAlbums } from './views/albums.js';
 // Shared, mutable app state. Small enough that a store would be ceremony.
 export const state = {
   user: null,
-  providers: { spotify: false, musicbrainz: false },
+  providers: { deezer: false, itunes: false, musicbrainz: false },
   stats: null,
 };
 
@@ -114,7 +114,6 @@ function navCount(path) {
 // availability decides whether half the app can do anything at all, so it should
 // never be a surprise.
 const PROVIDER_LABELS = {
-  spotify: 'Spotify',
   deezer: 'Deezer',
   itunes: 'iTunes',
   musicbrainz: 'MusicBrainz',
@@ -221,9 +220,9 @@ async function start() {
     const [authState, health] = await Promise.all([
       api.state(),
       // Provider status is public on /api/health, so it is available on the
-      // login screen too - useful, because "Spotify is not configured" is the
+      // login screen too - useful, because "no provider is available" is the
       // first thing to know about a fresh instance.
-      api.health().catch(() => ({ providers: { spotify: false, musicbrainz: false } })),
+      api.health().catch(() => ({ providers: {} })),
     ]);
 
     state.providers = health.providers || state.providers;

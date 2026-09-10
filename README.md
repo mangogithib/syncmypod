@@ -32,13 +32,15 @@ sitting at the computer with the iPod attached. So the two jobs are separate:
 
 - **Library management** — songs, albums, artists, with search, filtering,
   sorting and paging.
-- **Metadata resolution** — Spotify first, MusicBrainz as fallback. ISRC lookup,
-  then scored search, then a loose title-only pass.
+- **Metadata resolution** — Deezer, then iTunes, then MusicBrainz. ISRC lookup,
+  then scored search, then a loose title-only pass. **No account or API key is
+  needed for any of them.**
 - **Manual correction** — edit any track; it is then marked `manual` and
   automatic resolution will not overwrite it.
 - **Playlists** — create, edit, reorder (drag or keyboard), and choose per
   playlist whether it syncs to the device.
-- **Spotify import** — link your account, import playlists or Liked Songs.
+- **Bulk import** — paste a list of tracks (one per line, or a spreadsheet or
+  CSV export pasted straight in), or import a public Deezer playlist by URL.
   Imports run server-side and survive a closed browser.
 - **Followed artists** — mark an artist and new releases are added
   automatically. Following records a baseline first, so your back catalogue is
@@ -153,8 +155,10 @@ variable in the compose file would break the ordinary non-public deployment.
 
 ## Configuring metadata providers
 
-The app runs without either of these, but search and resolution will fail until
-at least one is set.
+Deezer and iTunes work out of the box - no account, no key, nothing to set up.
+The only provider with anything to configure is MusicBrainz, and it is the least
+important of the three.
+
 
 **Configure them on the Settings page**, not in `.env`. Changes take effect on
 the next request with no restart, and each provider has a **Test connection**
@@ -167,45 +171,58 @@ deployments that prefer declarative config. A value owned by the environment
 shows in the UI as locked, naming the variable, rather than accepting an edit
 and appearing to lose it.
 
-### Spotify
+Providers are tried in a fixed order, ranked by how much **structure** each
+returns rather than by catalogue size. Structure is the thing this design exists
+to protect: raw YouTube Music and SoundCloud metadata routinely collapse several
+artists into one string, or amount to little more than a video title.
 
-Spotify's catalogue separates featured artists into distinct, ordered fields and
-has clean artwork and track numbers. Raw YouTube Music and SoundCloud metadata
-routinely collapse several artists into one string, or amount to little more than
-a video title — which is why resolution goes through a real catalogue first.
+### Deezer — tried first
 
-1. Create an app at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard).
-2. Paste the Client ID and Client Secret into Settings. That alone enables search
-   and metadata resolution.
-3. To also import your own playlists, register a Redirect URI on the Spotify app
-   matching the one Settings displays — normally
-   `<PUBLIC_URL>/api/import/spotify/callback`.
+Its `/track` endpoint returns an ordered `contributors` list and an ISRC, making
+it the only one of the three that gives real artist structure. Nothing to
+configure; on unless you switch it off.
 
-Two Spotify-side requirements that have nothing to do with your credentials
-being correct, and which the Test connection button will tell you about:
+Search returns only the primary artist, so the resolver fetches the full record
+for the *winning* candidate only. That keeps a large import to roughly one extra
+request per resolved track rather than one per candidate considered.
 
-- **The account that owns the app must have an active Spotify Premium
-  subscription.** Without it every Web API call returns
-  `403 Active premium subscription required for the owner of the app`, even
-  though the token endpoint authenticates fine. Spotify notes that a change in
-  subscription status can take a few hours to take effect.
-- An app in **development mode** can only authorise users explicitly added to
-  it, so add your own account there before linking.
+### iTunes — fallback
 
-### MusicBrainz
+Strong coverage of film and regional catalogue, and it returns track numbers,
+year and genre in the search response itself. Nothing to configure.
 
-MusicBrainz requires every client to identify itself with a contactable address
-and throttles clients that do not. Rather than send a fake one, the app treats a
-missing contact as "provider unavailable". Requests are serialised to roughly one
-per second, as their guidelines ask.
+Its one limitation: it gives a single `artistName` string like
+`Pritam, Arijit Singh & Amitabh Bhattacharya`, not a structured list. This app
+deliberately does **not** split that string. Most of the time splitting on `, `
+and ` & ` works, but the failure is silent and permanent — "Earth, Wind & Fire"
+becomes three artists and nobody notices until the iPod shows them. The joined
+string is already exactly what the iPod tag wants, so it is kept whole.
 
-Be aware of what it is and is not good at. Coverage of Western catalogue is
-strong, but it has no popularity signal, so a title-only search cannot tell an
-original from a cover, and it models every live performance as its own
-recording — meaning a well-known song returns the studio take buried among
-bootlegs. The app compensates by scoring release quality (official vs bootleg,
-studio vs live) and ranking on it, but coverage of film and regional music is
-genuinely thin. It is a fallback, not a substitute for a primary provider.
+### MusicBrainz — last resort
+
+Requires every client to identify itself with a contactable address and throttles
+clients that do not, so it stays off until one is set. Requests are serialised to
+roughly one per second, as their guidelines ask.
+
+Be aware of what it is and is not good at. It has no popularity signal, so a
+title-only search cannot tell an original from a cover, and it models every live
+performance as its own recording — meaning a well-known song returns the studio
+take buried among bootlegs. The app compensates by scoring release quality
+(official vs bootleg, studio vs live) and ranking on it, but coverage of film and
+regional music is thin.
+
+### A note on Spotify
+
+Spotify was the original first choice and has been **removed entirely**. It now
+refuses all Web API access unless the account that owns the registered app holds
+an active Premium subscription — every call returns
+`403 Active premium subscription required for the owner of the app`, even though
+the token endpoint authenticates fine. That is a policy, not a credential
+problem, and it applies to metadata lookups and playlist reads alike.
+
+Re-adding it would mean a new provider module plus a migration for its id
+columns. The provider layer is pluggable, so that is contained work rather than a
+rewrite — see `server/providers/` for the shape a provider has to implement.
 
 ---
 
@@ -270,7 +287,7 @@ server/
   config.js            Every env var, validated at boot
   db/                  Pool, migration runner, schema
   auth/                Passwords (scrypt), sessions, device tokens
-  providers/           Spotify and MusicBrainz clients
+  providers/           Deezer, iTunes and MusicBrainz clients
   services/            Resolver, library queries, imports, follows, manifest
   routes/              HTTP layer
 public/                Frontend: vanilla ES modules, no build step

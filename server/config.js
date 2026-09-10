@@ -15,12 +15,6 @@ function required(name) {
   return value;
 }
 
-function bool(name, fallback = false) {
-  const value = process.env[name];
-  if (value === undefined || value === '') return fallback;
-  return value === '1' || value.toLowerCase() === 'true';
-}
-
 function int(name, fallback) {
   const value = parseInt(process.env[name] ?? '', 10);
   return Number.isFinite(value) ? value : fallback;
@@ -43,7 +37,6 @@ function parseTrustProxy(raw) {
   return list.length > 0 ? list : false;
 }
 
-
 export const config = {
   env: process.env.NODE_ENV || 'development',
   port: int('PORT', 8080),
@@ -51,7 +44,7 @@ export const config = {
   databaseUrl: required('DATABASE_URL'),
   sessionSecret: required('SESSION_SECRET'),
 
-  // Trailing slashes cause double-slash redirect URIs, which Spotify rejects as
+  // Trailing slashes produce double-slash URLs, which some services reject as
   // a mismatch. Normalise once here so nothing downstream has to think about it.
   publicUrl: (process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
 
@@ -83,7 +76,7 @@ export const config = {
   // effective value is not knowable at boot and must not be frozen into this
   // object. services/app-settings.js owns that decision - it reads the relevant
   // environment variable itself and lets it win over the stored value. See
-  // spotifyConfig() and musicbrainzConfig() there.
+  // musicbrainzConfig() and providerToggle() there.
   //
   // What stays here is only what is genuinely deployment-level and never
   // adjusted from the UI.
@@ -116,7 +109,3 @@ export function baseUrl(req) {
   return `${proto}://${host}`;
 }
 
-// spotifyRedirectUri lives in providers/spotify.js, not here: it now depends on
-// a setting that may come from the database, and this module cannot import the
-// settings service without a circular import (the settings service imports this
-// one).

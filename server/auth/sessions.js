@@ -89,7 +89,7 @@ export function sessionCookie(cookieValue, expiresAt, { secure }) {
     'Path=/',
     'HttpOnly',
     // Lax rather than Strict: Strict would drop the cookie when returning from
-    // the Spotify OAuth redirect, logging the user out mid-import.
+    // an external OAuth redirect, logging the user out mid-flow.
     'SameSite=Lax',
     `Expires=${expiresAt.toUTCString()}`,
   ];

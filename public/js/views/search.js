@@ -16,9 +16,9 @@ import { followDialog } from './artists.js';
 // Add music: search a provider catalogue, then add tracks, whole albums, or
 // follow an artist.
 //
-// Searching hits Spotify or MusicBrainz on every request, so it is debounced and
-// requests are cancelled when superseded - typing "radiohead" should not leave
-// nine in-flight searches racing to paint the results.
+// Every keystroke would otherwise be an outbound provider request, so searching
+// is debounced and superseded requests are cancelled - typing "radiohead" should
+// not leave nine in-flight searches racing to paint the results.
 
 export async function renderSearch(view, context) {
   const results = h('div');
@@ -86,7 +86,7 @@ export async function renderSearch(view, context) {
         h(
           'div',
           h('strong', 'No metadata provider is configured. '),
-          h('span', 'Searching needs Spotify credentials or a MusicBrainz contact address. '),
+          h('span', 'Turn on Deezer or iTunes, or set a MusicBrainz contact. '),
           h('a', { href: '#/settings' }, 'Set one up')
         ),
         'warn',
@@ -100,7 +100,7 @@ export async function renderSearch(view, context) {
         iconName: 'search',
         title: 'Search for music to add',
         body:
-          'Results come from Spotify first, then MusicBrainz. Metadata is taken from whichever answered, not from wherever the audio eventually comes from.',
+          'Results come from Deezer first, then iTunes, then MusicBrainz. Metadata is taken from whichever answered, never from wherever the audio eventually comes from.',
       })
     );
   }
@@ -143,7 +143,7 @@ export async function renderSearch(view, context) {
           'p.small.subtle',
           { style: { marginBottom: '12px' } },
           `${data.results.length} result${data.results.length === 1 ? '' : 's'} from ${
-            data.provider === 'spotify' ? 'Spotify' : 'MusicBrainz'
+            data.providerLabel || data.provider
           }`
         ),
         type === 'artist'
@@ -330,7 +330,6 @@ export async function renderSearch(view, context) {
 
     try {
       const data = await api.providerAlbum({
-        spotifyId: result.spotifyId,
         deezerId: result.deezerId,
         itunesId: result.itunesId,
         mbid: result.mbid,
@@ -348,7 +347,7 @@ export async function renderSearch(view, context) {
             'div',
             h('div', { style: { fontWeight: 600 } }, data.album?.name || result.name),
             h('div.muted', data.album?.artistCredit || result.artistCredit || ''),
-            h('div.small.subtle', `${data.tracks.length} tracks from ${data.provider === 'spotify' ? 'Spotify' : 'MusicBrainz'}`)
+            h('div.small.subtle', `${data.tracks.length} tracks from ${data.provider}`)
           )
         ),
         h(
@@ -421,7 +420,6 @@ export async function renderSearch(view, context) {
       artist: result.artistCredit,
       album: result.albumName,
       isrc: result.isrc,
-      spotifyId: result.spotifyId,
       deezerId: result.deezerId,
       itunesId: result.itunesId,
       mbid: result.mbid,

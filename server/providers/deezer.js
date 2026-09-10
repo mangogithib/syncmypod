@@ -187,7 +187,7 @@ export async function searchTracks({ title, artist, limit = 10 }) {
   //
   // The album is deliberately NOT one of the qualifiers, even when the caller
   // supplied one. Album titles diverge wildly between services - a film song
-  // Spotify files under the soundtrack, Deezer often files under the song's own
+  // iTunes files under the soundtrack, Deezer often files under the song's own
   // name - so `album:` turns a good match into zero results rather than
   // narrowing it. Searching for Kesariya with album:"Brahmastra" returns
   // nothing at all, because Deezer calls that album "Kesariya".
@@ -277,6 +277,52 @@ export async function getAlbumTracks(deezerId) {
 
     return { album, tracks: tracks.filter(Boolean) };
   });
+}
+
+// Reads a playlist. Public playlists only - which is all that is possible
+// without OAuth, and enough to import a shared or published playlist by URL.
+// A private playlist returns an error body, which get() turns into a
+// ProviderError with the provider's own wording.
+export async function getPlaylist(deezerId) {
+  const body = await get(`/playlist/${encodeURIComponent(deezerId)}`);
+
+  // Deezer paginates a playlist's tracks. The first page is embedded; the rest
+  // follow `next`, which is an absolute URL.
+  const tracks = [...(body?.tracks?.data || [])];
+  let next = body?.tracks?.next;
+  // Bounded, so a pathological 10,000-track playlist cannot loop for minutes.
+  for (let page = 0; next && page < 40; page++) {
+    const more = await limiter(() =>
+      fetchJson(next, { provider: 'deezer', timeoutMs: 15_000 })
+    );
+    for (const track of more?.data || []) tracks.push(track);
+    next = more?.next;
+  }
+
+  return {
+    playlist: {
+      deezerId: String(body.id),
+      name: body.title,
+      description: body.description || null,
+      trackCount: body.nb_tracks ?? tracks.length,
+      owner: body.creator?.name || null,
+      imageUrl: artwork(body) || body.picture_xl || null,
+      public: body.public !== false,
+    },
+    tracks: tracks.map(toLightTrack).filter(Boolean),
+  };
+}
+
+// Pulls the playlist id out of whatever the user pasted: a full URL, a share
+// link, or just the number. Accepting all three is the difference between the
+// feature working first time and the user having to work out which part matters.
+export function parsePlaylistRef(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) return raw;
+  // https://www.deezer.com/en/playlist/12345  |  https://deezer.page.link/...
+  const match = /deezer\.[a-z.]+\/(?:[a-z]{2}\/)?playlist\/(\d+)/i.exec(raw);
+  return match ? match[1] : null;
 }
 
 export async function getArtist(deezerId) {

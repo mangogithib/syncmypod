@@ -107,7 +107,7 @@ function recentlyAdded({ tracks }) {
       h('a.small', { href: '#/library' }, 'All songs')),
     tracks.length === 0
       ? h('div.card-body', h('p.muted.small',
-          'Nothing yet. Use Add music to search for songs, or Import to pull in a Spotify playlist.'))
+          'Nothing yet. Use Add music to search for songs, or Import to bring in a list or a playlist.'))
       : h(
           'div.list',
           tracks.map((track) =>

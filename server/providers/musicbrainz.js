@@ -5,9 +5,9 @@ import { yearFromDate } from '../lib/normalise.js';
 
 // MusicBrainz client - the fallback provider.
 //
-// Used when Spotify has no answer, or when Spotify is not configured at all. It
-// returns the same normalised shape as the Spotify client so the resolver does
-// not care which one answered.
+// Used when Deezer and iTunes have no answer. It returns the same normalised
+// shape as the other providers, so the resolver does not care which one
+// answered.
 //
 // Two things about MusicBrainz shape the code here:
 //
@@ -61,7 +61,7 @@ async function ws(path, params = {}) {
 function toArtists(artistCredit) {
   // artist-credit is an ordered list of { artist, joinphrase }. The order is the
   // credit order, so the first entry is the primary artist and the rest are
-  // features - the same convention the Spotify client produces.
+  // features - the same convention every provider here produces.
   return (artistCredit || []).map((credit, index) => ({
     provider: 'musicbrainz',
     mbid: credit.artist?.id || null,

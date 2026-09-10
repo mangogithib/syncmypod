@@ -51,7 +51,7 @@ export function foldForMatch(text) {
 //
 // ISRC FIRST, for tracks. It is the only identifier that survives crossing
 // between services, so keying on it is what stops the same recording found via
-// Deezer and later via Spotify from becoming two catalogue rows - and therefore
+// Deezer and later via iTunes from becoming two catalogue rows - and therefore
 // two entries on the iPod. A provider id is only used when there is no ISRC.
 //
 // Provider ids are then tried in a FIXED order rather than "whichever the
@@ -66,13 +66,12 @@ export function foldForMatch(text) {
 // Albums and artists have no ISRC equivalent, so cross-provider duplicates
 // remain possible for them where names differ in punctuation. The name fallback
 // catches most of it; the rest is a known, tolerable imperfection.
-export function matchKey({ isrc, spotifyId, deezerId, itunesId, mbid, name, extra }) {
+export function matchKey({ isrc, deezerId, itunesId, mbid, name, extra }) {
   const cleanIsrc = String(isrc || '')
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '');
   if (cleanIsrc.length === 12) return `isrc:${cleanIsrc}`;
 
-  if (spotifyId) return `sp:${spotifyId}`;
   if (deezerId) return `dz:${deezerId}`;
   if (itunesId) return `it:${itunesId}`;
   if (mbid) return `mb:${mbid}`;
@@ -96,7 +95,7 @@ export function joinArtists(artists) {
   return [...new Set(names)].join(config.artistJoin);
 }
 
-// Spotify gives release_date with a precision flag; MusicBrainz gives a partial
+// Deezer and iTunes give a full release date; MusicBrainz gives a partial
 // date string. Both are kept verbatim, with just the year pulled out for
 // sorting and for the iPod year tag.
 export function yearFromDate(date) {

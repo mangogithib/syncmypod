@@ -6,7 +6,6 @@ import { joinArtists } from '../lib/normalise.js';
 import * as deezer from '../providers/deezer.js';
 import * as itunes from '../providers/itunes.js';
 import * as musicbrainz from '../providers/musicbrainz.js';
-import * as spotify from '../providers/spotify.js';
 
 export const searchRoutes = Router();
 searchRoutes.use(requireUser);
@@ -26,7 +25,6 @@ searchRoutes.use(requireUser);
 // services/resolver.js. Listed once here rather than as a hardcoded if-chain,
 // so adding a provider does not mean editing three fallback ladders.
 const PROVIDERS = [
-  { name: 'spotify', label: 'Spotify', module: spotify },
   { name: 'deezer', label: 'Deezer', module: deezer },
   { name: 'itunes', label: 'iTunes', module: itunes },
   { name: 'musicbrainz', label: 'MusicBrainz', module: musicbrainz },
@@ -112,7 +110,7 @@ searchRoutes.get(
     if (!anyEnabled) {
       return res.status(503).json({
         error:
-          'No metadata provider is available. Turn on Deezer or iTunes, or add Spotify credentials, in Settings.',
+          'No metadata provider is available. Turn on Deezer or iTunes, or set a MusicBrainz contact, in Settings.',
         providers: providerStatus(),
         tried,
         results: [],
@@ -139,7 +137,6 @@ function shape(found, type) {
     return (found.albums || []).map((album) => ({
       kind: 'album',
       name: album.name,
-      spotifyId: album.spotifyId,
       deezerId: album.deezerId,
       itunesId: album.itunesId,
       mbid: album.mbid,
@@ -154,7 +151,6 @@ function shape(found, type) {
     return (found.artists || []).map((artist) => ({
       kind: 'artist',
       name: artist.name,
-      spotifyId: artist.spotifyId,
       deezerId: artist.deezerId,
       itunesId: artist.itunesId,
       mbid: artist.mbid,
@@ -167,7 +163,6 @@ function shape(found, type) {
   return (found.tracks || []).map((track) => ({
     kind: 'track',
     title: track.title,
-    spotifyId: track.spotifyId,
     deezerId: track.deezerId,
     itunesId: track.itunesId,
     mbid: track.mbid,
@@ -189,7 +184,6 @@ searchRoutes.get(
   handler(async (req, res) => {
     // Whichever id the search result carried decides which provider to ask.
     const ids = {
-      spotify: str(req.query.spotifyId, 'spotifyId', { max: 60 }),
       deezer: str(req.query.deezerId, 'deezerId', { max: 60 }),
       itunes: str(req.query.itunesId, 'itunesId', { max: 60 }),
       musicbrainz: str(req.query.mbid, 'mbid', { max: 60 }),
@@ -223,7 +217,6 @@ function albumShape(album) {
   if (!album) return null;
   return {
     name: album.name,
-    spotifyId: album.spotifyId,
     deezerId: album.deezerId,
     itunesId: album.itunesId,
     mbid: album.mbid,

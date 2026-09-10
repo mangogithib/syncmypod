@@ -98,7 +98,7 @@ playlistRoutes.get(
               al.id            AS "albumId",
               pt.position,
               -- Flags a playlist entry whose track is no longer in the library.
-              -- A Spotify import can add playlist rows for tracks the user later
+              -- An import can add playlist rows for tracks the user later
               -- removed, and the sync manifest must not include them.
               (lt.user_id IS NOT NULL) AS "inLibrary"
          FROM playlist_tracks pt

@@ -60,11 +60,10 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET must be set in .env}
       PUBLIC_URL: ${PUBLIC_URL:-}
       TRUST_PROXY: ${TRUST_PROXY:-0}
-      # Metadata providers. Spotify is optional - without it the resolver falls
-      # back to MusicBrainz and the app still works, just less accurately.
-      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
-      SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
-      SPOTIFY_REDIRECT_URI: ${SPOTIFY_REDIRECT_URI:-}
+      # Metadata providers. All are configurable from the Settings page; these
+      # variables override the UI when set. Deezer and iTunes need no account.
+      DEEZER_ENABLED: ${DEEZER_ENABLED:-}
+      ITUNES_ENABLED: ${ITUNES_ENABLED:-}
       # MusicBrainz asks every client to identify itself and contact details.
       # Anonymous or spoofed agents get rate-limited or blocked.
       MUSICBRAINZ_CONTACT: ${MUSICBRAINZ_CONTACT:-}

@@ -121,10 +121,10 @@ export async function renderArtists(view, context) {
                           'button.btn.btn-sm',
                           {
                             type: 'button',
-                            disabled: !artist.spotifyId,
-                            title: artist.spotifyId
+                            disabled: !artist.deezerId,
+                            title: artist.deezerId
                               ? 'Watch for new releases'
-                              : 'This artist has no Spotify id, so new releases cannot be tracked',
+                              : 'This artist has no Deezer id, so new releases cannot be tracked',
                             onclick: () => followDialog(artist, load),
                           },
                           'Follow'
@@ -149,7 +149,7 @@ export async function renderArtists(view, context) {
   async function renderFollows() {
     mount(body, spinner('Loading follows...'));
     try {
-      const [{ follows, spotifyEnabled }, { playlists }] = await Promise.all([
+      const [{ follows, discoveryEnabled }, { playlists }] = await Promise.all([
         api.follows(),
         api.playlists().catch(() => ({ playlists: [] })),
       ]);
@@ -157,15 +157,15 @@ export async function renderArtists(view, context) {
 
       const blocks = [];
 
-      // Release discovery needs the Spotify API. Without it, follows can be
+      // Release discovery needs Deezer. Without it, follows can be
       // recorded but nothing will ever be found, so say that up front rather
       // than letting someone wonder why nothing arrives.
-      if (!spotifyEnabled) {
+      if (!discoveryEnabled) {
         blocks.push(
           notice(
             h(
               'div',
-              h('strong', 'Spotify is not configured. '),
+              h('strong', 'Deezer is switched off. '),
               h('span', 'New releases cannot be discovered until it is. '),
               h('a', { href: '#/settings' }, 'How to set it up')
             ),
@@ -175,32 +175,15 @@ export async function renderArtists(view, context) {
         );
       }
 
+      // There is no bulk "import everyone I follow" any more: that needed a
+      // user's account on a streaming service, and none of the current
+      // providers exposes a follow list without one. Artists are followed
+      // individually from a search result instead.
       blocks.push(
         h(
           'div.toolbar',
-          h(
-            'button.btn',
-            {
-              type: 'button',
-              disabled: !spotifyEnabled,
-              onclick: async () => {
-                try {
-                  const result = await api.importSpotifyFollows(false);
-                  toast(
-                    `Imported ${result.imported} of ${result.total} followed artists.`,
-                    'ok'
-                  );
-                  renderFollows();
-                } catch (err) {
-                  toast(err.message, 'error');
-                }
-              },
-            },
-            icon('download', 15),
-            'Import who I follow on Spotify'
-          ),
           h('div', { style: { flex: 1 } }),
-          h('a.btn', { href: '#/search' }, 'Find an artist')
+          h('a.btn.btn-primary', { href: '#/search' }, icon('search', 15), 'Find an artist')
         )
       );
 
@@ -375,9 +358,9 @@ export function followDialog(artist, onSaved, playlists) {
         '',
         'info'
       ),
-      !artist.spotifyId
+      !artist.deezerId
         ? notice(
-            'This artist has no Spotify id, so new releases cannot be discovered.',
+            'This artist has no Deezer id, so new releases cannot be discovered.',
             'warn',
             'warn'
           )
@@ -393,11 +376,12 @@ export function followDialog(artist, onSaved, playlists) {
             try {
               await api.follow({
                 // A library artist carries a catalogue id; a provider search
-                // result has only Spotify/MusicBrainz identity. The server
+                // result has only provider identity. The server
                 // accepts either, creating the artist row when needed.
                 artistId: artist.id,
                 name: artist.name,
-                spotifyId: artist.spotifyId,
+                deezerId: artist.deezerId,
+                itunesId: artist.itunesId,
                 mbid: artist.mbid,
                 autoAdd: autoAdd.checked,
                 includeSingles: singles.checked,

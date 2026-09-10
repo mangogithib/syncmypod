@@ -21,17 +21,11 @@ import { badge, notice, renderAsync, toast } from '../lib/ui.js';
 export async function renderSettings(view, context) {
   await renderAsync(
     view,
-    async () => {
-      const [settings, spotifyLink] = await Promise.all([
-        api.settings(),
-        api.spotifyStatus().catch(() => null),
-      ]);
-      return { settings, spotifyLink };
-    },
-    ({ settings, spotifyLink }) =>
+    () => api.settings(),
+    (settings) =>
       h(
         'div.stack',
-        providerCard(settings, spotifyLink, () => renderSettings(view, context)),
+        providerCard(settings, () => renderSettings(view, context)),
         accountCard(),
         localAppCard(),
         aboutCard()
@@ -45,7 +39,7 @@ export async function renderSettings(view, context) {
 // Provider configuration
 // ---------------------------------------------------------------------------
 
-function providerCard(data, spotifyLink, reload) {
+function providerCard(data, reload) {
   const fields = data.settings;
   // key -> input element, so Save can collect only what changed.
   const inputs = new Map();
@@ -116,7 +110,6 @@ function providerCard(data, spotifyLink, reload) {
     );
   };
 
-  const spotifyResult = h('div');
   const deezerResult = h('div');
   const itunesResult = h('div');
   const musicbrainzResult = h('div');
@@ -169,7 +162,7 @@ function providerCard(data, spotifyLink, reload) {
       'div.card-head',
       h('h2', 'Metadata providers'),
       h('div.spacer'),
-      data.providers.spotify || data.providers.musicbrainz
+      Object.values(data.providers).some(Boolean)
         ? badge('At least one active', 'ok')
         : badge('None active', 'warn')
     ),
@@ -178,7 +171,7 @@ function providerCard(data, spotifyLink, reload) {
       h(
         'p.muted',
         { style: { marginBottom: '20px' } },
-        'Every track is re-tagged against a real catalogue before it reaches the iPod, whatever source the audio came from. Spotify is tried first, MusicBrainz second.'
+        'Every track is re-tagged against a real catalogue before it reaches the iPod, whatever source the audio came from. Deezer is tried first, then iTunes, then MusicBrainz.'
       ),
       h(
         'form.stack',
@@ -233,45 +226,6 @@ function providerCard(data, spotifyLink, reload) {
         },
         saveResult,
 
-        // --- Spotify -------------------------------------------------------
-        h(
-          'div',
-          { style: { paddingBottom: '20px', borderBottom: '1px solid var(--border)' } },
-          h(
-            'div.row-between',
-            { style: { marginBottom: '10px' } },
-            h('div', { style: { fontWeight: 600 } }, 'Spotify'),
-            data.providers.spotify ? badge('Configured', 'ok') : badge('Not configured', 'warn')
-          ),
-          h(
-            'p.small.muted',
-            { style: { marginBottom: '14px' } },
-            h('span', 'Create an app at '),
-            h(
-              'a',
-              {
-                href: 'https://developer.spotify.com/dashboard',
-                target: '_blank',
-                rel: 'noopener noreferrer',
-              },
-              'developer.spotify.com/dashboard'
-            ),
-            h('span', '. The Client ID and Secret alone enable search and metadata resolution; the Redirect URI is needed only to import your own playlists.')
-          ),
-          field('spotify.clientId', { placeholder: '32-character client id' }),
-          field('spotify.clientSecret', { placeholder: '32-character client secret', type: 'password' }),
-          field('spotify.redirectUri', {
-            placeholder: spotifyLink?.redirectUri || 'https://your-domain/api/import/spotify/callback',
-            hint: 'Must match a Redirect URI registered on your Spotify app exactly. Leave blank to derive it from the address you are using.',
-          }),
-          field('spotify.market', {
-            placeholder: 'blank',
-            hint: 'Optional two-letter country code. Blank returns everything, which is normally what you want here - this tool only reads metadata, so playability in a given country is irrelevant.',
-          }),
-          h('div.row', { style: { marginTop: '12px' } }, testButton('spotify', spotifyResult)),
-          spotifyResult
-        ),
-
         // --- Deezer and iTunes ---------------------------------------------
         // Grouped together because they share the only thing worth saying about
         // them: there is nothing to configure. No account, no key, no quota to
@@ -320,7 +274,7 @@ function providerCard(data, spotifyLink, reload) {
           h(
             'p.small.muted',
             { style: { marginBottom: '14px' } },
-            'Used when Spotify has no answer. MusicBrainz requires every client to identify itself with a contactable address and throttles those that do not, so this stays off until one is set - sending a fake one gets the instance blocked.'
+            'The last fallback, used when Deezer and iTunes have no answer. MusicBrainz requires every client to identify itself with a contactable address and throttles those that do not, so this stays off until one is set - sending a fake one gets the instance blocked.'
           ),
           field('musicbrainz.contact', {
             placeholder: 'you@example.com',

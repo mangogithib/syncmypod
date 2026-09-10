@@ -34,7 +34,7 @@ export async function renderPlaylists(view, context) {
           iconName: 'list',
           title: 'No playlists yet',
           body:
-            'Playlists sync to the iPod as real playlists. Create one here, or import one from Spotify.',
+            'Playlists sync to the iPod as real playlists. Create one here, or import one.',
           action: h(
             'div.row',
             { style: { justifyContent: 'center' } },
@@ -43,7 +43,7 @@ export async function renderPlaylists(view, context) {
               { type: 'button', onclick: () => createPlaylistDialog(() => renderPlaylists(view, context)) },
               'New playlist'
             ),
-            h('a.btn', { href: '#/import' }, 'Import from Spotify')
+            h('a.btn', { href: '#/import' }, 'Import a playlist')
           ),
         });
       }
@@ -68,7 +68,7 @@ export async function renderPlaylists(view, context) {
                   [
                     `${playlist.trackCount} song${playlist.trackCount === 1 ? '' : 's'}`,
                     playlist.durationMs ? formatTotalDuration(playlist.durationMs) : null,
-                    playlist.source === 'spotify' ? 'from Spotify' : null,
+                    playlist.source === 'deezer' ? 'from Deezer' : null,
                   ]
                     .filter(Boolean)
                     .join(' - ')
@@ -254,7 +254,7 @@ export async function renderPlaylist(view, context) {
         const blocks = [];
 
         if (orphaned.length > 0) {
-          // A Spotify import can leave playlist entries for tracks later
+          // An import can leave playlist entries for tracks later
           // removed from the library. They are excluded from the sync manifest,
           // so flagging them explains a count that would otherwise look wrong.
           blocks.push(
@@ -287,7 +287,7 @@ export async function renderPlaylist(view, context) {
                 [
                   `${playlist.tracks.length} song${playlist.tracks.length === 1 ? '' : 's'}`,
                   playlist.description || null,
-                  playlist.source === 'spotify' ? 'imported from Spotify' : null,
+                  playlist.source === 'deezer' ? 'imported from Deezer' : null,
                 ]
                   .filter(Boolean)
                   .join(' - ')

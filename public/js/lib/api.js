@@ -115,8 +115,6 @@ export const api = {
   follow: (payload) => request('POST', '/api/artists/follows', payload),
   unfollow: (artistId) => request('DELETE', `/api/artists/follows/${artistId}`),
   checkFollow: (artistId) => request('POST', `/api/artists/follows/${artistId}/check`),
-  importSpotifyFollows: (autoAdd) =>
-    request('POST', '/api/artists/follows/import-spotify', { autoAdd }),
   artist: (artistId) => request('GET', `/api/artists/${artistId}`),
 
   // --- devices -----------------------------------------------------------
@@ -126,13 +124,9 @@ export const api = {
   deviceHistory: (deviceId) => request('GET', `/api/devices/${deviceId}/history`),
 
   // --- import ------------------------------------------------------------
-  spotifyStatus: () => request('GET', '/api/import/spotify/status'),
-  spotifyAuthorize: () => request('GET', '/api/import/spotify/authorize'),
-  spotifyUnlink: () => request('DELETE', '/api/import/spotify/link'),
-  spotifyPlaylists: () => request('GET', '/api/import/spotify/playlists'),
-  importSpotifyPlaylist: (spotifyId, payload) =>
-    request('POST', `/api/import/spotify/playlists/${spotifyId}`, payload || {}),
-  importSpotifySaved: (payload) => request('POST', '/api/import/spotify/saved', payload || {}),
+  previewTrackList: (text, order) => request('POST', '/api/import/preview', { text, order }),
+  importTrackList: (payload) => request('POST', '/api/import/track-list', payload),
+  importDeezerPlaylist: (payload) => request('POST', '/api/import/deezer-playlist', payload),
   importJobs: () => request('GET', '/api/import/jobs'),
   importJob: (jobId) => request('GET', `/api/import/jobs/${jobId}`),
 

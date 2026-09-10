@@ -27,10 +27,6 @@ import { many, query } from '../db/pool.js';
 // `secret: true` means the value is never returned to a client.
 // `env` names the environment variable that takes precedence over the database.
 const SCHEMA = {
-  'spotify.clientId': { env: 'SPOTIFY_CLIENT_ID', secret: false, label: 'Spotify Client ID' },
-  'spotify.clientSecret': { env: 'SPOTIFY_CLIENT_SECRET', secret: true, label: 'Spotify Client Secret' },
-  'spotify.redirectUri': { env: 'SPOTIFY_REDIRECT_URI', secret: false, label: 'Spotify Redirect URI' },
-  'spotify.market': { env: 'SPOTIFY_MARKET', secret: false, label: 'Spotify market' },
   'musicbrainz.contact': { env: 'MUSICBRAINZ_CONTACT', secret: false, label: 'MusicBrainz contact' },
   // Deezer and iTunes need no credentials, so there is nothing to configure -
   // only whether to use them. Stored as the string "true"/"false"; absent means
@@ -162,22 +158,13 @@ export function describe() {
 // Effective provider configuration
 // ---------------------------------------------------------------------------
 //
-// The single place the rest of the app asks "is Spotify usable, and with what".
-// Providers read this rather than `config`, so a credential typed into the UI
-// takes effect on the next request with no restart.
-
-export function spotifyConfig() {
-  const clientId = get('spotify.clientId');
-  const clientSecret = get('spotify.clientSecret');
-  return {
-    clientId,
-    clientSecret,
-    // Search and metadata resolution need only the client credentials grant.
-    enabled: Boolean(clientId && clientSecret),
-    redirectUri: get('spotify.redirectUri'),
-    market: get('spotify.market'),
-  };
-}
+// Providers read these rather than `config`, so a value typed into the UI takes
+// effect on the next request with no restart.
+//
+// Only MusicBrainz has anything to configure. Deezer and iTunes need no account
+// or key at all, so for them the only question is on or off - see
+// providerToggle. There is deliberately no credential plumbing left for a
+// provider that does not need any.
 
 // Whether a credential-free provider is switched on. Absent means on: there is
 // nothing to configure, so requiring an explicit opt-in would only leave a

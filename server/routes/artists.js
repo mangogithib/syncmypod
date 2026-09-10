@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { requireUser } from '../auth/middleware.js';
 import { many, one, query } from '../db/pool.js';
-import { badRequest, bool, handler, id, notFound, str } from '../lib/api.js';
+import { bool, handler, id, notFound, str } from '../lib/api.js';
 import { matchKey } from '../lib/normalise.js';
-import * as spotify from '../providers/spotify.js';
+import * as deezer from '../providers/deezer.js';
 import { checkFollowedArtist } from '../services/follows.js';
 
 export const artistRoutes = Router();
@@ -18,7 +18,7 @@ artistRoutes.get(
       `SELECT a.id,
               a.name,
               a.image_url  AS "imageUrl",
-              a.spotify_id AS "spotifyId",
+              a.deezer_id AS "deezerId",
               a.mbid,
               fa.followed_at     AS "followedAt",
               fa.last_checked_at AS "lastCheckedAt",
@@ -40,7 +40,7 @@ artistRoutes.get(
      ORDER BY lower(a.name)`,
       [req.user.id]
     );
-    res.json({ follows, spotifyEnabled: spotify.isEnabled() });
+    res.json({ follows, discoveryEnabled: deezer.isEnabled() });
   })
 );
 
@@ -54,41 +54,35 @@ artistRoutes.post(
 
     if (!artistId) {
       const name = str(req.body?.name, 'Name', { required: true, max: 300 });
-      const spotifyId = str(req.body?.spotifyId, 'spotifyId', { max: 60 });
+      const deezerId = str(req.body?.deezerId, 'deezerId', { max: 60 });
+      const itunesId = str(req.body?.itunesId, 'itunesId', { max: 60 });
       const mbid = str(req.body?.mbid, 'mbid', { max: 60 });
 
-      // Enrich from Spotify when possible, so a followed artist has an image and
-      // genres rather than just a name.
+      // Enrich from Deezer when possible, so a followed artist has a picture
+      // rather than just a name. Best-effort: a failed lookup costs an image,
+      // not the follow.
       let imageUrl = null;
-      let genres = null;
-      if (spotifyId && spotify.isEnabled()) {
+      if (deezerId && deezer.isEnabled()) {
         try {
-          const artist = await spotify.getArtist(spotifyId);
+          const artist = await deezer.getArtist(deezerId);
           imageUrl = artist?.imageUrl || null;
-          genres = artist?.genres || null;
         } catch (err) {
-          console.error('[artists] spotify artist lookup failed:', err.message);
+          console.error('[artists] deezer artist lookup failed:', err.message);
         }
       }
 
       const row = await one(
-        `INSERT INTO artists (match_key, name, spotify_id, mbid, image_url, genres)
+        `INSERT INTO artists (match_key, name, deezer_id, itunes_id, mbid, image_url)
          VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (match_key) DO UPDATE
             SET name       = EXCLUDED.name,
-                spotify_id = COALESCE(artists.spotify_id, EXCLUDED.spotify_id),
+                deezer_id  = COALESCE(artists.deezer_id, EXCLUDED.deezer_id),
+                itunes_id  = COALESCE(artists.itunes_id, EXCLUDED.itunes_id),
                 mbid       = COALESCE(artists.mbid, EXCLUDED.mbid),
                 image_url  = COALESCE(EXCLUDED.image_url, artists.image_url),
                 updated_at = now()
          RETURNING id`,
-        [
-          matchKey({ spotifyId, mbid, name }),
-          name,
-          spotifyId,
-          mbid,
-          imageUrl,
-          genres,
-        ]
+        [matchKey({ deezerId, itunesId, mbid, name }), name, deezerId, itunesId, mbid, imageUrl]
       );
       artistId = row.id;
     }
@@ -174,7 +168,7 @@ artistRoutes.get(
   handler(async (req, res) => {
     const artistId = id(req.params.id, 'Artist id');
     const artist = await one(
-      `SELECT a.id, a.name, a.image_url AS "imageUrl", a.spotify_id AS "spotifyId",
+      `SELECT a.id, a.name, a.image_url AS "imageUrl", a.deezer_id AS "deezerId",
               a.mbid, a.genres,
               (fa.user_id IS NOT NULL) AS followed
          FROM artists a
@@ -202,48 +196,3 @@ artistRoutes.get(
   })
 );
 
-// Bulk-imports the artists a user already follows on Spotify. Follows only -
-// their music is not added, for the same reason as the baseline above.
-artistRoutes.post(
-  '/follows/import-spotify',
-  handler(async (req, res) => {
-    if (!spotify.isEnabled()) {
-      throw badRequest('Spotify is not configured.');
-    }
-
-    const artists = await spotify.getMyFollowedArtists(req.user.id);
-    let imported = 0;
-
-    for (const artist of artists) {
-      const row = await one(
-        `INSERT INTO artists (match_key, name, spotify_id, image_url, genres)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (match_key) DO UPDATE
-            SET image_url = COALESCE(EXCLUDED.image_url, artists.image_url),
-                genres    = COALESCE(EXCLUDED.genres, artists.genres),
-                updated_at = now()
-         RETURNING id`,
-        [
-          matchKey({ spotifyId: artist.spotifyId, name: artist.name }),
-          artist.name,
-          artist.spotifyId,
-          artist.imageUrl,
-          artist.genres,
-        ]
-      );
-
-      const result = await query(
-        `INSERT INTO followed_artists (user_id, artist_id, auto_add)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (user_id, artist_id) DO NOTHING`,
-        [req.user.id, row.id, bool(req.body?.autoAdd, false)]
-      );
-      if (result.rowCount > 0) {
-        imported++;
-        await checkFollowedArtist(req.user.id, row.id, { baselineOnly: true });
-      }
-    }
-
-    res.json({ imported, total: artists.length });
-  })
-);

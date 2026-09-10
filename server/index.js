@@ -13,11 +13,10 @@ import { pruneProviderCache } from './lib/http.js';
 import * as deezer from './providers/deezer.js';
 import * as itunes from './providers/itunes.js';
 import * as musicbrainz from './providers/musicbrainz.js';
-import * as spotify from './providers/spotify.js';
 import { artistRoutes } from './routes/artists.js';
 import { authRoutes } from './routes/auth.js';
 import { deviceRoutes } from './routes/devices.js';
-import { importRoutes, prunePendingStates } from './routes/import.js';
+import { importRoutes } from './routes/import.js';
 import { libraryRoutes } from './routes/library.js';
 import { playlistRoutes } from './routes/playlists.js';
 import { searchRoutes } from './routes/search.js';
@@ -49,7 +48,7 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   // The frontend is plain ES modules with no inline scripts, so script-src can
   // stay strict. img-src has to allow https: because album artwork is served
-  // from Spotify's and the Cover Art Archive's CDNs - the alternative would be
+  // from the providers' and the Cover Art Archive's CDNs - the alternative would be
   // proxying every thumbnail through this server for no benefit.
   res.setHeader(
     'Content-Security-Policy',
@@ -76,7 +75,6 @@ app.get('/api/health', async (_req, res) => {
     res.json({
       ok: true,
       providers: {
-        spotify: spotify.isEnabled(),
         deezer: deezer.isEnabled(),
         itunes: itunes.isEnabled(),
         musicbrainz: musicbrainz.isEnabled(),
@@ -166,7 +164,6 @@ function startHousekeeping() {
       await pruneExpiredSessions();
       await prunePairingCodes();
       await pruneProviderCache();
-      prunePendingStates();
       pruneRateLimitBuckets();
     } catch (err) {
       console.error('[housekeeping]', err.message);
@@ -209,7 +206,6 @@ async function start() {
   const server = app.listen(config.port, () => {
     console.log(`[syncmypod] listening on :${config.port} (${config.env})`);
     const providers = {
-      spotify: spotify.isEnabled(),
       deezer: deezer.isEnabled(),
       itunes: itunes.isEnabled(),
       musicbrainz: musicbrainz.isEnabled(),

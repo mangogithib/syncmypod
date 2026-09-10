@@ -49,7 +49,7 @@ libraryRoutes.get(
 // Accepts two kinds of item, because the two are genuinely different:
 //
 //   * { trackId }  - already in the catalogue. Nothing to resolve.
-//   * { title, artist, album, isrc, spotifyId, ... } - a description that must
+//   * { title, artist, album, isrc, deezerId, ... } - a description that must
 //     be resolved against a provider first.
 //
 // Batched on purpose: adding a 40-track album is one request, and the report
@@ -92,7 +92,6 @@ libraryRoutes.post(
             artist: str(item?.artist, 'Artist', { max: 500 }),
             album: str(item?.album, 'Album', { max: 500 }),
             isrc: str(item?.isrc, 'ISRC', { max: 20 }),
-            spotifyId: str(item?.spotifyId, 'spotifyId', { max: 60 }),
             deezerId: str(item?.deezerId, 'deezerId', { max: 60 }),
             itunesId: str(item?.itunesId, 'itunesId', { max: 60 }),
             mbid: str(item?.mbid, 'mbid', { max: 60 }),
@@ -217,14 +216,14 @@ libraryRoutes.patch(
 );
 
 // Re-run resolution for one track. For the case where metadata was wrong, or a
-// track was imported before Spotify credentials were configured.
+// track was resolved before a better provider was available.
 libraryRoutes.post(
   '/tracks/:id/resolve',
   handler(async (req, res) => {
     const trackId = id(req.params.id, 'Track id');
     const track = await one(
       `SELECT t.id, t.title, t.artist_credit, t.album_credit, t.isrc,
-              t.spotify_id, t.mbid, t.duration_ms, t.metadata_state
+              t.deezer_id, t.itunes_id, t.mbid, t.duration_ms, t.metadata_state
          FROM tracks t
          JOIN library_tracks lt ON lt.track_id = t.id AND lt.user_id = $1
         WHERE t.id = $2`,
@@ -240,7 +239,8 @@ libraryRoutes.post(
       // Re-resolution deliberately ignores a stored provider id when the caller
       // asks to search again, since a wrong id is often the reason the metadata
       // was wrong in the first place.
-      spotifyId: req.body?.ignoreIds ? null : track.spotify_id,
+      deezerId: req.body?.ignoreIds ? null : track.deezer_id,
+      itunesId: req.body?.ignoreIds ? null : track.itunes_id,
       mbid: req.body?.ignoreIds ? null : track.mbid,
       durationMs: track.duration_ms,
       preferProvider: req.body?.provider,

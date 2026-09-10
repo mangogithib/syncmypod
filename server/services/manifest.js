@@ -42,7 +42,6 @@ export async function buildManifest(userId, deviceId) {
             t.isrc,
             t.genre,
             t.explicit,
-            t.spotify_id     AS "spotifyId",
             t.mbid,
             al.artwork_url   AS "artworkUrl",
             al.release_year  AS "year",
