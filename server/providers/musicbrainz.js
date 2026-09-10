@@ -1,3 +1,4 @@
+import { musicbrainzConfig as settings } from '../services/app-settings.js';
 import { config } from '../config.js';
 import { cached, createRateLimiter, fetchJson, ProviderError } from '../lib/http.js';
 import { yearFromDate } from '../lib/normalise.js';
@@ -25,11 +26,11 @@ const COVER_ART = 'https://coverartarchive.org';
 const limiter = createRateLimiter(config.musicbrainz.minIntervalMs);
 
 export function isEnabled() {
-  return config.musicbrainz.enabled;
+  return settings().enabled;
 }
 
 async function ws(path, params = {}) {
-  if (!config.musicbrainz.enabled) {
+  if (!settings().enabled) {
     throw new ProviderError(
       'MusicBrainz is not configured. Set MUSICBRAINZ_CONTACT to an email or project URL.',
       { provider: 'musicbrainz', status: 503 }
@@ -47,7 +48,7 @@ async function ws(path, params = {}) {
   return limiter(() =>
     fetchJson(url.toString(), {
       provider: 'musicbrainz',
-      headers: { 'User-Agent': config.musicbrainz.userAgent },
+      headers: { 'User-Agent': settings().userAgent },
       timeoutMs: 20_000,
     })
   );
@@ -103,6 +104,40 @@ function pickRelease(releases) {
   return scored[0].release;
 }
 
+// How unlike "the studio recording someone actually meant" this release is.
+//
+// pickRelease chooses the best release WITHIN one recording, but MusicBrainz
+// models every live performance as its own recording, so a search for
+// "Karma Police" returns the studio take alongside a dozen bootlegs - all with
+// an identical title and artist, and therefore an identical match score. Left
+// to that, a bootleg wins on nothing more than result order.
+//
+// So the provider reports a penalty and the resolver subtracts it when ranking
+// candidates. It lives here rather than in the scorer because "bootleg" and
+// "secondary-types" are MusicBrainz concepts; the scorer stays provider-neutral
+// and simply honours the number if a provider supplies one.
+function qualityPenalty(release) {
+  if (!release) return 0.15; // No release at all is weak evidence.
+
+  let penalty = 0;
+  const secondaryTypes = release['release-group']?.['secondary-types'] || [];
+
+  // Not an official release: a bootleg, a promo, a withdrawn pressing.
+  if (release.status && release.status !== 'Official') penalty += 0.35;
+  if (secondaryTypes.includes('Live')) penalty += 0.3;
+  if (secondaryTypes.includes('Demo')) penalty += 0.2;
+  if (secondaryTypes.includes('Compilation')) penalty += 0.1;
+
+  // Bootleg concert releases are conventionally titled by date and venue
+  // ("2003-06-04: Electric Lady Studios"). Catching that covers the ones with
+  // no status or type set at all, which is common for user-added bootlegs.
+  if (/^\d{4}[-‐-―.\/]\d{2}[-‐-―.\/]\d{2}/.test(release.title || '')) {
+    penalty += 0.3;
+  }
+
+  return Math.min(penalty, 0.8);
+}
+
 function toAlbumFromRelease(release) {
   if (!release) return null;
   const media = release.media?.[0];
@@ -146,6 +181,8 @@ function toTrack(recording) {
     explicit: null, // MusicBrainz does not model this.
     artists: toArtists(recording['artist-credit']),
     album,
+    // Subtracted by the resolver when ranking candidates. See qualityPenalty.
+    qualityPenalty: qualityPenalty(release),
     externalUrl: `https://musicbrainz.org/recording/${recording.id}`,
   };
 }
@@ -182,15 +219,36 @@ export async function searchTracks({ title, artist, album, limit = 10 }) {
   if (terms.length === 0) return [];
 
   const q = terms.join(' AND ');
-  return cached(`mb:search:${limit}:${q}`, 'musicbrainz', async () => {
+  // v2: the cache key is versioned so a change to how results are ranked is not
+  // masked for a fortnight by previously cached responses.
+  return cached(`mb:search:v2:${limit}:${q}`, 'musicbrainz', async () => {
     const body = await ws('/recording', { query: q, limit });
     const recordings = body?.recordings || [];
 
     // The search endpoint returns recordings with releases attached but without
-    // media detail, which is enough to score a candidate. The winning candidate
-    // is re-fetched in full by the resolver, so the expensive lookup happens
-    // once rather than for every result.
-    return recordings.map(toTrack).filter(Boolean);
+    // media detail, which is enough to judge a candidate.
+    const tracks = recordings.map(toTrack).filter(Boolean);
+
+    // Ranked by release quality before returning, not just by MusicBrainz's own
+    // relevance score.
+    //
+    // MusicBrainz models every live performance as its own recording, so a
+    // search for a well-known song returns the studio take buried among a dozen
+    // identically-titled bootlegs, all scored 100 for relevance. The resolver
+    // applies the same penalty when picking a match, but this list is also shown
+    // directly in the "Add music" screen - and putting a bootleg concert
+    // recording at the top of that list is simply wrong.
+    //
+    // A stable sort, so MusicBrainz's own ordering still decides between
+    // candidates of equal quality.
+    return tracks
+      .map((track, index) => ({ track, index }))
+      .sort(
+        (a, b) =>
+          (a.track.qualityPenalty || 0) - (b.track.qualityPenalty || 0) ||
+          a.index - b.index
+      )
+      .map((entry) => entry.track);
   });
 }
 

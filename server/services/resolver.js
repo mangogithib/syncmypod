@@ -151,7 +151,7 @@ function scoreAll(candidates, input) {
   let best = null;
   for (const candidate of candidates) {
     if (!candidate) continue;
-    const score = scoreCandidate(
+    const similarityScore = scoreCandidate(
       {
         title: input.title,
         artist: input.artist,
@@ -165,6 +165,13 @@ function scoreAll(candidates, input) {
         durationMs: candidate.durationMs,
       }
     );
+
+    // A provider may report that a candidate, while a textual match, is a poor
+    // representation of the recording - a bootleg or a live take rather than
+    // the studio version. Those are indistinguishable on title and artist
+    // alone, so without this the first one returned simply wins.
+    const score = Math.max(0, similarityScore - (candidate.qualityPenalty || 0));
+
     if (!best || score > best.score) best = { candidate, score };
   }
   return best;

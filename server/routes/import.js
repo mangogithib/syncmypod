@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { Router } from 'express';
 import { requireUser } from '../auth/middleware.js';
-import { spotifyRedirectUri } from '../config.js';
+import { spotifyRedirectUri } from '../providers/spotify.js';
 import { many, one, query } from '../db/pool.js';
 import { badRequest, bool, handler, id, notFound, str } from '../lib/api.js';
 import * as spotify from '../providers/spotify.js';
@@ -74,7 +74,7 @@ importRoutes.get(
   handler(async (req, res) => {
     if (!spotify.isEnabled()) {
       throw badRequest(
-        'Spotify is not configured. Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET, then restart.'
+        'Spotify is not configured. Add a Client ID and Client Secret in Settings.'
       );
     }
     const state = issueState(req.user.id);

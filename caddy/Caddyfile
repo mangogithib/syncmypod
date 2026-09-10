@@ -57,7 +57,7 @@
 	}
 }
 
-# There is deliberately no plain-HTTP site here. Tailnet and local access go
+# There is deliberately no plain-HTTP site here. Local access goes
 # straight to the app's own published port (BIND_ADDR:HOST_PORT), so this proxy
 # has exactly one job - terminating TLS for the public hostname - and the only
 # listener it opens to the world is the encrypted one.

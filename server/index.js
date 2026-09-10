@@ -19,7 +19,9 @@ import { importRoutes, prunePendingStates } from './routes/import.js';
 import { libraryRoutes } from './routes/library.js';
 import { playlistRoutes } from './routes/playlists.js';
 import { searchRoutes } from './routes/search.js';
+import { settingsRoutes } from './routes/settings.js';
 import { syncRoutes } from './routes/sync.js';
+import { loadSettings } from './services/app-settings.js';
 import { checkDueFollows } from './services/follows.js';
 import { failOrphanedJobs } from './services/import.js';
 
@@ -90,6 +92,7 @@ app.use('/api/search', searchRoutes);
 app.use('/api/artists', artistRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/import', importRoutes);
+app.use('/api/settings', settingsRoutes);
 // The device API. Token-authenticated only - see requireDevice.
 app.use('/api/sync', syncRoutes);
 
@@ -192,6 +195,10 @@ function startHousekeeping() {
 
 async function start() {
   await runMigrations();
+  // Provider credentials live in the database as well as the environment, and
+  // every isEnabled() check reads them synchronously from this cache, so it has
+  // to be populated before the server starts accepting requests.
+  await loadSettings();
   // Any job left 'running' belongs to a process that no longer exists.
   await failOrphanedJobs();
 

@@ -91,7 +91,7 @@ no accounts; after that it becomes a sign-in form.
 | Value | Reachable from |
 |---|---|
 | `127.0.0.1` (default) | The server itself only |
-| `100.x.x.x` | A Tailscale/VPN address — that network only |
+| `10.x.x.x` | A private network address — that network only |
 | `0.0.0.0` | Every interface. **Only do this behind HTTPS.** |
 
 Pairing codes and device tokens travel over the network. Over plain HTTP they are
@@ -135,7 +135,7 @@ Three things to get right:
    cloud VM — the provider's own security rules (AWS security group, OCI security
    list, GCP firewall) drop the traffic first. Check both.
 2. **`TRUST_PROXY` should be a CIDR, not `1`.** The app stays published on
-   `BIND_ADDR` for local/VPN access, so it has two paths in. A hop count would
+   `BIND_ADDR` for local access, so it has two paths in. A hop count would
    make the app believe `X-Forwarded-For` on the direct path too, letting any
    client rotate its apparent IP and walk past the login rate limiter. A CIDR
    covering only the proxy is honoured when the peer really is the proxy.
@@ -154,9 +154,20 @@ variable in the compose file would break the ordinary non-public deployment.
 ## Configuring metadata providers
 
 The app runs without either of these, but search and resolution will fail until
-at least one is set. The Settings page reports which are active.
+at least one is set.
 
-### Spotify (recommended)
+**Configure them on the Settings page**, not in `.env`. Changes take effect on
+the next request with no restart, and each provider has a **Test connection**
+button that makes one real request and reports what came back — "configured" and
+"working" are different things, and the gap between them is where the
+frustrating failures live.
+
+The environment variables still work and **take precedence** when set, for
+deployments that prefer declarative config. A value owned by the environment
+shows in the UI as locked, naming the variable, rather than accepting an edit
+and appearing to lose it.
+
+### Spotify
 
 Spotify's catalogue separates featured artists into distinct, ordered fields and
 has clean artwork and track numbers. Raw YouTube Music and SoundCloud metadata
@@ -164,32 +175,37 @@ routinely collapse several artists into one string, or amount to little more tha
 a video title — which is why resolution goes through a real catalogue first.
 
 1. Create an app at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard).
-2. Put the Client ID and Client Secret in `.env`:
-   ```bash
-   SPOTIFY_CLIENT_ID=...
-   SPOTIFY_CLIENT_SECRET=...
-   ```
-   That alone enables search and metadata resolution.
+2. Paste the Client ID and Client Secret into Settings. That alone enables search
+   and metadata resolution.
 3. To also import your own playlists, register a Redirect URI on the Spotify app
-   that matches `SPOTIFY_REDIRECT_URI` exactly — normally
-   `<PUBLIC_URL>/api/import/spotify/callback`. Settings shows the exact string to
-   paste.
-4. `docker compose up -d` to pick up the change.
+   matching the one Settings displays — normally
+   `<PUBLIC_URL>/api/import/spotify/callback`.
 
-Note that a Spotify app in development mode can only authorise users you have
-explicitly added to it, so add your own account there before linking.
+Two Spotify-side requirements that have nothing to do with your credentials
+being correct, and which the Test connection button will tell you about:
 
-### MusicBrainz (fallback)
+- **The account that owns the app must have an active Spotify Premium
+  subscription.** Without it every Web API call returns
+  `403 Active premium subscription required for the owner of the app`, even
+  though the token endpoint authenticates fine. Spotify notes that a change in
+  subscription status can take a few hours to take effect.
+- An app in **development mode** can only authorise users explicitly added to
+  it, so add your own account there before linking.
+
+### MusicBrainz
 
 MusicBrainz requires every client to identify itself with a contactable address
 and throttles clients that do not. Rather than send a fake one, the app treats a
-missing contact as "provider unavailable":
+missing contact as "provider unavailable". Requests are serialised to roughly one
+per second, as their guidelines ask.
 
-```bash
-MUSICBRAINZ_CONTACT=you@example.com
-```
-
-Requests are serialised to roughly one per second, as their guidelines ask.
+Be aware of what it is and is not good at. Coverage of Western catalogue is
+strong, but it has no popularity signal, so a title-only search cannot tell an
+original from a cover, and it models every live performance as its own
+recording — meaning a well-known song returns the studio take buried among
+bootlegs. The app compensates by scoring release quality (official vs bootleg,
+studio vs live) and ranking on it, but coverage of film and regional music is
+genuinely thin. It is a fallback, not a substitute for a primary provider.
 
 ---
 

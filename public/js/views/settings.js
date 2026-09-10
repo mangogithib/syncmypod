@@ -3,28 +3,36 @@ import { api } from '../lib/api.js';
 import { h, icon, mount } from '../lib/dom.js';
 import { badge, notice, renderAsync, toast } from '../lib/ui.js';
 
-// Settings: account, provider status, and how this instance is configured.
+// Settings: account, provider configuration, and instance information.
 //
-// Provider credentials are environment variables, not settings rows, so this
-// page reports and explains rather than edits. That is deliberate - secrets
-// belong in the deployment's own configuration, not in a database the app can
-// hand back over HTTP.
+// Provider credentials are editable here rather than only in a .env file, which
+// for a self-hosted tool is the difference between a setting being adjustable
+// and being effectively frozen behind SSH access and a container restart.
+//
+// Two rules the UI has to make visible:
+//
+//   * A value set in the environment WINS and cannot be edited here. The field
+//     is disabled and says which variable owns it, rather than accepting an
+//     edit and appearing to lose it.
+//   * A secret is never sent back to the browser. The field shows a short hint
+//     and blank means "leave unchanged", so saving the form does not wipe a
+//     secret the user never typed.
 
 export async function renderSettings(view, context) {
   await renderAsync(
     view,
     async () => {
-      const [spotify, health] = await Promise.all([
+      const [settings, spotifyLink] = await Promise.all([
+        api.settings(),
         api.spotifyStatus().catch(() => null),
-        api.health().catch(() => null),
       ]);
-      return { spotify, health };
+      return { settings, spotifyLink };
     },
-    ({ spotify, health }) =>
+    ({ settings, spotifyLink }) =>
       h(
         'div.stack',
+        providerCard(settings, spotifyLink, () => renderSettings(view, context)),
         accountCard(),
-        providerCard(spotify, health),
         localAppCard(),
         aboutCard()
       )
@@ -33,12 +41,241 @@ export async function renderSettings(view, context) {
   if (!context.isCurrent()) return;
 }
 
+// ---------------------------------------------------------------------------
+// Provider configuration
+// ---------------------------------------------------------------------------
+
+function providerCard(data, spotifyLink, reload) {
+  const fields = data.settings;
+  // key -> input element, so Save can collect only what changed.
+  const inputs = new Map();
+
+  const field = (key, { placeholder, hint, type = 'text' } = {}) => {
+    const spec = fields[key];
+    if (!spec) return null;
+
+    const input = h('input.input', {
+      type,
+      placeholder: spec.secret && spec.isSet ? 'Leave blank to keep current' : placeholder || '',
+      value: spec.secret ? '' : spec.value || '',
+      disabled: !spec.editable,
+      autocomplete: 'off',
+      spellcheck: 'false',
+    });
+    inputs.set(key, { input, spec });
+
+    return h(
+      'div.field',
+      h('label', spec.label),
+      input,
+      !spec.editable
+        ? h(
+            'span.hint',
+            h('span', 'Set by the '),
+            h('code', spec.envVar),
+            h('span', ' environment variable, so it cannot be changed here. Remove it from .env to edit it in this page.')
+          )
+        : spec.secret && spec.isSet
+          ? h('span.hint', `Currently set (${spec.hint}). Blank leaves it unchanged.`)
+          : hint
+            ? h('span.hint', hint)
+            : null
+    );
+  };
+
+  const spotifyResult = h('div');
+  const musicbrainzResult = h('div');
+
+  const testButton = (provider, slot) =>
+    h(
+      'button.btn.btn-sm',
+      {
+        type: 'button',
+        onclick: async (event) => {
+          const button = event.currentTarget;
+          button.disabled = true;
+          button.textContent = 'Testing...';
+          mount(slot);
+          try {
+            const result = await api.testProvider(provider);
+            mount(
+              slot,
+              notice(
+                h(
+                  'div',
+                  h('strong', result.ok ? 'Working. ' : 'Not working. '),
+                  h('span', result.message),
+                  // The provider's own error text is the most useful thing to
+                  // show, but it usually needs translating into an action.
+                  result.hint ? h('div', { style: { marginTop: '6px' } }, result.hint) : null
+                ),
+                result.ok ? '' : 'warn',
+                result.ok ? 'check' : 'warn'
+              )
+            );
+          } catch (err) {
+            mount(slot, notice(err.message, 'danger', 'warn'));
+          } finally {
+            button.disabled = false;
+            button.textContent = 'Test connection';
+          }
+        },
+      },
+      icon('refresh', 14),
+      'Test connection'
+    );
+
+  const save = h('button.btn.btn-primary', { type: 'submit' }, 'Save settings');
+  const saveResult = h('div');
+
+  return h(
+    'div.card',
+    h(
+      'div.card-head',
+      h('h2', 'Metadata providers'),
+      h('div.spacer'),
+      data.providers.spotify || data.providers.musicbrainz
+        ? badge('At least one active', 'ok')
+        : badge('None active', 'warn')
+    ),
+    h(
+      'div.card-body',
+      h(
+        'p.muted',
+        { style: { marginBottom: '20px' } },
+        'Every track is re-tagged against a real catalogue before it reaches the iPod, whatever source the audio came from. Spotify is tried first, MusicBrainz second.'
+      ),
+      h(
+        'form.stack',
+        {
+          onsubmit: async (event) => {
+            event.preventDefault();
+            mount(saveResult);
+
+            const updates = {};
+            for (const [key, { input, spec }] of inputs) {
+              if (!spec.editable) continue;
+              const value = input.value.trim();
+              // A blank secret field means "keep what is stored", not "clear
+              // it". Clearing a secret is done by removing it deliberately, not
+              // by submitting a form without retyping it.
+              if (spec.secret && value === '') continue;
+              updates[key] = value;
+            }
+
+            if (Object.keys(updates).length === 0) {
+              mount(saveResult, notice('Nothing to change.', '', 'info'));
+              return;
+            }
+
+            save.disabled = true;
+            try {
+              const result = await api.saveSettings(updates);
+              if (result.rejected.length > 0) {
+                mount(
+                  saveResult,
+                  notice(
+                    h(
+                      'div',
+                      h('strong', 'Some settings were not applied: '),
+                      ...result.rejected.map((entry) => h('div', entry.reason))
+                    ),
+                    'warn',
+                    'warn'
+                  )
+                );
+              } else {
+                toast('Settings saved. They take effect immediately.', 'ok');
+              }
+              appState.providers = result.providers;
+              reload();
+            } catch (err) {
+              mount(saveResult, notice(err.message, 'danger', 'warn'));
+            } finally {
+              save.disabled = false;
+            }
+          },
+        },
+        saveResult,
+
+        // --- Spotify -------------------------------------------------------
+        h(
+          'div',
+          { style: { paddingBottom: '20px', borderBottom: '1px solid var(--border)' } },
+          h(
+            'div.row-between',
+            { style: { marginBottom: '10px' } },
+            h('div', { style: { fontWeight: 600 } }, 'Spotify'),
+            data.providers.spotify ? badge('Configured', 'ok') : badge('Not configured', 'warn')
+          ),
+          h(
+            'p.small.muted',
+            { style: { marginBottom: '14px' } },
+            h('span', 'Create an app at '),
+            h(
+              'a',
+              {
+                href: 'https://developer.spotify.com/dashboard',
+                target: '_blank',
+                rel: 'noopener noreferrer',
+              },
+              'developer.spotify.com/dashboard'
+            ),
+            h('span', '. The Client ID and Secret alone enable search and metadata resolution; the Redirect URI is needed only to import your own playlists.')
+          ),
+          field('spotify.clientId', { placeholder: '32-character client id' }),
+          field('spotify.clientSecret', { placeholder: '32-character client secret', type: 'password' }),
+          field('spotify.redirectUri', {
+            placeholder: spotifyLink?.redirectUri || 'https://your-domain/api/import/spotify/callback',
+            hint: 'Must match a Redirect URI registered on your Spotify app exactly. Leave blank to derive it from the address you are using.',
+          }),
+          field('spotify.market', {
+            placeholder: 'blank',
+            hint: 'Optional two-letter country code. Blank returns everything, which is normally what you want here - this tool only reads metadata, so playability in a given country is irrelevant.',
+          }),
+          h('div.row', { style: { marginTop: '12px' } }, testButton('spotify', spotifyResult)),
+          spotifyResult
+        ),
+
+        // --- MusicBrainz ---------------------------------------------------
+        h(
+          'div',
+          h(
+            'div.row-between',
+            { style: { marginBottom: '10px' } },
+            h('div', { style: { fontWeight: 600 } }, 'MusicBrainz'),
+            data.providers.musicbrainz
+              ? badge('Configured', 'ok')
+              : badge('Not configured', 'warn')
+          ),
+          h(
+            'p.small.muted',
+            { style: { marginBottom: '14px' } },
+            'Used when Spotify has no answer. MusicBrainz requires every client to identify itself with a contactable address and throttles those that do not, so this stays off until one is set - sending a fake one gets the instance blocked.'
+          ),
+          field('musicbrainz.contact', {
+            placeholder: 'you@example.com',
+            hint: 'An email address or a project URL. Sent in the User-Agent header on every MusicBrainz request.',
+          }),
+          h('div.row', { style: { marginTop: '12px' } }, testButton('musicbrainz', musicbrainzResult)),
+          musicbrainzResult
+        ),
+
+        h('div', { style: { marginTop: '4px' } }, save)
+      )
+    )
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Account
+// ---------------------------------------------------------------------------
+
 function accountCard() {
   const current = h('input.input', { type: 'password', autocomplete: 'current-password' });
   const next = h('input.input', { type: 'password', autocomplete: 'new-password' });
   const confirm = h('input.input', { type: 'password', autocomplete: 'new-password' });
   const statusSlot = h('div');
-
   const submit = h('button.btn.btn-primary', { type: 'submit' }, 'Change password');
 
   return h(
@@ -100,96 +337,9 @@ function accountCard() {
   );
 }
 
-function providerCard(spotify, health) {
-  const spotifyOn = health?.providers?.spotify ?? appState.providers.spotify;
-  const musicbrainzOn = health?.providers?.musicbrainz ?? appState.providers.musicbrainz;
-
-  return h(
-    'div.card',
-    h('div.card-head', h('h2', 'Metadata providers')),
-    h(
-      'div.card-body',
-      h(
-        'p.muted',
-        { style: { marginBottom: '20px' } },
-        'Every track is re-tagged against a real catalogue before it reaches the iPod, whatever source the audio came from. Spotify is tried first, MusicBrainz second.'
-      ),
-
-      // --- Spotify ---
-      h(
-        'div',
-        { style: { paddingBottom: '20px', marginBottom: '20px', borderBottom: '1px solid var(--border)' } },
-        h(
-          'div.row-between',
-          h('div', { style: { fontWeight: 600 } }, 'Spotify'),
-          spotifyOn ? badge('Configured', 'ok') : badge('Not configured', 'warn')
-        ),
-        h(
-          'p.small.muted',
-          { style: { marginTop: '6px' } },
-          spotifyOn
-            ? 'Search and metadata resolution are using the Spotify catalogue.'
-            : 'Without this, search and resolution fall back to MusicBrainz alone, which has thinner coverage and less consistent artwork.'
-        ),
-        h(
-          'dl.kv',
-          { style: { marginTop: '12px' } },
-          h('dt', 'Credentials'),
-          h('dd', spotifyOn ? 'Present' : h('span', h('code', 'SPOTIFY_CLIENT_ID'), ' / ', h('code', 'SPOTIFY_CLIENT_SECRET'), ' not set')),
-          h('dt', 'Account linked'),
-          h(
-            'dd',
-            spotify?.linked
-              ? `Yes - ${spotify.account?.displayName || 'unknown'}`
-              : h('span.subtle', 'No (needed only to import your own playlists)')
-          ),
-          spotify?.redirectUri ? h('dt', 'Redirect URI') : null,
-          spotify?.redirectUri
-            ? h(
-                'dd',
-                h('code', spotify.redirectUri),
-                h('div.small.subtle', { style: { marginTop: '4px' } },
-                  'Register this exact string on your Spotify app.')
-              )
-            : null
-        ),
-        h(
-          'div.row',
-          { style: { marginTop: '12px' } },
-          h('a.btn.btn-sm', { href: '#/import' }, 'Import settings'),
-          h(
-            'a.btn.btn-sm',
-            { href: 'https://developer.spotify.com/dashboard', target: '_blank', rel: 'noopener noreferrer' },
-            'Spotify dashboard',
-            icon('link', 13)
-          )
-        )
-      ),
-
-      // --- MusicBrainz ---
-      h(
-        'div',
-        h(
-          'div.row-between',
-          h('div', { style: { fontWeight: 600 } }, 'MusicBrainz'),
-          musicbrainzOn ? badge('Configured', 'ok') : badge('Not configured', 'warn')
-        ),
-        h(
-          'p.small.muted',
-          { style: { marginTop: '6px' } },
-          musicbrainzOn
-            ? 'Used when Spotify has no answer.'
-            : h(
-                'span',
-                h('span', 'MusicBrainz requires every client to identify itself. Set '),
-                h('code', 'MUSICBRAINZ_CONTACT'),
-                h('span', ' to an email address or project URL and restart. Sending a fake one gets the instance throttled, so the provider stays off until it is set.')
-              )
-        )
-      )
-    )
-  );
-}
+// ---------------------------------------------------------------------------
+// Informational
+// ---------------------------------------------------------------------------
 
 function localAppCard() {
   return h(

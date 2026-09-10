@@ -1,4 +1,5 @@
-import { config, spotifyRedirectUri } from '../config.js';
+import { baseUrl } from '../config.js';
+import { onSettingsChanged, spotifyConfig as settings } from '../services/app-settings.js';
 import { one, query } from '../db/pool.js';
 import { cached, fetchJson, ProviderError } from '../lib/http.js';
 import { yearFromDate } from '../lib/normalise.js';
@@ -29,7 +30,7 @@ export const USER_SCOPES = [
 ].join(' ');
 
 export function isEnabled() {
-  return config.spotify.enabled;
+  return settings().enabled;
 }
 
 // ---------------------------------------------------------------------------
@@ -38,10 +39,18 @@ export function isEnabled() {
 
 let appToken = null; // { value, expiresAt }
 
+// Credentials are editable at runtime from the Settings page, so a token minted
+// with the previous pair has to be discarded. Otherwise a corrected credential
+// appears to do nothing for up to an hour - the cached token is still valid, or
+// still failing, depending on which pair was the broken one.
+onSettingsChanged((keys) => {
+  if (keys.some((key) => key.startsWith('spotify.'))) appToken = null;
+});
+
 async function getAppToken() {
-  if (!config.spotify.enabled) {
+  if (!settings().enabled) {
     throw new ProviderError(
-      'Spotify is not configured. Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET.',
+      'Spotify is not configured. Add a Client ID and Client Secret in Settings.',
       { provider: 'spotify', status: 503 }
     );
   }
@@ -51,7 +60,7 @@ async function getAppToken() {
   }
 
   const basic = Buffer.from(
-    `${config.spotify.clientId}:${config.spotify.clientSecret}`
+    `${settings().clientId}:${settings().clientSecret}`
   ).toString('base64');
 
   const body = await fetchJson(`${ACCOUNTS}/api/token`, {
@@ -186,10 +195,10 @@ export async function searchTracks({ title, artist, album, limit = 10 }) {
   if (album) terms.push(`album:${JSON.stringify(String(album))}`);
   const q = terms.length > 0 ? terms.join(' ') : String(title || '');
 
-  const key = `spotify:search:${config.spotify.market}:${limit}:${q}`;
+  const key = `spotify:search:${settings().market}:${limit}:${q}`;
   return cached(key, 'spotify', async () => {
     const body = await apiGet('/search', {
-      params: { q, type: 'track', limit, market: config.spotify.market },
+      params: { q, type: 'track', limit, market: settings().market },
     });
     return (body?.tracks?.items || []).map(toTrack).filter(Boolean);
   });
@@ -200,7 +209,7 @@ export async function searchTracks({ title, artist, album, limit = 10 }) {
 // typing expects their query to be treated as new.
 export async function searchAll(q, { types = 'track', limit = 20 } = {}) {
   const body = await apiGet('/search', {
-    params: { q, type: types, limit, market: config.spotify.market },
+    params: { q, type: types, limit, market: settings().market },
   });
   return {
     tracks: (body?.tracks?.items || []).map(toTrack).filter(Boolean),
@@ -212,7 +221,7 @@ export async function searchAll(q, { types = 'track', limit = 20 } = {}) {
 export async function getTrack(spotifyId) {
   return cached(`spotify:track:${spotifyId}`, 'spotify', async () => {
     const body = await apiGet(`/tracks/${encodeURIComponent(spotifyId)}`, {
-      params: { market: config.spotify.market },
+      params: { market: settings().market },
     });
     return toTrack(body);
   });
@@ -221,7 +230,7 @@ export async function getTrack(spotifyId) {
 export async function getAlbumTracks(spotifyId) {
   return cached(`spotify:album-tracks:${spotifyId}`, 'spotify', async () => {
     const album = await apiGet(`/albums/${encodeURIComponent(spotifyId)}`, {
-      params: { market: config.spotify.market },
+      params: { market: settings().market },
     });
 
     // The album endpoint returns a first page of simplified track objects that
@@ -243,7 +252,7 @@ export async function getAlbumTracks(spotifyId) {
     const tracks = [];
     for (let i = 0; i < ids.length; i += 50) {
       const body = await apiGet('/tracks', {
-        params: { ids: ids.slice(i, i + 50).join(','), market: config.spotify.market },
+        params: { ids: ids.slice(i, i + 50).join(','), market: settings().market },
       });
       for (const track of body?.tracks || []) {
         const mapped = toTrack(track);
@@ -273,7 +282,7 @@ export async function getArtistAlbums(
     params: {
       include_groups: includeGroups,
       limit,
-      market: config.spotify.market,
+      market: settings().market,
     },
   });
   while (body) {
@@ -296,9 +305,24 @@ export async function getArtistAlbums(
 // User authorisation (for importing the user's own playlists)
 // ---------------------------------------------------------------------------
 
+// The redirect URI to send to Spotify, and to show the user so they can register
+// it. An explicitly configured value always wins; the request-derived fallback
+// only exists so OAuth is testable on a fresh instance before anyone has set
+// PUBLIC_URL. Spotify matches this string exactly, so a mismatch here is the
+// single most common reason linking fails.
+//
+// It lives in the provider rather than in config.js because the configured
+// value can now come from the database, and config.js cannot import the settings
+// service without a circular import.
+export function spotifyRedirectUri(req) {
+  const configured = settings().redirectUri;
+  if (configured) return configured;
+  return `${baseUrl(req)}/api/import/spotify/callback`;
+}
+
 export function authorizeUrl(req, state) {
   const url = new URL(`${ACCOUNTS}/authorize`);
-  url.searchParams.set('client_id', config.spotify.clientId);
+  url.searchParams.set('client_id', settings().clientId);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('redirect_uri', spotifyRedirectUri(req));
   url.searchParams.set('scope', USER_SCOPES);
@@ -311,7 +335,7 @@ export function authorizeUrl(req, state) {
 
 export async function exchangeCode(req, code) {
   const basic = Buffer.from(
-    `${config.spotify.clientId}:${config.spotify.clientSecret}`
+    `${settings().clientId}:${settings().clientSecret}`
   ).toString('base64');
 
   const params = new URLSearchParams({
@@ -366,7 +390,7 @@ export async function userAccessToken(userId) {
   }
 
   const basic = Buffer.from(
-    `${config.spotify.clientId}:${config.spotify.clientSecret}`
+    `${settings().clientId}:${settings().clientSecret}`
   ).toString('base64');
 
   const body = await fetchJson(`${ACCOUNTS}/api/token`, {
@@ -442,7 +466,7 @@ export async function getPlaylistTracks(userId, playlistId) {
   const tracks = [];
   let body = await apiGet(`/playlists/${encodeURIComponent(playlistId)}/tracks`, {
     token,
-    params: { limit: 100, market: config.spotify.market },
+    params: { limit: 100, market: settings().market },
   });
   while (body) {
     for (const item of body.items || []) {
@@ -477,7 +501,7 @@ export async function getMySavedTracks(userId) {
   const tracks = [];
   let body = await apiGet('/me/tracks', {
     token,
-    params: { limit: 50, market: config.spotify.market },
+    params: { limit: 50, market: settings().market },
   });
   while (body) {
     for (const item of body.items || []) {

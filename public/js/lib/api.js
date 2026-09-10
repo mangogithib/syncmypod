@@ -136,5 +136,10 @@ export const api = {
   importJobs: () => request('GET', '/api/import/jobs'),
   importJob: (jobId) => request('GET', `/api/import/jobs/${jobId}`),
 
+  // --- instance settings -------------------------------------------------
+  settings: () => request('GET', '/api/settings'),
+  saveSettings: (settings) => request('PUT', '/api/settings', { settings }),
+  testProvider: (provider) => request('POST', `/api/settings/test/${provider}`),
+
   health: () => request('GET', '/api/health', undefined, { allowUnauthorised: true }),
 };

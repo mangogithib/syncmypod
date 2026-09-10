@@ -69,13 +69,14 @@ services:
       # Anonymous or spoofed agents get rate-limited or blocked.
       MUSICBRAINZ_CONTACT: ${MUSICBRAINZ_CONTACT:-}
     # BIND_ADDR decides who can reach this. Default is loopback only, which is
-    # the safe thing to be wrong about: set it to a private/VPN address (or
+    # the safe thing to be wrong about: set it to a private network address (or
     # 0.0.0.0 behind your own TLS terminator) deliberately, not by accident.
     #
-    # When the `public` profile is enabled, Caddy fronts the app instead and
-    # this mapping should be removed (set APP_PORTS_ENABLED=false and use the
-    # caddy service's ports), so that Caddy is the only way in and its
-    # X-Forwarded-For can be trusted.
+    # This mapping stays in place even when the `public` profile adds the proxy,
+    # so there is still a way in if the certificate or the domain breaks. That
+    # is why TRUST_PROXY should name the proxy's subnet rather than a hop count:
+    # the app has two paths in and only one of them may be believed about
+    # X-Forwarded-For.
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${HOST_PORT:-3010}:8080"
 
@@ -123,11 +124,6 @@ services:
       # Public HTTPS. 0.0.0.0 is intentional here - this is the listener that is
       # meant to be reachable, and the only one terminating TLS.
       #
-      # The app's own port mapping above stays as it is: it serves the tailnet
-      # directly over plain HTTP, which is useful and costs nothing. That is
-      # also why TRUST_PROXY should be set to the Docker subnet rather than to
-      # a hop count - the app has two paths in, and only one of them (this one)
-      # may be believed about X-Forwarded-For.
       - "0.0.0.0:${PUBLIC_PORT:-8444}:${PUBLIC_PORT:-8444}"
     volumes:
       # Certificates and ACME account keys. Losing this volume means re-issuing

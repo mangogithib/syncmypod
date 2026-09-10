@@ -344,7 +344,7 @@ function serverDetails(serverUrl) {
                 h('strong', 'This instance is not served over HTTPS. '),
                 h(
                   'span',
-                  'Pairing codes and tokens travel in the clear. Fine on a private network or VPN; put it behind HTTPS before exposing it to the internet.'
+                  'Pairing codes and tokens travel in the clear. Acceptable on a trusted private network; put it behind HTTPS before exposing it to the internet.'
                 )
               ),
               'warn',

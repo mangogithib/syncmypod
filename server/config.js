@@ -43,8 +43,6 @@ function parseTrustProxy(raw) {
   return list.length > 0 ? list : false;
 }
 
-const spotifyClientId = process.env.SPOTIFY_CLIENT_ID || '';
-const spotifyClientSecret = process.env.SPOTIFY_CLIENT_SECRET || '';
 
 export const config = {
   env: process.env.NODE_ENV || 'development',
@@ -79,31 +77,17 @@ export const config = {
     ttlDays: int('SESSION_TTL_DAYS', 30),
   },
 
-  spotify: {
-    clientId: spotifyClientId,
-    clientSecret: spotifyClientSecret,
-    // Search and metadata resolution need only the client credentials grant.
-    enabled: Boolean(spotifyClientId && spotifyClientSecret),
-    // Importing the user's own playlists additionally needs a redirect URI
-    // registered on the Spotify app, so it is tracked as a separate capability.
-    redirectUri: process.env.SPOTIFY_REDIRECT_URI || '',
-    // Optional, and empty by default. Spotify uses `market` to decide which
-    // tracks count as available and to relink regional duplicates. Left unset,
-    // the parameter is omitted and search returns everything, which is what a
-    // metadata-only tool wants - we never play the audio, so playability in a
-    // given country is irrelevant. Set it per deployment only if a specific
-    // market genuinely gives better matches for that library.
-    market: process.env.SPOTIFY_MARKET || '',
-  },
-
+  // Provider CREDENTIALS are deliberately not here.
+  //
+  // They can be set either in the environment or from the Settings page, so the
+  // effective value is not knowable at boot and must not be frozen into this
+  // object. services/app-settings.js owns that decision - it reads the relevant
+  // environment variable itself and lets it win over the stored value. See
+  // spotifyConfig() and musicbrainzConfig() there.
+  //
+  // What stays here is only what is genuinely deployment-level and never
+  // adjusted from the UI.
   musicbrainz: {
-    // MusicBrainz asks every client to identify itself with a contactable
-    // address and throttles or blocks those that do not. Rather than send a
-    // fake one, treat a missing contact as "provider unavailable" and say so
-    // in the UI.
-    contact: process.env.MUSICBRAINZ_CONTACT || '',
-    enabled: Boolean(process.env.MUSICBRAINZ_CONTACT),
-    userAgent: `SyncMyPod/0.1.0 ( ${process.env.MUSICBRAINZ_CONTACT || 'unconfigured'} )`,
     // Their published limit is ~1 request/second averaged. 1100ms leaves headroom
     // for clock jitter without being needlessly slow.
     minIntervalMs: int('MUSICBRAINZ_MIN_INTERVAL_MS', 1100),
@@ -132,10 +116,7 @@ export function baseUrl(req) {
   return `${proto}://${host}`;
 }
 
-// The Spotify redirect URI, preferring the explicit setting. Falling back to a
-// request-derived value means OAuth works on a test box before anyone has set
-// PUBLIC_URL, but Spotify still requires the exact string to be registered.
-export function spotifyRedirectUri(req) {
-  if (config.spotify.redirectUri) return config.spotify.redirectUri;
-  return `${baseUrl(req)}/api/import/spotify/callback`;
-}
+// spotifyRedirectUri lives in providers/spotify.js, not here: it now depends on
+// a setting that may come from the database, and this module cannot import the
+// settings service without a circular import (the settings service imports this
+// one).
