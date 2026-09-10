@@ -10,6 +10,8 @@ import { runMigrations } from './db/migrate.js';
 import { pool, query } from './db/pool.js';
 import { HttpError } from './lib/api.js';
 import { pruneProviderCache } from './lib/http.js';
+import * as deezer from './providers/deezer.js';
+import * as itunes from './providers/itunes.js';
 import * as musicbrainz from './providers/musicbrainz.js';
 import * as spotify from './providers/spotify.js';
 import { artistRoutes } from './routes/artists.js';
@@ -75,6 +77,8 @@ app.get('/api/health', async (_req, res) => {
       ok: true,
       providers: {
         spotify: spotify.isEnabled(),
+        deezer: deezer.isEnabled(),
+        itunes: itunes.isEnabled(),
         musicbrainz: musicbrainz.isEnabled(),
       },
     });
@@ -204,14 +208,20 @@ async function start() {
 
   const server = app.listen(config.port, () => {
     console.log(`[syncmypod] listening on :${config.port} (${config.env})`);
+    const providers = {
+      spotify: spotify.isEnabled(),
+      deezer: deezer.isEnabled(),
+      itunes: itunes.isEnabled(),
+      musicbrainz: musicbrainz.isEnabled(),
+    };
     console.log(
-      `[syncmypod] providers - spotify: ${
-        spotify.isEnabled() ? 'configured' : 'NOT configured'
-      }, musicbrainz: ${musicbrainz.isEnabled() ? 'configured' : 'NOT configured'}`
+      `[syncmypod] providers - ${Object.entries(providers)
+        .map(([name, on]) => `${name}: ${on ? 'on' : 'off'}`)
+        .join(', ')}`
     );
-    if (!spotify.isEnabled() && !musicbrainz.isEnabled()) {
+    if (!Object.values(providers).some(Boolean)) {
       console.warn(
-        '[syncmypod] No metadata provider is configured. Search and resolution will fail until one is.'
+        '[syncmypod] No metadata provider is available. Search and resolution will fail until one is.'
       );
     }
   });

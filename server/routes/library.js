@@ -93,6 +93,8 @@ libraryRoutes.post(
             album: str(item?.album, 'Album', { max: 500 }),
             isrc: str(item?.isrc, 'ISRC', { max: 20 }),
             spotifyId: str(item?.spotifyId, 'spotifyId', { max: 60 }),
+            deezerId: str(item?.deezerId, 'deezerId', { max: 60 }),
+            itunesId: str(item?.itunesId, 'itunesId', { max: 60 }),
             mbid: str(item?.mbid, 'mbid', { max: 60 }),
             durationMs: item?.durationMs ? Number(item.durationMs) : null,
           });

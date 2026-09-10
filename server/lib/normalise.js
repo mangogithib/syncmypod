@@ -45,12 +45,38 @@ export function foldForMatch(text) {
     .trim();
 }
 
-// Identity key for the catalogue. Provider ids win when present because they are
-// authoritative; the name fallback is a last resort that at least prevents the
-// same hand-typed artist appearing five times.
-export function matchKey({ spotifyId, mbid, name, extra }) {
+// Identity key for the catalogue.
+//
+// The order matters, and it is not simply "whichever provider answered".
+//
+// ISRC FIRST, for tracks. It is the only identifier that survives crossing
+// between services, so keying on it is what stops the same recording found via
+// Deezer and later via Spotify from becoming two catalogue rows - and therefore
+// two entries on the iPod. A provider id is only used when there is no ISRC.
+//
+// Provider ids are then tried in a FIXED order rather than "whichever the
+// calling provider supplied", so a record carrying two ids always produces the
+// same key regardless of which provider resolved it. Order without that
+// guarantee would defeat the point.
+//
+// The name fallback is a last resort. It cannot distinguish two different songs
+// with the same title, which is why callers pass `extra` (an artist, or an
+// artist plus album) to qualify it.
+//
+// Albums and artists have no ISRC equivalent, so cross-provider duplicates
+// remain possible for them where names differ in punctuation. The name fallback
+// catches most of it; the rest is a known, tolerable imperfection.
+export function matchKey({ isrc, spotifyId, deezerId, itunesId, mbid, name, extra }) {
+  const cleanIsrc = String(isrc || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  if (cleanIsrc.length === 12) return `isrc:${cleanIsrc}`;
+
   if (spotifyId) return `sp:${spotifyId}`;
+  if (deezerId) return `dz:${deezerId}`;
+  if (itunesId) return `it:${itunesId}`;
   if (mbid) return `mb:${mbid}`;
+
   const folded = foldForMatch(stripDecorations(name));
   return `n:${[folded, extra && foldForMatch(extra)].filter(Boolean).join('|')}`;
 }
@@ -98,7 +124,19 @@ export function similarity(a, b) {
 // signal after the ISRC: two different songs sharing a title is common, two
 // different songs sharing a title and a runtime to within two seconds is not.
 export function scoreCandidate(query, candidate) {
-  const titleScore = similarity(stripDecorations(query.title), candidate.title);
+  // Decorations are stripped from BOTH sides, which is easy to get wrong and
+  // consequential when it is.
+  //
+  // Stripping only the query means a provider's own decorated title is compared
+  // verbatim, and its extra words count against it. A soundtrack entry titled
+  // 'Kesariya (From "Brahmastra")' then scores 0.5 against the query "Kesariya",
+  // while an unrelated single simply titled "Kesariya" scores 1.0 - so the
+  // generic single wins and the film version, which is what was actually asked
+  // for, loses on having a more precise title.
+  const titleScore = similarity(
+    stripDecorations(query.title),
+    stripDecorations(candidate.title)
+  );
 
   let artistScore = 0;
   if (query.artist && candidate.artistCredit) {
@@ -117,7 +155,7 @@ export function scoreCandidate(query, candidate) {
 
   const albumScore =
     query.album && candidate.albumName
-      ? similarity(query.album, candidate.albumName)
+      ? similarity(stripDecorations(query.album), stripDecorations(candidate.albumName))
       : 0;
 
   // Weights: the title carries most of it, the artist confirms it, duration and

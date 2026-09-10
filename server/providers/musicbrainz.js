@@ -275,6 +275,27 @@ export async function searchArtists(name, { limit = 10 } = {}) {
   });
 }
 
+// The shape the UI search route expects, matching the other providers so the
+// route can iterate over all of them without special cases.
+export async function searchAll(q, { types = 'track', limit = 20 } = {}) {
+  if (types === 'artist') {
+    const artists = await searchArtists(q, { limit });
+    return { tracks: [], albums: [], artists };
+  }
+  if (types === 'album') {
+    return cached(`mb:release-search:${limit}:${q}`, 'musicbrainz', async () => {
+      const body = await ws('/release', { query: luceneTerm('release', q), limit });
+      return {
+        tracks: [],
+        albums: (body?.releases || []).map(toAlbumFromRelease).filter(Boolean),
+        artists: [],
+      };
+    });
+  }
+  const tracks = await searchTracks({ title: q, limit });
+  return { tracks, albums: [], artists: [] };
+}
+
 export async function getReleaseTracks(mbid) {
   return cached(`mb:release-tracks:${mbid}`, 'musicbrainz', async () => {
     const release = await ws(`/release/${encodeURIComponent(mbid)}`, {

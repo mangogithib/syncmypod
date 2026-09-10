@@ -110,23 +110,25 @@ function navCount(path) {
   return value ? h('span.nav-count', String(value)) : null;
 }
 
+// Shown permanently in the sidebar rather than buried in Settings: provider
+// availability decides whether half the app can do anything at all, so it should
+// never be a surprise.
+const PROVIDER_LABELS = {
+  spotify: 'Spotify',
+  deezer: 'Deezer',
+  itunes: 'iTunes',
+  musicbrainz: 'MusicBrainz',
+};
+
 function renderProviderPills() {
   const host = $('#provider-pills');
   clear(host);
-  // Provider availability shapes what half the app can do, so it is on screen
-  // permanently rather than buried in Settings.
-  host.appendChild(
-    badge(
-      state.providers.spotify ? 'Spotify' : 'Spotify off',
-      state.providers.spotify ? 'ok' : undefined
-    )
-  );
-  host.appendChild(
-    badge(
-      state.providers.musicbrainz ? 'MusicBrainz' : 'MusicBrainz off',
-      state.providers.musicbrainz ? 'ok' : undefined
-    )
-  );
+  for (const [name, label] of Object.entries(PROVIDER_LABELS)) {
+    const on = Boolean(state.providers?.[name]);
+    // Only the active ones are named plainly. An "off" pill for every provider
+    // someone has chosen not to use is noise, so those are dimmed and abridged.
+    host.appendChild(badge(on ? label : `${label} off`, on ? 'ok' : undefined));
+  }
 }
 
 function closeSidebar() {

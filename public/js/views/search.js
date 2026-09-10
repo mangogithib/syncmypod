@@ -77,7 +77,9 @@ export async function renderSearch(view, context) {
   paintToolbar();
   mount(view, toolbar, results);
 
-  if (!appState.providers.spotify && !appState.providers.musicbrainz) {
+  // Any enabled provider is enough. Checked generically so adding one does not
+  // mean remembering to extend a hardcoded list here.
+  if (!Object.values(appState.providers || {}).some(Boolean)) {
     mount(
       results,
       notice(
@@ -329,6 +331,8 @@ export async function renderSearch(view, context) {
     try {
       const data = await api.providerAlbum({
         spotifyId: result.spotifyId,
+        deezerId: result.deezerId,
+        itunesId: result.itunesId,
         mbid: result.mbid,
       });
 
@@ -408,7 +412,9 @@ export async function renderSearch(view, context) {
   }
 
   // Every identifier the provider gave is passed through, so the server can do
-  // a direct lookup rather than searching all over again.
+  // a direct lookup rather than searching all over again. The ISRC matters most:
+  // it is what lets the server recognise a track it already has under a
+  // different provider's id.
   function providerItem(result) {
     return {
       title: result.title,
@@ -416,6 +422,8 @@ export async function renderSearch(view, context) {
       album: result.albumName,
       isrc: result.isrc,
       spotifyId: result.spotifyId,
+      deezerId: result.deezerId,
+      itunesId: result.itunesId,
       mbid: result.mbid,
       durationMs: result.durationMs,
     };

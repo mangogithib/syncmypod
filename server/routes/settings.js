@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { rateLimit, requireUser } from '../auth/middleware.js';
 import { badRequest, handler } from '../lib/api.js';
+import * as deezer from '../providers/deezer.js';
+import * as itunes from '../providers/itunes.js';
 import * as musicbrainz from '../providers/musicbrainz.js';
 import * as spotify from '../providers/spotify.js';
 import { describe, SETTING_KEYS, setMany } from '../services/app-settings.js';
@@ -10,16 +12,56 @@ settingsRoutes.use(requireUser);
 
 // Instance configuration, editable from the Settings page.
 
+// One table describing every provider, rather than a chain of if-blocks. Adding
+// a provider means adding a row here and nothing else in this file.
+//
+// `probe` is deliberately a real search rather than a credential check: for
+// Spotify in particular, credentials can authenticate perfectly and still be
+// refused by the data API, and it is the data API that matters.
+const PROVIDERS = {
+  spotify: {
+    label: 'Spotify',
+    module: spotify,
+    unconfigured: 'No Client ID and Client Secret are set.',
+    probe: () => spotify.searchAll('a', { types: 'track', limit: 1 }),
+    count: (found) => found.tracks.length,
+    hint: spotifyHint,
+  },
+  deezer: {
+    label: 'Deezer',
+    module: deezer,
+    unconfigured: 'Deezer is switched off.',
+    probe: () => deezer.searchAll('radiohead', { types: 'track', limit: 1 }),
+    count: (found) => found.tracks.length,
+  },
+  itunes: {
+    label: 'iTunes',
+    module: itunes,
+    unconfigured: 'iTunes is switched off.',
+    probe: () => itunes.searchAll('radiohead', { types: 'track', limit: 1 }),
+    count: (found) => found.tracks.length,
+  },
+  musicbrainz: {
+    label: 'MusicBrainz',
+    module: musicbrainz,
+    unconfigured: 'No contact address is set.',
+    probe: () => musicbrainz.searchArtists('Radiohead', { limit: 1 }),
+    count: (found) => found.length,
+  },
+};
+
+function providerStatus() {
+  const status = {};
+  for (const [name, provider] of Object.entries(PROVIDERS)) {
+    status[name] = provider.module.isEnabled();
+  }
+  return status;
+}
+
 settingsRoutes.get(
   '/',
   handler(async (_req, res) => {
-    res.json({
-      settings: describe(),
-      providers: {
-        spotify: spotify.isEnabled(),
-        musicbrainz: musicbrainz.isEnabled(),
-      },
-    });
+    res.json({ settings: describe(), providers: providerStatus() });
   })
 );
 
@@ -37,12 +79,8 @@ settingsRoutes.put(
     }
 
     for (const [key, value] of Object.entries(updates)) {
-      if (typeof value !== 'string') {
-        throw badRequest(`${key} must be text.`);
-      }
-      if (value.length > 500) {
-        throw badRequest(`${key} is too long.`);
-      }
+      if (typeof value !== 'string') throw badRequest(`${key} must be text.`);
+      if (value.length > 500) throw badRequest(`${key} is too long.`);
     }
 
     const result = await setMany(updates, req.user.id);
@@ -54,10 +92,7 @@ settingsRoutes.put(
       applied: result.applied,
       rejected: result.rejected,
       settings: describe(),
-      providers: {
-        spotify: spotify.isEnabled(),
-        musicbrainz: musicbrainz.isEnabled(),
-      },
+      providers: providerStatus(),
     });
   })
 );
@@ -71,72 +106,41 @@ settingsRoutes.put(
 // search result with no explanation.
 settingsRoutes.post(
   '/test/:provider',
-  rateLimit({ windowMs: 60_000, max: 10, key: (req) => `user:${req.user?.id}` }),
+  rateLimit({ windowMs: 60_000, max: 20, key: (req) => `user:${req.user?.id}` }),
   handler(async (req, res) => {
-    const provider = String(req.params.provider);
+    const name = String(req.params.provider);
+    const provider = PROVIDERS[name];
+    if (!provider) throw badRequest(`Unknown provider: ${name}`);
 
-    if (provider === 'spotify') {
-      if (!spotify.isEnabled()) {
-        return res.json({
-          ok: false,
-          stage: 'config',
-          message: 'No Client ID and Client Secret are set.',
-        });
-      }
-      try {
-        // A search, not just a token fetch. The token endpoint and the data
-        // endpoints can disagree - credentials that authenticate fine may still
-        // be refused for the data API - and it is the data API that matters.
-        const found = await spotify.searchAll('a', { types: 'track', limit: 1 });
-        return res.json({
-          ok: true,
-          message: `Working. Search returned ${found.tracks.length} result(s).`,
-        });
-      } catch (err) {
-        return res.json({
-          ok: false,
-          stage: 'request',
-          status: err.status || null,
-          message: err.message,
-          // Spotify's own wording is the most useful thing to show here, but it
-          // needs translating into what to actually do about it.
-          hint: spotifyHint(err),
-        });
-      }
+    if (!provider.module.isEnabled()) {
+      return res.json({ ok: false, stage: 'config', message: provider.unconfigured });
     }
 
-    if (provider === 'musicbrainz') {
-      if (!musicbrainz.isEnabled()) {
-        return res.json({
-          ok: false,
-          stage: 'config',
-          message: 'No contact address is set.',
-        });
-      }
-      try {
-        const found = await musicbrainz.searchArtists('Radiohead', { limit: 1 });
-        return res.json({
-          ok: true,
-          message: `Working. Search returned ${found.length} result(s).`,
-        });
-      } catch (err) {
-        return res.json({
-          ok: false,
-          stage: 'request',
-          status: err.status || null,
-          message: err.message,
-        });
-      }
+    try {
+      const found = await provider.probe();
+      const count = provider.count(found);
+      return res.json({
+        ok: true,
+        message: `Working. Search returned ${count} result(s).`,
+      });
+    } catch (err) {
+      return res.json({
+        ok: false,
+        stage: 'request',
+        status: err.status || null,
+        message: err.message,
+        hint: provider.hint ? provider.hint(err) : null,
+      });
     }
-
-    throw badRequest(`Unknown provider: ${provider}`);
   })
 );
 
+// Spotify's own wording is the most useful thing to show, but it needs
+// translating into what to actually do about it.
 function spotifyHint(err) {
   const message = String(err.message || '');
   if (/premium/i.test(message)) {
-    return 'Spotify requires the account that owns the app to have an active Premium subscription before it will serve the Web API. The credentials themselves are fine.';
+    return 'Spotify requires the account that owns the app to have an active Premium subscription before it will serve the Web API. The credentials themselves are fine. Deezer and iTunes need no account and cover most of the same catalogue.';
   }
   if (err.status === 401 || /invalid client/i.test(message)) {
     return 'The Client ID or Client Secret is wrong. Check for a stray space, and confirm the secret has not been rotated.';

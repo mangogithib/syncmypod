@@ -1,5 +1,7 @@
 import { transaction } from '../db/pool.js';
 import { joinArtists, matchKey, scoreCandidate, stripDecorations } from '../lib/normalise.js';
+import * as deezer from '../providers/deezer.js';
+import * as itunes from '../providers/itunes.js';
 import * as musicbrainz from '../providers/musicbrainz.js';
 import * as spotify from '../providers/spotify.js';
 
@@ -7,8 +9,11 @@ import * as spotify from '../providers/spotify.js';
 //
 // The rule from the concept: never trust a download source's own title or
 // description. Whatever a track claims to be, it is re-resolved against a real
-// catalogue before anything is written to the iPod. Spotify first, MusicBrainz
-// as fallback.
+// catalogue before anything is written to the iPod.
+//
+// Four providers are consulted in a fixed order - see PROVIDERS below - and any
+// that is unconfigured or switched off is skipped, so the chain degrades instead
+// of breaking.
 //
 // Resolution has three tiers, strongest first:
 //
@@ -44,6 +49,26 @@ export async function resolveTrack(input, { preferProvider } = {}) {
   if (input.spotifyId && spotify.isEnabled()) {
     const track = await safely(() => spotify.getTrack(input.spotifyId), attempts, 'spotify:id');
     if (track) return accepted(track, 'spotify', 1, attempts);
+  }
+  if (input.deezerId && deezer.isEnabled()) {
+    const track = await safely(
+      () => deezer.hydrate({ deezerId: input.deezerId, needsHydration: true }),
+      attempts,
+      'deezer:id'
+    );
+    if (track?.title) return accepted(track, 'deezer', 1, attempts);
+  }
+  if (input.itunesId && itunes.isEnabled()) {
+    const track = await safely(
+      () => itunes.searchTracks({ title: input.title, artist: input.artist, limit: 5 }),
+      attempts,
+      'itunes:id'
+    );
+    // iTunes has no lookup-by-track-id that returns a song record directly, so
+    // the id is matched against a search rather than fetched. Falls through to
+    // the normal search tiers when it does not appear.
+    const match = (track || []).find((entry) => entry.itunesId === String(input.itunesId));
+    if (match) return accepted(match, 'itunes', 1, attempts);
   }
   if (input.mbid && musicbrainz.isEnabled()) {
     const track = await safely(() => musicbrainz.getRecording(input.mbid), attempts, 'musicbrainz:id');
@@ -136,20 +161,63 @@ export async function resolveTrack(input, { preferProvider } = {}) {
   return unresolved(attempts, 'No provider returned a plausible match.');
 }
 
+// The order providers are consulted in, best first.
+//
+// The ranking is by how much STRUCTURE a provider returns, not by catalogue
+// size, because structure is the thing this whole design exists to protect:
+//
+//   spotify     ordered artist list + ISRC + track numbers. Best, when it works.
+//   deezer      ordered contributors + ISRC via /track. Needs no credentials.
+//   itunes      rich, but a single joined artist string that cannot be safely
+//               split (see the note in providers/itunes.js). Strong coverage of
+//               film and regional catalogue, so it earns its place as a
+//               fallback even though it loses artist structure.
+//   musicbrainz weakest: no popularity signal, so a title-only search cannot
+//               distinguish an original from a cover, and every live take is
+//               its own recording.
+//
+// A provider that is off or unconfigured is skipped by the caller, so the list
+// degrades rather than breaking.
+const PROVIDERS = [
+  { name: 'spotify', module: spotify },
+  { name: 'deezer', module: deezer },
+  { name: 'itunes', module: itunes },
+  { name: 'musicbrainz', module: musicbrainz },
+];
+
 function providerOrder(preferProvider) {
-  const spotifyEntry = { name: 'spotify', module: spotify };
-  const musicbrainzEntry = { name: 'musicbrainz', module: musicbrainz };
-  // Spotify first by default: its catalogue separates featured artists into
-  // distinct, ordered fields and has clean artwork and track numbers, which is
-  // exactly what raw download-source metadata loses.
-  return preferProvider === 'musicbrainz'
-    ? [musicbrainzEntry, spotifyEntry]
-    : [spotifyEntry, musicbrainzEntry];
+  if (!preferProvider) return PROVIDERS;
+  // A named preference moves that provider to the front and keeps the rest in
+  // their usual order, rather than reducing the list to just that one - a
+  // preference is a hint about where to look first, not an instruction to give
+  // up if it misses.
+  const preferred = PROVIDERS.filter((entry) => entry.name === preferProvider);
+  if (preferred.length === 0) return PROVIDERS;
+  return [...preferred, ...PROVIDERS.filter((entry) => entry.name !== preferProvider)];
+}
+
+// Some providers return a light record from search and need a second request for
+// the parts that matter to a tag - Deezer's ISRC, track number and full artist
+// credit. Doing that for every candidate would multiply the request count; doing
+// it for the winner costs one extra request per resolved track.
+async function hydrate(candidate, providerName) {
+  const entry = PROVIDERS.find((provider) => provider.name === providerName);
+  if (!entry?.module.hydrate) return candidate;
+  try {
+    return (await entry.module.hydrate(candidate)) || candidate;
+  } catch (err) {
+    // The light record is still usable; losing the ISRC is better than losing
+    // the track.
+    console.error(`[resolver] ${providerName} hydrate failed:`, err.message);
+    return candidate;
+  }
 }
 
 function scoreAll(candidates, input) {
   let best = null;
-  for (const candidate of candidates) {
+  const total = candidates.length;
+
+  for (const [index, candidate] of candidates.entries()) {
     if (!candidate) continue;
     const similarityScore = scoreCandidate(
       {
@@ -170,7 +238,22 @@ function scoreAll(candidates, input) {
     // representation of the recording - a bootleg or a live take rather than
     // the studio version. Those are indistinguishable on title and artist
     // alone, so without this the first one returned simply wins.
-    const score = Math.max(0, similarityScore - (candidate.qualityPenalty || 0));
+    const penalty = candidate.qualityPenalty || 0;
+
+    // A small bonus for appearing earlier in the provider's own results.
+    //
+    // Providers order by popularity, and this scorer was throwing that away.
+    // It matters for exact ties, which are common: a song and its remix share a
+    // title and a primary artist, so with no duration to compare they score
+    // identically and the winner came down to iteration order. Ranking the more
+    // popular one first is almost always what someone meant - a search for
+    // "Kesariya" wants the film version, not a remix single.
+    //
+    // Capped at 0.02, an order of magnitude below the weakest real signal, so
+    // it decides ties and never overrides evidence.
+    const positionBonus = total > 1 ? 0.02 * (1 - index / (total - 1)) : 0;
+
+    const score = Math.max(0, similarityScore - penalty + positionBonus);
 
     if (!best || score > best.score) best = { candidate, score };
   }
@@ -204,8 +287,12 @@ async function safely(fn, attempts, label) {
   }
 }
 
-function accepted(candidate, provider, score, attempts) {
-  return { state: 'resolved', track: candidate, provider, score, attempts };
+// Async because the winning candidate may need a second request to fill in the
+// fields a tag actually needs. Every caller already returns this from an async
+// function, so awaiting is transparent to them.
+async function accepted(candidate, provider, score, attempts) {
+  const track = await hydrate(candidate, provider);
+  return { state: 'resolved', track, provider, score, attempts };
 }
 
 function unresolved(attempts, reason) {
@@ -222,18 +309,24 @@ function unresolved(attempts, reason) {
 async function upsertArtist(client, artist) {
   const key = matchKey({
     spotifyId: artist.spotifyId,
+    deezerId: artist.deezerId,
+    itunesId: artist.itunesId,
     mbid: artist.mbid,
     name: artist.name,
   });
 
   const { rows } = await client.query(
-    `INSERT INTO artists (match_key, name, sort_name, spotify_id, mbid, image_url, genres)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO artists (match_key, name, sort_name, spotify_id, deezer_id, itunes_id,
+                          mbid, image_url, genres)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (match_key) DO UPDATE
         SET name       = EXCLUDED.name,
             -- COALESCE the other way round for ids: once a row has learned a
-            -- provider id, a later record that lacks it must not erase it.
+            -- provider id, a later record that lacks it must not erase it. This
+            -- is also how a row accumulates identities across providers.
             spotify_id = COALESCE(artists.spotify_id, EXCLUDED.spotify_id),
+            deezer_id  = COALESCE(artists.deezer_id, EXCLUDED.deezer_id),
+            itunes_id  = COALESCE(artists.itunes_id, EXCLUDED.itunes_id),
             mbid       = COALESCE(artists.mbid, EXCLUDED.mbid),
             image_url  = COALESCE(EXCLUDED.image_url, artists.image_url),
             genres     = COALESCE(EXCLUDED.genres, artists.genres),
@@ -245,6 +338,8 @@ async function upsertArtist(client, artist) {
       artist.name,
       artist.sortName || null,
       artist.spotifyId || null,
+      artist.deezerId || null,
+      artist.itunesId || null,
       artist.mbid || null,
       artist.imageUrl || null,
       artist.genres || null,
@@ -261,6 +356,8 @@ async function upsertAlbum(client, album) {
 
   const key = matchKey({
     spotifyId: album.spotifyId,
+    deezerId: album.deezerId,
+    itunesId: album.itunesId,
     mbid: album.mbid,
     name: album.name,
     // Two different albums genuinely share a name ("Greatest Hits"), so the
@@ -269,13 +366,16 @@ async function upsertAlbum(client, album) {
   });
 
   const { rows } = await client.query(
-    `INSERT INTO albums (match_key, name, album_artist_id, spotify_id, mbid,
-                         release_date, release_year, artwork_url, total_tracks, album_type)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO albums (match_key, name, album_artist_id, spotify_id, deezer_id,
+                         itunes_id, mbid, release_date, release_year, artwork_url,
+                         total_tracks, album_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      ON CONFLICT (match_key) DO UPDATE
         SET name            = EXCLUDED.name,
             album_artist_id = COALESCE(EXCLUDED.album_artist_id, albums.album_artist_id),
             spotify_id      = COALESCE(albums.spotify_id, EXCLUDED.spotify_id),
+            deezer_id       = COALESCE(albums.deezer_id, EXCLUDED.deezer_id),
+            itunes_id       = COALESCE(albums.itunes_id, EXCLUDED.itunes_id),
             mbid            = COALESCE(albums.mbid, EXCLUDED.mbid),
             release_date    = COALESCE(EXCLUDED.release_date, albums.release_date),
             release_year    = COALESCE(EXCLUDED.release_year, albums.release_year),
@@ -289,6 +389,8 @@ async function upsertAlbum(client, album) {
       album.name,
       albumArtistId,
       album.spotifyId || null,
+      album.deezerId || null,
+      album.itunesId || null,
       album.mbid || null,
       album.releaseDate || null,
       album.releaseYear || null,
@@ -313,7 +415,12 @@ export async function saveResolvedTrack(resolved, { client } = {}) {
     }
 
     const key = matchKey({
+      // The ISRC wins here when present, which is what lets the same recording
+      // resolved through two different providers converge on one row.
+      isrc: track.isrc,
       spotifyId: track.spotifyId,
+      deezerId: track.deezerId,
+      itunesId: track.itunesId,
       mbid: track.mbid,
       name: track.title,
       extra: [track.artists?.[0]?.name, track.album?.name].filter(Boolean).join(' '),
@@ -323,9 +430,11 @@ export async function saveResolvedTrack(resolved, { client } = {}) {
 
     const { rows } = await tx.query(
       `INSERT INTO tracks (match_key, title, album_id, track_no, disc_no, duration_ms,
-                           isrc, spotify_id, mbid, explicit, artist_credit, album_credit,
+                           isrc, spotify_id, deezer_id, itunes_id, mbid, explicit,
+                           genre, artist_credit, album_credit,
                            metadata_source, metadata_state, resolved_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'resolved', now())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+               'resolved', now())
        ON CONFLICT (match_key) DO UPDATE
           SET title        = EXCLUDED.title,
               album_id     = COALESCE(EXCLUDED.album_id, tracks.album_id),
@@ -334,8 +443,11 @@ export async function saveResolvedTrack(resolved, { client } = {}) {
               duration_ms  = COALESCE(EXCLUDED.duration_ms, tracks.duration_ms),
               isrc         = COALESCE(tracks.isrc, EXCLUDED.isrc),
               spotify_id   = COALESCE(tracks.spotify_id, EXCLUDED.spotify_id),
+              deezer_id    = COALESCE(tracks.deezer_id, EXCLUDED.deezer_id),
+              itunes_id    = COALESCE(tracks.itunes_id, EXCLUDED.itunes_id),
               mbid         = COALESCE(tracks.mbid, EXCLUDED.mbid),
               explicit     = COALESCE(EXCLUDED.explicit, tracks.explicit),
+              genre        = COALESCE(EXCLUDED.genre, tracks.genre),
               artist_credit = EXCLUDED.artist_credit,
               album_credit  = EXCLUDED.album_credit,
               metadata_source = EXCLUDED.metadata_source,
@@ -346,20 +458,27 @@ export async function saveResolvedTrack(resolved, { client } = {}) {
               resolved_at  = now(),
               updated_at   = now()
        RETURNING id, metadata_state`,
+      // Order matches the column list above exactly. Kept sequential rather
+      // than reordered to fit a legacy parameter numbering, because a
+      // mismatched placeholder here writes a track number into a genre column
+      // and nothing complains.
       [
-        key,
-        track.title,
-        albumId,
-        track.trackNo || null,
-        track.discNo || null,
-        track.durationMs || null,
-        track.isrc || null,
-        track.spotifyId || null,
-        track.mbid || null,
-        track.explicit,
-        artistCredit,
-        track.album?.name || null,
-        resolved.provider,
+        key, //                 $1  match_key
+        track.title, //         $2  title
+        albumId, //             $3  album_id
+        track.trackNo || null, //   $4  track_no
+        track.discNo || null, //    $5  disc_no
+        track.durationMs || null, // $6 duration_ms
+        track.isrc || null, //  $7  isrc
+        track.spotifyId || null, //  $8  spotify_id
+        track.deezerId || null, //   $9  deezer_id
+        track.itunesId || null, //  $10  itunes_id
+        track.mbid || null, //      $11  mbid
+        track.explicit, //          $12  explicit
+        track.genre || null, //     $13  genre
+        artistCredit, //            $14  artist_credit
+        track.album?.name || null, // $15 album_credit
+        resolved.provider, //       $16  metadata_source
       ]
     );
     const trackId = rows[0].id;

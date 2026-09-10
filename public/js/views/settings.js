@@ -83,7 +83,42 @@ function providerCard(data, spotifyLink, reload) {
     );
   };
 
+  // A checkbox for a provider that has nothing to configure but on or off.
+  // Registered in `inputs` like any other field, so Save collects it the same
+  // way; the value is normalised to the string the settings service stores.
+  const toggle = (key) => {
+    const spec = fields[key];
+    if (!spec) return null;
+
+    const input = h('input', {
+      type: 'checkbox',
+      checked: spec.checked,
+      disabled: !spec.editable,
+    });
+    // A checkbox has no .value, so it is adapted to the same interface the text
+    // fields present rather than special-cased in the submit handler.
+    inputs.set(key, {
+      input: { get value() { return input.checked ? 'true' : 'false'; } },
+      spec,
+    });
+
+    return h(
+      'label.checkbox',
+      { style: { marginBottom: '8px' } },
+      input,
+      h(
+        'span',
+        h('div', spec.label),
+        !spec.editable
+          ? h('div.small.subtle', `Set by ${spec.envVar}; cannot be changed here.`)
+          : null
+      )
+    );
+  };
+
   const spotifyResult = h('div');
+  const deezerResult = h('div');
+  const itunesResult = h('div');
   const musicbrainzResult = h('div');
 
   const testButton = (provider, slot) =>
@@ -235,6 +270,40 @@ function providerCard(data, spotifyLink, reload) {
           }),
           h('div.row', { style: { marginTop: '12px' } }, testButton('spotify', spotifyResult)),
           spotifyResult
+        ),
+
+        // --- Deezer and iTunes ---------------------------------------------
+        // Grouped together because they share the only thing worth saying about
+        // them: there is nothing to configure. No account, no key, no quota to
+        // register for.
+        h(
+          'div',
+          { style: { paddingBottom: '20px', borderBottom: '1px solid var(--border)' } },
+          h(
+            'div.row-between',
+            { style: { marginBottom: '10px' } },
+            h('div', { style: { fontWeight: 600 } }, 'Deezer and iTunes'),
+            h(
+              'div.row',
+              data.providers.deezer ? badge('Deezer on', 'ok') : badge('Deezer off'),
+              data.providers.itunes ? badge('iTunes on', 'ok') : badge('iTunes off')
+            )
+          ),
+          h(
+            'p.small.muted',
+            { style: { marginBottom: '14px' } },
+            'Neither needs an account or a key, so both are on by default. Deezer is tried first because its track endpoint returns properly ordered artist credits and an ISRC. iTunes has strong coverage of film and regional catalogue, but reports all artists as one combined string - correct for the iPod tag, though without the structure.'
+          ),
+          toggle('deezer.enabled'),
+          toggle('itunes.enabled'),
+          h(
+            'div.row',
+            { style: { marginTop: '12px' } },
+            testButton('deezer', deezerResult),
+            testButton('itunes', itunesResult)
+          ),
+          deezerResult,
+          itunesResult
         ),
 
         // --- MusicBrainz ---------------------------------------------------

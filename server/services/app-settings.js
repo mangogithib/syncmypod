@@ -32,6 +32,12 @@ const SCHEMA = {
   'spotify.redirectUri': { env: 'SPOTIFY_REDIRECT_URI', secret: false, label: 'Spotify Redirect URI' },
   'spotify.market': { env: 'SPOTIFY_MARKET', secret: false, label: 'Spotify market' },
   'musicbrainz.contact': { env: 'MUSICBRAINZ_CONTACT', secret: false, label: 'MusicBrainz contact' },
+  // Deezer and iTunes need no credentials, so there is nothing to configure -
+  // only whether to use them. Stored as the string "true"/"false"; absent means
+  // the default, which is on, since a provider that costs nothing to enable and
+  // needs no account should not require a decision before the app is useful.
+  'deezer.enabled': { env: 'DEEZER_ENABLED', secret: false, label: 'Use Deezer', boolean: true },
+  'itunes.enabled': { env: 'ITUNES_ENABLED', secret: false, label: 'Use iTunes', boolean: true },
 };
 
 export const SETTING_KEYS = Object.keys(SCHEMA);
@@ -141,6 +147,9 @@ export function describe() {
       editable: source !== 'env',
       envVar: spec.env,
       isSet: Boolean(value),
+      // A toggle reports its effective state, including the default, so the UI
+      // renders a checkbox that reflects reality rather than an empty field.
+      ...(spec.boolean ? { boolean: true, checked: providerToggle(key.split('.')[0]) } : {}),
       ...(spec.secret
         ? { secret: true, hint: value ? `${value.slice(0, 4)}...${value.slice(-2)}` : null }
         : { secret: false, value }),
@@ -168,6 +177,15 @@ export function spotifyConfig() {
     redirectUri: get('spotify.redirectUri'),
     market: get('spotify.market'),
   };
+}
+
+// Whether a credential-free provider is switched on. Absent means on: there is
+// nothing to configure, so requiring an explicit opt-in would only leave a
+// fresh instance less capable for no reason.
+export function providerToggle(name) {
+  const { value } = resolve(`${name}.enabled`);
+  if (value === '') return true;
+  return value !== 'false' && value !== '0';
 }
 
 export function musicbrainzConfig() {

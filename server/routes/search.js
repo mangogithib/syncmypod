@@ -3,6 +3,8 @@ import { rateLimit, requireUser } from '../auth/middleware.js';
 import { many } from '../db/pool.js';
 import { handler, str } from '../lib/api.js';
 import { joinArtists } from '../lib/normalise.js';
+import * as deezer from '../providers/deezer.js';
+import * as itunes from '../providers/itunes.js';
 import * as musicbrainz from '../providers/musicbrainz.js';
 import * as spotify from '../providers/spotify.js';
 
@@ -17,8 +19,24 @@ searchRoutes.use(requireUser);
 //   /api/search/providers  - "find me this song so I can add it"
 //
 // The provider search is rate limited per user: every call is an outbound
-// request to Spotify or MusicBrainz, and a search-as-you-type frontend would
-// otherwise burn through an API quota in a minute.
+// request, and a search-as-you-type frontend would otherwise burn through a
+// quota in a minute.
+
+// Same order as the resolver, and for the same reason - see PROVIDERS in
+// services/resolver.js. Listed once here rather than as a hardcoded if-chain,
+// so adding a provider does not mean editing three fallback ladders.
+const PROVIDERS = [
+  { name: 'spotify', label: 'Spotify', module: spotify },
+  { name: 'deezer', label: 'Deezer', module: deezer },
+  { name: 'itunes', label: 'iTunes', module: itunes },
+  { name: 'musicbrainz', label: 'MusicBrainz', module: musicbrainz },
+];
+
+function providerStatus() {
+  const status = {};
+  for (const provider of PROVIDERS) status[provider.name] = provider.module.isEnabled();
+  return status;
+}
 
 searchRoutes.get(
   '/catalogue',
@@ -49,7 +67,7 @@ searchRoutes.get(
 
 searchRoutes.get(
   '/providers',
-  // Generous enough for real typing, tight enough to protect the API quota.
+  // Generous enough for real typing, tight enough to protect the quota.
   rateLimit({ windowMs: 60_000, max: 60, key: (req) => `user:${req.user?.id}` }),
   handler(async (req, res) => {
     const q = str(req.query.q, 'Search', { max: 200 });
@@ -61,69 +79,69 @@ searchRoutes.get(
       ? String(req.query.type)
       : 'track';
 
-    // Spotify first, matching the resolver. Falling through on error rather than
-    // failing means an expired credential or a rate limit degrades the search
-    // instead of breaking it.
-    if (spotify.isEnabled()) {
+    // Tries each enabled provider in order and returns the first that answers
+    // with something. Falling through on error rather than failing means an
+    // expired credential or a rate limit degrades the search instead of
+    // breaking it - and every failure along the way is reported, so a search
+    // that finds nothing can be told apart from one where everything was down.
+    const tried = [];
+    for (const provider of PROVIDERS) {
+      if (!provider.module.isEnabled()) continue;
       try {
-        const found = await spotify.searchAll(q, { types: type, limit: 20 });
-        return res.json({
-          provider: 'spotify',
-          providers: providerStatus(),
-          results: shape(found, type),
-        });
-      } catch (err) {
-        console.error('[search] spotify failed:', err.message);
-      }
-    }
-
-    if (musicbrainz.isEnabled()) {
-      try {
-        if (type === 'artist') {
-          const artists = await musicbrainz.searchArtists(q, { limit: 20 });
+        const found = await provider.module.searchAll(q, { types: type, limit: 20 });
+        const results = shape(found, type);
+        if (results.length > 0) {
           return res.json({
-            provider: 'musicbrainz',
+            provider: provider.name,
+            providerLabel: provider.label,
             providers: providerStatus(),
-            results: artists.map((artist) => ({
-              kind: 'artist',
-              name: artist.name,
-              mbid: artist.mbid,
-              subtitle: [artist.disambiguation, artist.country]
-                .filter(Boolean)
-                .join(' - '),
-            })),
+            tried,
+            results,
           });
         }
-        const tracks = await musicbrainz.searchTracks({ title: q, limit: 20 });
-        return res.json({
-          provider: 'musicbrainz',
-          providers: providerStatus(),
-          results: shape({ tracks }, 'track'),
-        });
+        tried.push({ provider: provider.name, ok: true, results: 0 });
       } catch (err) {
-        console.error('[search] musicbrainz failed:', err.message);
+        console.error(`[search] ${provider.name} failed:`, err.message);
+        tried.push({ provider: provider.name, ok: false, error: err.message });
       }
     }
 
-    // Neither provider is usable. Say so plainly rather than returning an empty
-    // result that looks like "no such song".
-    res.status(503).json({
-      error:
-        'No metadata provider is available. Configure Spotify credentials or a MusicBrainz contact in Settings.',
-      providers: providerStatus(),
-      results: [],
-    });
+    // Nothing found anywhere. Distinguish "no such song" from "nothing was
+    // usable", because the fix is completely different.
+    const anyEnabled = Object.values(providerStatus()).some(Boolean);
+    if (!anyEnabled) {
+      return res.status(503).json({
+        error:
+          'No metadata provider is available. Turn on Deezer or iTunes, or add Spotify credentials, in Settings.',
+        providers: providerStatus(),
+        tried,
+        results: [],
+      });
+    }
+    const allFailed = tried.length > 0 && tried.every((entry) => !entry.ok);
+    if (allFailed) {
+      return res.status(502).json({
+        error: `Every provider failed. ${tried.map((entry) => `${entry.provider}: ${entry.error}`).join(' | ')}`,
+        providers: providerStatus(),
+        tried,
+        results: [],
+      });
+    }
+
+    res.json({ provider: null, providers: providerStatus(), tried, results: [] });
   })
 );
 
-// A flat, provider-agnostic shape for the UI, so the search results list does
-// not have to know which provider answered.
+// A flat, provider-agnostic shape for the UI, so the results list does not have
+// to know which provider answered.
 function shape(found, type) {
   if (type === 'album') {
     return (found.albums || []).map((album) => ({
       kind: 'album',
       name: album.name,
       spotifyId: album.spotifyId,
+      deezerId: album.deezerId,
+      itunesId: album.itunesId,
       mbid: album.mbid,
       artistCredit: joinArtists(album.artists),
       artworkUrl: album.artworkUrl,
@@ -137,15 +155,21 @@ function shape(found, type) {
       kind: 'artist',
       name: artist.name,
       spotifyId: artist.spotifyId,
+      deezerId: artist.deezerId,
+      itunesId: artist.itunesId,
       mbid: artist.mbid,
       imageUrl: artist.imageUrl,
-      subtitle: (artist.genres || []).slice(0, 3).join(', '),
+      subtitle:
+        (artist.genres || []).slice(0, 3).join(', ') ||
+        [artist.disambiguation, artist.country].filter(Boolean).join(' - '),
     }));
   }
   return (found.tracks || []).map((track) => ({
     kind: 'track',
     title: track.title,
     spotifyId: track.spotifyId,
+    deezerId: track.deezerId,
+    itunesId: track.itunesId,
     mbid: track.mbid,
     isrc: track.isrc,
     artistCredit: joinArtists(track.artists),
@@ -157,36 +181,40 @@ function shape(found, type) {
   }));
 }
 
-function providerStatus() {
-  return {
-    spotify: spotify.isEnabled(),
-    musicbrainz: musicbrainz.isEnabled(),
-  };
-}
-
 // Expands an album into its tracks, so "add whole album" is one click. Returned
 // unsaved: the user confirms, then POSTs them to /api/library/tracks.
 searchRoutes.get(
   '/album',
   rateLimit({ windowMs: 60_000, max: 30, key: (req) => `user:${req.user?.id}` }),
   handler(async (req, res) => {
-    const spotifyId = str(req.query.spotifyId, 'spotifyId', { max: 60 });
-    const mbid = str(req.query.mbid, 'mbid', { max: 60 });
+    // Whichever id the search result carried decides which provider to ask.
+    const ids = {
+      spotify: str(req.query.spotifyId, 'spotifyId', { max: 60 }),
+      deezer: str(req.query.deezerId, 'deezerId', { max: 60 }),
+      itunes: str(req.query.itunesId, 'itunesId', { max: 60 }),
+      musicbrainz: str(req.query.mbid, 'mbid', { max: 60 }),
+    };
 
-    if (spotifyId && spotify.isEnabled()) {
-      const { album, tracks } = await spotify.getAlbumTracks(spotifyId);
-      return res.json({ provider: 'spotify', album: albumShape(album), tracks: shape({ tracks }, 'track') });
-    }
-    if (mbid && musicbrainz.isEnabled()) {
-      const { album, tracks } = await musicbrainz.getReleaseTracks(mbid);
+    for (const provider of PROVIDERS) {
+      const id = ids[provider.name];
+      if (!id || !provider.module.isEnabled() || !provider.module.getAlbumTracks) continue;
+
+      const method =
+        provider.name === 'musicbrainz'
+          ? provider.module.getReleaseTracks
+          : provider.module.getAlbumTracks;
+
+      const { album, tracks } = await method(id);
       return res.json({
-        provider: 'musicbrainz',
+        provider: provider.name,
         album: albumShape(album),
         tracks: shape({ tracks }, 'track'),
       });
     }
+
     res.status(400).json({
-      error: 'Supply a spotifyId or mbid for a provider that is configured.',
+      error: 'Supply an id for a provider that is enabled.',
+      providers: providerStatus(),
     });
   })
 );
@@ -196,6 +224,8 @@ function albumShape(album) {
   return {
     name: album.name,
     spotifyId: album.spotifyId,
+    deezerId: album.deezerId,
+    itunesId: album.itunesId,
     mbid: album.mbid,
     artistCredit: joinArtists(album.artists),
     artworkUrl: album.artworkUrl,
