@@ -1,0 +1,18 @@
+{
+  "name": "syncmypod",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted music library manager for classic/clickwheel iPods. Library data only - never audio.",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "migrate": "node server/db/migrate.js",
+    "create-user": "node server/scripts/create-user.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}

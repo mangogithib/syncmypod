@@ -1,0 +1,78 @@
+# SyncMyPod - the web library manager plus its own PostgreSQL database.
+#
+# This stack is entirely self-contained. It shares no network, no volume and no
+# database with anything else on the host, so it can be started, stopped, rebuilt
+# or deleted without touching any other application running here.
+#
+#   cp .env.example .env      # then edit it
+#   docker compose up -d --build
+#   docker compose exec app npm run create-user
+#
+# All state lives in the `db` service, so one `pg_dump` is a complete backup.
+
+name: syncmypod
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # A ceiling, so this stack cannot starve anything else on a shared host.
+    mem_limit: ${DB_MEM_LIMIT:-512m}
+    # Docker defaults this to 64MB, which is where "could not resize shared
+    # memory segment" comes from. Postgres uses it for parallel query workers,
+    # which the library search does use.
+    shm_size: ${DB_SHM_SIZE:-256m}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      POSTGRES_USER: ${DB_USER:-syncmypod}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      POSTGRES_DB: ${DB_NAME:-syncmypod}
+    volumes:
+      - syncmypod-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-syncmypod} -d ${DB_NAME:-syncmypod}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: ${APP_MEM_LIMIT:-512m}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      DATABASE_URL: postgres://${DB_USER:-syncmypod}:${DB_PASSWORD}@db:5432/${DB_NAME:-syncmypod}
+      # Signs session cookies. Changing it logs everyone out; losing it is
+      # harmless beyond that.
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET must be set in .env}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      # Metadata providers. Spotify is optional - without it the resolver falls
+      # back to MusicBrainz and the app still works, just less accurately.
+      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+      SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
+      SPOTIFY_REDIRECT_URI: ${SPOTIFY_REDIRECT_URI:-}
+      # MusicBrainz asks every client to identify itself and contact details.
+      # Anonymous or spoofed agents get rate-limited or blocked.
+      MUSICBRAINZ_CONTACT: ${MUSICBRAINZ_CONTACT:-}
+    # BIND_ADDR decides who can reach this. Default is loopback only, which is
+    # the safe thing to be wrong about: set it to a private/VPN address (or
+    # 0.0.0.0 behind your own TLS terminator) deliberately, not by accident.
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${HOST_PORT:-3010}:8080"
+
+volumes:
+  syncmypod-db:

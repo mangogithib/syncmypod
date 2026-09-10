@@ -1,0 +1,14 @@
+# Everything is stored and checked out with LF line endings, on every platform.
+#
+# This matters because the project is developed on Windows and deployed into a
+# Linux container. Git's default on Windows is to convert to CRLF on checkout,
+# and CRLF in the Dockerfile or in a shell script fails at runtime with an
+# unhelpful error rather than at commit time.
+* text=auto eol=lf
+
+# Binary assets, never converted or diffed as text.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary

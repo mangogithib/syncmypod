@@ -1,0 +1,167 @@
+/*
+  SyncMyPod theme.
+  ----------------
+  A deliberately plain graphite-and-slate palette with one accent. Neutral on
+  purpose: this is placeholder styling to be replaced later, so every colour,
+  radius and shadow is a token here and nothing is hard-coded in app.css. Swapping
+  the palette later means editing this file only.
+
+  Light is the base definition and dark overrides only the tokens that change, so
+  no colour has its only definition inside a media query.
+*/
+
+:root {
+  color-scheme: light dark;
+
+  /* --- Surfaces ---------------------------------------------------------- */
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #fafbfc;
+  --surface-3: #f0f1f4;
+  --sidebar-bg: #1d2026;
+  --sidebar-fg: #b9bfc7;
+  --sidebar-fg-strong: #f2f4f7;
+  --sidebar-active: #2a2e36;
+
+  /* --- Text ------------------------------------------------------------- */
+  --text: #1a1d21;
+  --text-muted: #5d646d;
+  --text-subtle: #868e98;
+  --text-inverse: #ffffff;
+
+  /* --- Lines ------------------------------------------------------------ */
+  --border: #e2e5e9;
+  --border-strong: #cfd4da;
+
+  /* --- Accent ----------------------------------------------------------- */
+  /* One accent, used for primary actions and the active nav item. */
+  --accent: #3b62d4;
+  --accent-hover: #3355bd;
+  --accent-soft: #eaeefb;
+  --accent-text: #2a4bb0;
+
+  /* --- Status ----------------------------------------------------------- */
+  --ok: #1c7a4a;
+  --ok-soft: #e6f4ec;
+  --warn: #96601a;
+  --warn-soft: #fdf1de;
+  --danger: #b3261e;
+  --danger-hover: #921d17;
+  --danger-soft: #fdeceb;
+
+  /* --- Shape ------------------------------------------------------------ */
+  --radius-sm: 5px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* --- Depth ------------------------------------------------------------ */
+  --shadow-sm: 0 1px 2px rgb(16 20 26 / 6%);
+  --shadow: 0 2px 8px rgb(16 20 26 / 8%);
+  --shadow-lg: 0 12px 32px rgb(16 20 26 / 16%);
+
+  /* --- Type ------------------------------------------------------------- */
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --text-xs: 11.5px;
+  --text-sm: 12.5px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+
+  /* --- Spacing ---------------------------------------------------------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  --sidebar-width: 232px;
+  --topbar-height: 56px;
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/*
+  Dark mode. Guarded with :not([data-theme="light"]) so an explicit light choice
+  still wins, and re-declared under [data-theme="dark"] so an explicit dark
+  choice wins on a light-preference system.
+*/
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161a;
+    --surface: #1c1f24;
+    --surface-2: #21242a;
+    --surface-3: #282c33;
+    --sidebar-bg: #101216;
+    --sidebar-fg: #8d949d;
+    --sidebar-fg-strong: #eceef1;
+    --sidebar-active: #22262d;
+
+    --text: #e7e9ec;
+    --text-muted: #9aa1aa;
+    --text-subtle: #737a83;
+
+    --border: #2c3037;
+    --border-strong: #3b4048;
+
+    --accent: #5b81ee;
+    --accent-hover: #6e91f2;
+    --accent-soft: #1e2740;
+    --accent-text: #9db4f7;
+
+    --ok: #4cbb83;
+    --ok-soft: #14291f;
+    --warn: #d9a45e;
+    --warn-soft: #2c2213;
+    --danger: #ef8079;
+    --danger-hover: #f39a94;
+    --danger-soft: #2e1917;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow: 0 2px 10px rgb(0 0 0 / 45%);
+    --shadow-lg: 0 14px 36px rgb(0 0 0 / 60%);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161a;
+  --surface: #1c1f24;
+  --surface-2: #21242a;
+  --surface-3: #282c33;
+  --sidebar-bg: #101216;
+  --sidebar-fg: #8d949d;
+  --sidebar-fg-strong: #eceef1;
+  --sidebar-active: #22262d;
+
+  --text: #e7e9ec;
+  --text-muted: #9aa1aa;
+  --text-subtle: #737a83;
+
+  --border: #2c3037;
+  --border-strong: #3b4048;
+
+  --accent: #5b81ee;
+  --accent-hover: #6e91f2;
+  --accent-soft: #1e2740;
+  --accent-text: #9db4f7;
+
+  --ok: #4cbb83;
+  --ok-soft: #14291f;
+  --warn: #d9a45e;
+  --warn-soft: #2c2213;
+  --danger: #ef8079;
+  --danger-hover: #f39a94;
+  --danger-soft: #2e1917;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow: 0 2px 10px rgb(0 0 0 / 45%);
+  --shadow-lg: 0 14px 36px rgb(0 0 0 / 60%);
+}
