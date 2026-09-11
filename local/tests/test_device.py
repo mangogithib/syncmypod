@@ -168,6 +168,58 @@ class TestEject:
         assert ok
         assert "no operating-system eject" in message.lower()
 
+    def test_a_volume_that_is_already_gone_counts_as_ejected(self, tmp_path, monkeypatch):
+        """Windows ejects in two steps and can veto the second one.
+
+        Seen on the real device: the volume had been flushed and unmounted, the
+        hardware removal was vetoed by something holding a handle for an
+        instant, and the tool reported a failure. What matters to the user is
+        whether anything can still write to the iPod, so that is what is
+        checked.
+        """
+        from pypodlib.device import eject as eject_module
+
+        monkeypatch.setattr(
+            eject_module, "eject_ipod", lambda *_a, **_k: (False, "Windows vetoed eject")
+        )
+        probe = device.IpodDevice(
+            mount_path=tmp_path / "already-unmounted",
+            name=None,
+            model=None,
+            model_number=None,
+            generation=None,
+            serial=None,
+            capacity_bytes=None,
+            free_bytes=None,
+            checksum_type="NONE",
+        )
+        ok, message = probe.eject()
+        assert ok
+        assert "safe to unplug" in message.lower()
+
+    def test_a_volume_that_is_still_mounted_reports_the_failure(self, tmp_path, monkeypatch):
+        from pypodlib.device import eject as eject_module
+
+        monkeypatch.setattr(
+            eject_module, "eject_ipod", lambda *_a, **_k: (False, "Something has it open")
+        )
+        still_there = tmp_path / "mounted"
+        still_there.mkdir()
+        probe = device.IpodDevice(
+            mount_path=still_there,
+            name=None,
+            model=None,
+            model_number=None,
+            generation=None,
+            serial=None,
+            capacity_bytes=None,
+            free_bytes=None,
+            checksum_type="NONE",
+        )
+        ok, message = probe.eject()
+        assert not ok
+        assert message == "Something has it open"
+
     def test_it_reports_rather_than_raises(self, tmp_path):
         probe = device.IpodDevice(
             mount_path=tmp_path / "nowhere",

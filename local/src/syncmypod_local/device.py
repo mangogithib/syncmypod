@@ -350,9 +350,28 @@ class IpodDevice:
         from pypodlib.device.eject import eject_ipod
 
         try:
-            return eject_ipod(str(self.mount_path))
+            ok, message = eject_ipod(str(self.mount_path))
         except Exception as err:
             return False, f"Could not eject the iPod: {err}"
+
+        if ok:
+            return True, message
+
+        # A reported failure is not always a failure that matters. Windows
+        # ejects in two steps - dismount the volume, then tell the hardware it
+        # may go - and something holding a handle for an instant (a search
+        # indexer, a sync client) vetoes the second while the first has already
+        # happened. Seen on the real device: the volume was flushed and gone,
+        # and the tool still said it had not been ejected.
+        #
+        # What the user needs to know is whether anything can still write to the
+        # iPod, so that is what gets checked rather than what was returned.
+        if not self.mount_path.exists():
+            return True, (
+                "The iPod was flushed and unmounted, so it is safe to unplug. "
+                "Windows did not confirm the final step, which is cosmetic."
+            )
+        return False, message
 
     def refresh_free_space(self) -> int | None:
         """Re-read free space after writing, for reporting to the server."""
