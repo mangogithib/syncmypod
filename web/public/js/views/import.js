@@ -1,5 +1,5 @@
 import { api } from '../lib/api.js';
-import { h, mount } from '../lib/dom.js';
+import { h, icon, mount } from '../lib/dom.js';
 import {
   badge,
   debounce,
@@ -7,6 +7,7 @@ import {
   formatRelative,
   modal,
   notice,
+  spinner,
   toast,
 } from '../lib/ui.js';
 
@@ -26,6 +27,7 @@ import {
 
 export async function renderImport(view, context) {
   const jobsSlot = h('div');
+  const accountSlot = h('div');
 
   mount(
     view,
@@ -41,12 +43,310 @@ export async function renderImport(view, context) {
       '',
       'info'
     ),
+    accountSlot,
     h('div.grid-2', trackListCard(), deezerCard(), youtubeCard()),
     jobsSlot
   );
 
-
+  await loadAccount();
   await loadJobs();
+
+  // --- a connected YouTube account -----------------------------------------
+  //
+  // The only part of this app that needs an account anywhere. Everything else
+  // works from a link or a pasted list; following someone's own playlists needs
+  // their permission, and permission needs a sign-in.
+
+  async function loadAccount() {
+    if (!context.isCurrent()) return;
+    mount(accountSlot, spinner('Checking YouTube account...'));
+    let state;
+    try {
+      state = await api.youtubeAccount();
+    } catch (err) {
+      mount(accountSlot, notice(err.message, 'danger', 'warn'));
+      return;
+    }
+    if (!context.isCurrent()) return;
+
+    mount(
+      accountSlot,
+      !state.configured
+        ? setupNeededCard(state.redirectUri)
+        : !state.connected
+          ? connectCard()
+          : connectedCard(state)
+    );
+  }
+
+  // Shown when the instance has no Google client yet. The steps are here rather
+  // than in a wiki because this is where somebody hits the wall, and because
+  // the redirect URI has to be copied exactly - so it is on screen, not
+  // described.
+  function setupNeededCard(redirectUri) {
+    return h(
+      'div.card',
+      h(
+        'div.card-head',
+        h('h2', 'Connect a YouTube account'),
+        h('div.spacer'),
+        badge('Setup needed', 'warn')
+      ),
+      h(
+        'div.card-body',
+        h(
+          'p.muted',
+          'Following your own YouTube playlists means reading your account, and Google only lets an application do that with credentials registered to it. Everything else on this page works without any of this.'
+        ),
+        h(
+          'ol.steps',
+          h(
+            'li',
+            'Open the Google Cloud console, create a project, and enable the ',
+            h('strong', 'YouTube Data API v3'),
+            '.'
+          ),
+          h('li', 'Under Credentials, create an OAuth client ID of type Web application.'),
+          h(
+            'li',
+            'Add this exact address as an authorised redirect URI:',
+            h('code.copyable', { title: 'Click to copy', onclick: copySelf }, redirectUri)
+          ),
+          h(
+            'li',
+            'On the OAuth consent screen, add yourself under Test users. The app does not need to be published or reviewed for your own account.'
+          ),
+          h(
+            'li',
+            'Paste the client ID and secret into ',
+            h('a', { href: '#/settings' }, 'Settings'),
+            '.'
+          )
+        ),
+        notice(
+          'Read-only, and only YouTube. The permission asked for lets this list your playlists and what is in them. It cannot change anything in your account, and it cannot download - the local app does that with its own separate sign-in.',
+          '',
+          'info'
+        )
+      )
+    );
+  }
+
+  function connectCard() {
+    const connect = h(
+      'button.btn.btn-primary',
+      { type: 'button', onclick: () => startConnect(connect) },
+      icon('link', 15),
+      'Connect YouTube account'
+    );
+
+    return h(
+      'div.card',
+      h('div.card-head', h('h2', 'Connect a YouTube account'), h('div.spacer')),
+      h(
+        'div.card-body',
+        h(
+          'p.muted',
+          'Pick the playlists worth following and they are re-checked whenever you open this page, so new songs arrive here without pasting anything.'
+        ),
+        notice(
+          'This is separate from the sign-in in the local app. That one lives on your own machine and fetches the audio. This one only reads your playlist list, and cannot download anything.',
+          '',
+          'info'
+        ),
+        h('div', connect)
+      )
+    );
+  }
+
+  function connectedCard(state) {
+    const listSlot = h('div');
+    let playlists = state.playlists;
+
+    const render = () =>
+      mount(
+        listSlot,
+        playlists.length === 0
+          ? h(
+              'p.muted',
+              'No playlists found yet. Press Refresh to read them from your account.'
+            )
+          : h(
+              'div.card',
+              h(
+                'div.list',
+                playlists.map((playlist) => {
+                  const tick = h('input', {
+                    type: 'checkbox',
+                    checked: playlist.selected,
+                    onchange: () => {
+                      playlist.selected = tick.checked;
+                      saveSelection();
+                    },
+                  });
+                  return h(
+                    'div.list-row',
+                    h('label.checkbox', { style: { margin: 0 } }, tick),
+                    playlist.thumbnailUrl
+                      ? h('img.thumb', { src: playlist.thumbnailUrl, alt: '', loading: 'lazy' })
+                      : null,
+                    h(
+                      'div.list-main',
+                      h('div.list-title', playlist.title),
+                      h(
+                        'div.list-sub',
+                        [
+                          playlist.itemCount != null
+                            ? `${formatNumber(playlist.itemCount)} item${playlist.itemCount === 1 ? '' : 's'}`
+                            : null,
+                          playlist.lastSyncedAt
+                            ? `synced ${formatRelative(playlist.lastSyncedAt)}`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' \u00b7 ')
+                      )
+                    )
+                  );
+                })
+              )
+            )
+      );
+
+    const saveSelection = debounce(async () => {
+      try {
+        const selected = playlists.filter((p) => p.selected).map((p) => p.youtubeId);
+        const response = await api.youtubeSelection(selected);
+        playlists = response.playlists;
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }, 500);
+
+    const refresh = h(
+      'button.btn',
+      {
+        type: 'button',
+        onclick: async () => {
+          refresh.disabled = true;
+          try {
+            const response = await api.youtubeRefreshPlaylists();
+            playlists = response.playlists;
+            render();
+            toast(`Found ${formatNumber(playlists.length)} playlists.`, 'ok');
+          } catch (err) {
+            toast(err.message, 'error');
+          } finally {
+            refresh.disabled = false;
+          }
+        },
+      },
+      'Refresh list'
+    );
+
+    const syncNow = h(
+      'button.btn.btn-primary',
+      {
+        type: 'button',
+        onclick: async () => {
+          syncNow.disabled = true;
+          try {
+            const response = await api.youtubeSyncNow();
+            watchJob(response.jobId, 'followed playlists');
+          } catch (err) {
+            toast(err.message, 'error');
+          } finally {
+            syncNow.disabled = false;
+          }
+        },
+      },
+      'Sync now'
+    );
+
+    const disconnect = h(
+      'button.btn.btn-danger',
+      {
+        type: 'button',
+        onclick: async () => {
+          if (!window.confirm('Disconnect this YouTube account? Tracks already imported stay.')) {
+            return;
+          }
+          try {
+            await api.youtubeDisconnect();
+            toast('YouTube account disconnected.', 'ok');
+            await loadAccount();
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        },
+      },
+      'Disconnect'
+    );
+
+    render();
+
+    return h(
+      'div.card',
+      h(
+        'div.card-head',
+        h('h2', 'YouTube account'),
+        h('div.spacer'),
+        badge(state.account?.channelTitle || 'Connected', 'ok')
+      ),
+      h(
+        'div.card-body',
+        state.account?.lastError ? notice(state.account.lastError, 'warn', 'warn') : null,
+        h(
+          'p.muted',
+          state.account?.lastSyncedAt
+            ? `Last synced ${formatRelative(state.account.lastSyncedAt)}. Ticked playlists are re-checked when you open this page.`
+            : 'Tick the playlists to follow. They are re-checked whenever you open this page.'
+        ),
+        listSlot,
+        notice(
+          'Albums saved to a YouTube Music library are not listed here, because Google does not expose them to applications. Import one with its playlist link instead - YouTube Music gives you that from the album\u2019s share menu.',
+          '',
+          'info'
+        ),
+        h('div.row', syncNow, refresh, h('div.spacer'), disconnect)
+      )
+    );
+  }
+
+  async function startConnect(button) {
+    button.disabled = true;
+    try {
+      const { url } = await api.youtubeConnect();
+      // A popup rather than a redirect, so a half-typed import on this page is
+      // not thrown away by leaving it.
+      const popup = window.open(url, 'syncmypod-youtube', 'width=520,height=680');
+      if (!popup) {
+        toast('Allow popups for this site, then press Connect again.', 'error');
+        return;
+      }
+      const done = async (event) => {
+        if (event.origin !== window.location.origin) return;
+        if (event.data?.source !== 'syncmypod-youtube') return;
+        window.removeEventListener('message', done);
+        await loadAccount();
+        if (event.data.ok) toast('YouTube account connected.', 'ok');
+      };
+      window.addEventListener('message', done);
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function copySelf(event) {
+    const text = event.currentTarget.textContent;
+    navigator.clipboard?.writeText(text).then(
+      () => toast('Copied.', 'ok'),
+      () => toast('Copy it by hand: ' + text, 'info')
+    );
+  }
+
 
   async function loadJobs() {
     if (!context.isCurrent()) return;

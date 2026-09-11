@@ -137,6 +137,15 @@ export const api = {
   importYouTubePlaylist: (payload) =>
     request('POST', '/api/import/youtube-playlist', payload),
   importJobs: () => request('GET', '/api/import/jobs'),
+
+  // --- connected YouTube account -----------------------------------------
+  youtubeAccount: () => request('GET', '/api/youtube-account'),
+  youtubeConnect: () => request('POST', '/api/youtube-account/connect'),
+  youtubeDisconnect: () => request('POST', '/api/youtube-account/disconnect'),
+  youtubeRefreshPlaylists: () => request('POST', '/api/youtube-account/refresh'),
+  youtubeSelection: (playlistIds) =>
+    request('PUT', '/api/youtube-account/selection', { playlistIds }),
+  youtubeSyncNow: () => request('POST', '/api/youtube-account/sync'),
   importJob: (jobId) => request('GET', `/api/import/jobs/${jobId}`),
 
   // --- instance settings -------------------------------------------------

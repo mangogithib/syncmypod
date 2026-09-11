@@ -1,16 +1,23 @@
 import { one, query, transaction } from '../db/pool.js';
 import * as deezer from '../providers/deezer.js';
 import * as youtube from '../providers/youtube.js';
+import * as youtubeAccount from './youtube-account.js';
 import { appendToPlaylist } from './playlist-writes.js';
 import { resolveAndSave } from './resolver.js';
 
 // Bulk-importing tracks into the library.
 //
-// Three sources, none of which needs an account or a key:
+// Four sources:
 //
 //   deezer-playlist   a public Deezer playlist, by URL or id
 //   youtube-playlist  a public YouTube playlist, by URL or id
 //   track-list        pasted text, one track per line
+//   youtube-account   the playlists a connected YouTube account has been asked
+//                     to follow, re-checked when the app is opened
+//
+// Only the last needs an account, because reading somebody's own playlists
+// needs their permission. The other three need nothing at all, which is a
+// property worth keeping.
 //
 // The pasted list is the more important of the two, and exists because there is
 // no longer an API route into a Spotify library. It is also the only source that
@@ -94,6 +101,125 @@ export async function startYouTubePlaylistImport(userId, playlistRef, options = 
   );
 
   return job.id;
+}
+
+// Re-checks every playlist a connected YouTube account has been asked to follow.
+//
+// Called when the app is opened, and by the Sync now button. One job covers all
+// the selected playlists rather than one job each, because the question being
+// asked is "is my library up to date" and that has a single answer.
+//
+// A track already in the library is counted as skipped and costs nothing beyond
+// the resolver's own dedupe, so a re-run over an unchanged playlist is cheap.
+// Cheap, not free - the YouTube API calls still happen, against a daily quota -
+// which is why the open-the-app path below only runs when something is stale.
+export async function startYouTubeAccountSync(userId) {
+  const followed = (await youtubeAccount.listPlaylists(userId)).filter((p) => p.selected);
+  if (followed.length === 0) {
+    throw new Error('No playlists are selected yet. Tick the ones you want to follow.');
+  }
+
+  const job = await one(
+    `INSERT INTO import_jobs (user_id, source, source_name, status)
+     VALUES ($1, 'youtube-account', $2, 'queued')
+     RETURNING id`,
+    [userId, followed.length === 1 ? followed[0].title : `${followed.length} YouTube playlists`]
+  );
+
+  runJob(job.id, () => syncYouTubeAccount(job.id, userId, followed)).catch((err) =>
+    console.error(`[import] job ${job.id} crashed:`, err.message)
+  );
+
+  return job.id;
+}
+
+// The open-the-app path.
+//
+// Runs a sync only if one has not run recently, so opening the page five times
+// in a minute does not mean five passes over the YouTube API.
+const STALE_AFTER_MS = 30 * 60_000;
+const lastRun = new Map();
+
+export async function syncYouTubeAccountIfStale(userId) {
+  const previous = lastRun.get(userId) || 0;
+  if (Date.now() - previous < STALE_AFTER_MS) return null;
+  lastRun.set(userId, Date.now());
+  try {
+    return await startYouTubeAccountSync(userId);
+  } catch {
+    // Nothing selected, or the account is gone. Opening the page must not fail
+    // because a background convenience could not run.
+    return null;
+  }
+}
+
+async function syncYouTubeAccount(jobId, userId, followed) {
+  await query(`UPDATE import_jobs SET status = 'running' WHERE id = $1`, [jobId]);
+
+  // Every followed playlist is read before any is imported, so `total` is the
+  // real number from the start and the progress bar means something instead of
+  // jumping each time another playlist is fetched.
+  const work = [];
+  for (const playlist of followed) {
+    const items = await youtubeAccount.playlistItems(userId, playlist.youtubeId);
+    work.push({ playlist, items });
+  }
+
+  const total = work.reduce((sum, entry) => sum + entry.items.length, 0);
+  await query(`UPDATE import_jobs SET total = $2 WHERE id = $1`, [jobId, total]);
+
+  const carried = { processed: 0, added: 0, skipped: 0, failed: 0 };
+
+  for (const { playlist, items } of work) {
+    let targetPlaylistId = playlist.targetPlaylistId;
+    if (!targetPlaylistId) {
+      targetPlaylistId = await ensurePlaylist(userId, playlist.title, {
+        source: 'youtube',
+        sourceRef: playlist.youtubeId,
+      });
+    }
+
+    // The same rule as a pasted playlist link: the video title is a search, the
+    // catalogue is the metadata, and a track nothing recognises keeps its title
+    // and nothing else.
+    const counts = await processItems(
+      jobId,
+      userId,
+      items.map((item) => ({
+        ...splitYouTubeTitle(item),
+        matchKeyExtra: item.videoId
+          ? `https://www.youtube.com/watch?v=${item.videoId}`
+          : null,
+      })),
+      {
+        targetPlaylistId,
+        addedVia: 'youtube-account',
+        discardUnverifiedMetadata: true,
+        // Several playlists share one job, so each pass reports against the
+        // job's totals rather than restarting at zero.
+        carried,
+        jobTotal: total,
+      }
+    );
+
+    carried.processed += items.length;
+    carried.added += counts.added;
+    carried.skipped += counts.skipped;
+    carried.failed += counts.failed;
+
+    await youtubeAccount.markSynced(userId, playlist.youtubeId, {
+      itemCount: items.length,
+      targetPlaylistId,
+    });
+  }
+}
+
+// The API gives a video title and an uploader. Turned into the same rough
+// {title, artist} guess the scraped-playlist path produces, using the same
+// splitter, so both routes resolve identically.
+function splitYouTubeTitle(item) {
+  const guess = youtube.splitArtistTitle(item.title, item.channel || '');
+  return { title: guess.title || item.title, artist: guess.artist || null };
 }
 
 export async function startTrackListImport(userId, lines, options = {}) {
@@ -350,12 +476,26 @@ async function importTrackList(jobId, userId, parsed, options) {
 
 // The shared body of every import: resolve each item, add it to the library,
 // optionally add it to a playlist, and keep the job row current.
+//
+// `carried` and `jobTotal` are for a job made of several playlists. Counts are
+// written as carried-plus-mine so the job row always shows the whole job, and
+// the row is only marked done once the job's own total has been reached -
+// otherwise the first playlist to finish would close the job while the rest
+// were still running.
 async function processItems(
   jobId,
   userId,
   items,
-  { targetPlaylistId, addedVia, discardUnverifiedMetadata = false }
+  {
+    targetPlaylistId,
+    addedVia,
+    discardUnverifiedMetadata = false,
+    carried = null,
+    jobTotal = null,
+  }
 ) {
+  const before = carried || { processed: 0, added: 0, skipped: 0, failed: 0 };
+  const total = jobTotal ?? items.length;
   let processed = 0;
   let added = 0;
   let skipped = 0;
@@ -403,20 +543,39 @@ async function processItems(
         `UPDATE import_jobs
             SET processed = $2, added = $3, skipped = $4, failed = $5
           WHERE id = $1`,
-        [jobId, processed, added, skipped, failed]
+        [
+          jobId,
+          before.processed + processed,
+          before.added + added,
+          before.skipped + skipped,
+          before.failed + failed,
+        ]
       );
     }
   }
 
+  const finished = before.processed + processed >= total;
   await query(
     `UPDATE import_jobs
-        SET status = 'done', processed = $2, added = $3, skipped = $4, failed = $5,
-            report = $6::jsonb, finished_at = now()
+        SET status = CASE WHEN $7 THEN 'done' ELSE status END,
+            processed = $2, added = $3, skipped = $4, failed = $5,
+            report = COALESCE(report, '[]'::jsonb) || $6::jsonb,
+            finished_at = CASE WHEN $7 THEN now() ELSE finished_at END
       WHERE id = $1`,
-    // The report is capped: a wholly failed 5000-track import should not write a
-    // multi-megabyte JSONB row.
-    [jobId, processed, added, skipped, failed, JSON.stringify(report.slice(0, 200))]
+    [
+      jobId,
+      before.processed + processed,
+      before.added + added,
+      before.skipped + skipped,
+      before.failed + failed,
+      // The report is capped: a wholly failed 5000-track import should not
+      // write a multi-megabyte JSONB row.
+      JSON.stringify(report.slice(0, 200)),
+      finished,
+    ]
   );
+
+  return { added, skipped, failed };
 }
 
 // Finds or creates a playlist by name. Re-importing the same playlist should
