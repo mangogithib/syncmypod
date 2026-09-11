@@ -109,6 +109,10 @@ export const api = {
   searchProviders: (q, type, signal) =>
     request('GET', `/api/search/providers${qs({ q, type })}`, undefined, { signal }),
   providerAlbum: (params) => request('GET', `/api/search/album${qs(params)}`),
+  // Asked for by name rather than run with every search - see the comment on
+  // the route. Slower, and its metadata is a video title.
+  searchYouTube: (q, signal) =>
+    request('GET', `/api/search/youtube${qs({ q })}`, undefined, { signal }),
 
   // --- artists / follows -------------------------------------------------
   follows: () => request('GET', '/api/artists/follows'),

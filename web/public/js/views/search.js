@@ -132,7 +132,11 @@ export async function renderSearch(view, context) {
             iconName: 'search',
             title: 'Nothing found',
             body: `No ${type}s matched "${q}". Try fewer words, or a different spelling.`,
-          })
+          }),
+          // The case this exists for. Nothing in the licensed catalogues
+          // matched, which for regional releases and small labels is common
+          // and does not mean the song is unfindable.
+          type === 'track' ? youtubeFallback(q) : null
         );
         return;
       }
@@ -150,7 +154,10 @@ export async function renderSearch(view, context) {
           ? h('div.card', h('div.list', data.results.map(artistRow)))
           : type === 'album'
             ? h('div.tile-grid', data.results.map(albumTile))
-            : h('div.card', h('div.list', data.results.map(trackRow)))
+            : h('div.card', h('div.list', data.results.map(trackRow))),
+        // Offered under every song search, not only the empty ones: a catalogue
+        // can return the wrong recording as confidently as it returns nothing.
+        type === 'track' ? youtubeFallback(q) : null
       );
     } catch (err) {
       // An aborted request is the expected outcome of typing, not a failure.
@@ -246,13 +253,13 @@ export async function renderSearch(view, context) {
 
   // --- actions -------------------------------------------------------------
 
-  async function addTrack(result, button) {
+  async function addTrack(result, button, item) {
     button.disabled = true;
     button.textContent = 'Adding...';
     try {
       const response = await api.addTracks({
-        addedVia: 'search',
-        items: [providerItem(result)],
+        addedVia: item ? 'youtube' : 'search',
+        items: [item || providerItem(result)],
       });
       const entry = response.report[0];
       if (entry?.ok) {
@@ -414,6 +421,107 @@ export async function renderSearch(view, context) {
   // a direct lookup rather than searching all over again. The ISRC matters most:
   // it is what lets the server recognise a track it already has under a
   // different provider's id.
+  // --- YouTube, on request -------------------------------------------------
+
+  // Kept visually quieter than the main results, and labelled, because a video
+  // title is a worse source of metadata than a catalogue entry and the
+  // interface should say so rather than present the two as equals.
+  function youtubeFallback(q) {
+    const container = h('div', { style: { marginTop: '16px' } });
+
+    const button = h(
+      'button.btn.btn-sm',
+      {
+        type: 'button',
+        onclick: async () => {
+          button.disabled = true;
+          button.textContent = 'Searching YouTube...';
+          try {
+            const data = await api.searchYouTube(q);
+            if (!context.isCurrent()) return;
+            mount(container, youtubeResults(data.results || []));
+          } catch (err) {
+            mount(container, notice(err.message, 'warn', 'warn'));
+          }
+        },
+      },
+      icon('search', 14),
+      'Search on YouTube'
+    );
+
+    mount(
+      container,
+      h(
+        'div.search-fallback',
+        h(
+          'p.small.subtle',
+          { style: { margin: '0 0 8px' } },
+          "Not what you were looking for? YouTube has music the licensed catalogues do not."
+        ),
+        button
+      )
+    );
+    return container;
+  }
+
+  function youtubeResults(found) {
+    if (found.length === 0) {
+      return notice('YouTube returned nothing for that search.', 'info', 'search');
+    }
+    return h(
+      'div',
+      h(
+        'p.small.subtle',
+        { style: { margin: '0 0 8px' } },
+        `${found.length} from YouTube. Titles come from the uploader, so check them - `,
+        h('span', 'the library will try to match each one against the catalogues when you add it.')
+      ),
+      h('div.card', h('div.list', found.map(youtubeRow)))
+    );
+  }
+
+  function youtubeRow(result) {
+    const addButton = h(
+      'button.btn.btn-sm.btn-primary',
+      { type: 'button', onclick: () => addTrack(result, addButton, youtubeItem(result)) },
+      icon('plus', 14),
+      'Add'
+    );
+
+    return h(
+      'div.list-row',
+      artwork(result.artworkUrl, { size: 40 }),
+      h(
+        'div.list-main',
+        h('div.list-title', result.trackTitle || result.title),
+        h('div.list-sub', result.artist || result.channel || 'Unknown artist'),
+        h(
+          'div.small.subtle',
+          [result.channel, result.views, result.official ? 'Official audio' : null]
+            .filter(Boolean)
+            .join(' - ')
+        )
+      ),
+      h('span.small.subtle.nowrap', formatDuration(result.durationMs)),
+      h('div.list-actions', addButton)
+    );
+  }
+
+  // The video is kept as the source hint, not as the metadata. The ordinary add
+  // route still runs the resolver on the title and artist, so a YouTube result
+  // that also exists on Deezer is saved properly credited and merely downloads
+  // from the video the user chose; one that exists nowhere else is saved
+  // unresolved and waits to be corrected. Either way the iPod never sees a
+  // video title.
+  function youtubeItem(result) {
+    return {
+      title: result.trackTitle || result.title,
+      artist: result.artist || result.channel,
+      durationMs: result.durationMs,
+      sourceHint: result.url,
+    };
+  }
+
   function providerItem(result) {
     return {
       title: result.title,

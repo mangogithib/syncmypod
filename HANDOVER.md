@@ -316,6 +316,30 @@ that another process cannot unwrap on Windows at all. **Firefox is the one that
 works there**, which is why it is listed first and is the default. Safari is
 only offered on macOS because yt-dlp refuses it elsewhere.
 
+### YouTube search works from the server without a key
+
+Assumed it would need the Data API v3, because datacentre IPs are treated more
+harshly than residential ones and the unofficial route tends to hit bot walls.
+Measured instead, from the deployment host: the ordinary search page returns
+HTTP 200 with a full `ytInitialData` payload in about half a second, and parses
+to twenty results. No key, no Google Cloud project, nothing for the user to set
+up.
+
+Three things that cost a round of testing each:
+
+- **A container restart does not pick up new code.** The source is `COPY`ed into
+  the image, so `docker compose restart app` re-runs the old build. It has to be
+  `up -d --build`. Two rounds of "the fix did not work" were this.
+- **`ownerBadges` is not "official audio".** It marks a *verified* channel, and
+  verified re-upload channels are everywhere — a test search badged
+  "7clouds Latin" alongside the artist's own upload. Only a `- Topic` channel
+  means the label's own audio.
+- **Video titles need more than a hyphen split.** "Song | Lyric Video | Film |
+  Actor | Composer" is the standard shape for South Asian music uploads, and
+  "Kesariya - Lyric Video" split naively yields a track called "Lyric Video".
+  Everything after the first pipe is dropped, and a right-hand side that only
+  describes the upload is rejected.
+
 ### Infrastructure traps
 
 - **OCI drops inbound ports before they reach the host.** A firewalld rule is

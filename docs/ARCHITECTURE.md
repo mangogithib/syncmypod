@@ -109,6 +109,36 @@ iPod with an unverified tag.
 `manual` is sacred: automated resolution will not overwrite it without an
 explicit `overwriteManual` flag.
 
+### YouTube, on request
+
+Deezer, iTunes and MusicBrainz cover licensed commercial releases — most music,
+and not all of it. Regional releases and small labels are routinely missing, so
+a library could not contain them at all. A **Search on YouTube** button under
+the song results covers that.
+
+It is deliberately *not* another rung on the resolver's ladder. YouTube
+metadata is a video title and a channel name, which is precisely the source this
+project exists to distrust; its results are ranked by engagement, so a lyric
+video or a remix outranks the original; and the other three answer in about a
+hundred milliseconds where this fetches and parses a megabyte of HTML. Making
+every search pay that for an uncommon case would be the wrong trade.
+
+A result picked there is added through the ordinary route, so the **resolver
+still runs on its title and artist**. A YouTube-found track that also exists on
+Deezer is saved properly credited, keeping the video as its `sourceHint`; one
+that exists nowhere else is saved `unresolved` and waits to be corrected by hand,
+which promotes it to `manual`. Either way the metadata written to the iPod is
+never a video title — the gate in the manifest is unchanged.
+
+There is no API key. The Data API v3 needs a Google Cloud project and allows
+about a hundred searches a day; the alternative is what every client including
+yt-dlp does, which is to read the JSON YouTube embeds in its own search page.
+That was measured from the deployment host before being relied on, since
+datacentre IPs are treated more harshly than residential ones: it returns a full
+result set in about half a second. The cost is that YouTube can change the page,
+which is survivable by design — the button returns nothing and the rest of the
+search is untouched.
+
 ### Metadata resolution
 
 Whatever a track claims to be, it is re-resolved against a real catalogue before

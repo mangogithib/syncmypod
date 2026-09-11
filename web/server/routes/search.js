@@ -6,6 +6,7 @@ import { joinArtists } from '../lib/normalise.js';
 import * as deezer from '../providers/deezer.js';
 import * as itunes from '../providers/itunes.js';
 import * as musicbrainz from '../providers/musicbrainz.js';
+import * as youtube from '../providers/youtube.js';
 
 export const searchRoutes = Router();
 searchRoutes.use(requireUser);
@@ -127,6 +128,47 @@ searchRoutes.get(
     }
 
     res.json({ provider: null, providers: providerStatus(), tried, results: [] });
+  })
+);
+
+// YouTube, asked for by name.
+//
+// Deliberately its own endpoint rather than another rung on the ladder above.
+// The three metadata providers answer in about a hundred milliseconds and return
+// properly credited releases; this fetches and parses a megabyte of HTML, and
+// returns video titles ranked by popularity. Making every search pay that cost
+// for a case that comes up rarely would be the wrong trade - so it runs only
+// when the user presses the button, which is also the honest way to present a
+// source whose metadata should not be trusted.
+searchRoutes.get(
+  '/youtube',
+  // Tighter than the provider ladder. Each of these is a page fetch rather than
+  // an API call, and it is a button press rather than typing.
+  rateLimit({ windowMs: 60_000, max: 20, key: (req) => `yt:${req.user?.id}` }),
+  handler(async (req, res) => {
+    const q = str(req.query.q, 'Search', { max: 200 });
+    if (!q || q.length < 2) return res.json({ results: [] });
+
+    if (!youtube.isEnabled()) {
+      return res.status(503).json({
+        error: 'YouTube search is turned off in Settings.',
+        results: [],
+      });
+    }
+
+    try {
+      const results = await youtube.searchTracks(q, { limit: 20 });
+      res.json({ provider: 'youtube', providerLabel: 'YouTube', results });
+    } catch (err) {
+      // Reported rather than thrown. This is a secondary source reached by an
+      // optional button, and a failure here must read as "that did not work"
+      // rather than as the search being broken.
+      console.error('[search] youtube failed:', err.message);
+      res.status(err.status && err.status < 600 ? err.status : 502).json({
+        error: err.message,
+        results: [],
+      });
+    }
   })
 );
 

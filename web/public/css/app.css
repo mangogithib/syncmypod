@@ -726,3 +726,17 @@ code {
   .tile-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
   .toasts { left: var(--space-4); right: var(--space-4); bottom: var(--space-4); max-width: none; }
 }
+
+/* --- Secondary search source -------------------------------------------- */
+
+/*
+  Set apart from the results above it, and quieter. YouTube titles are written
+  by uploaders rather than taken from a release, so the interface should not
+  present them as equivalent to a catalogue entry - the separation is the honest
+  signal that this is a different kind of source.
+*/
+.search-fallback {
+  border-top: 1px dashed var(--border-strong);
+  padding-top: var(--space-4);
+  margin-top: var(--space-4);
+}
