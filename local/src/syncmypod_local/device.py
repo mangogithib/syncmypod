@@ -127,6 +127,7 @@ class IpodDevice:
                         title=track.title,
                         artist=track.artist,
                         album=track.album,
+                        artwork_id=int(track.get("artwork_id_ref") or 0),
                     )
                 )
             except Exception:
@@ -261,6 +262,79 @@ class IpodDevice:
                 logger.warning("Could not delete %s from the iPod: %s", path, err)
         return removed
 
+    def write_artwork(self, locations: list[str]) -> int:
+        """Write the iPod's artwork database so covers appear on the device.
+
+        Album art lives in two places on an iPod and both are needed. The file's
+        own tags are what a computer reads, and this application writes those
+        from the manifest. The *device* reads a separate database of pre-scaled
+        images in ``iPod_Control/Artwork`` - so art embedded in a file but absent
+        from that database is invisible on the iPod's screen, which looks exactly
+        like the feature not working.
+
+        ``locations`` names the tracks this tool manages. That restriction is the
+        important part. pyPodLib converges the device to a final state: a track
+        it is given a source file for has its art rebuilt from that file, and a
+        track it is *not* given one for keeps whatever it already had. Handing it
+        every track on the device would mean re-encoding artwork this tool never
+        wrote - and clearing it outright for any track whose file has no embedded
+        cover but whose art was put there by iTunes from some other source.
+
+        Returns how many tracks ended up linked to an image.
+        """
+        if self._handle is None:
+            raise DeviceError("This device is not open.")
+        if not locations:
+            return 0
+
+        from pypodlib.artworkdb_writer import write_artworkdb
+
+        library = self._library(reload=True)
+        wanted = set(locations)
+
+        # The artwork writer keys everything on db_track_id, and reads the art
+        # out of the audio file itself - so the "PC source" it is given is the
+        # copy already on the iPod, which carries the tags written from the
+        # manifest. Nothing has to survive from the download.
+        sources: dict[int, str] = {}
+        rows = []
+        for track in library.tracks:
+            rows.append(track.data)
+            if track.location in wanted and track.db_track_id:
+                path = _file_for(self.mount_path, track.location)
+                if path.is_file():
+                    sources[track.db_track_id] = str(path)
+
+        if not sources:
+            return 0
+
+        try:
+            written = write_artworkdb(
+                ipod_path=str(self.mount_path),
+                tracks=rows,
+                pc_file_paths=sources,
+            )
+        except Exception as err:
+            raise DeviceError(f"Could not write the iPod's artwork database: {err}") from err
+
+        # The images are on the device; the database rows still have to point at
+        # them. These are the parsed field names, which differ from the ones the
+        # library uses internally - `artwork_id_ref` is what becomes mhii_link.
+        linked = 0
+        for row in rows:
+            info = written.get(int(row.get("db_track_id") or row.get("db_id") or 0))
+            if not info:
+                continue
+            image_id, source_size = info
+            row["artwork_id_ref"] = image_id
+            row["artwork_count"] = 1
+            row["artwork_size"] = source_size
+            row["has_artwork"] = True
+            linked += 1
+
+        self._commit()
+        return linked
+
     def refresh_free_space(self) -> int | None:
         """Re-read free space after writing, for reporting to the server."""
         with contextlib.suppress(OSError):
@@ -303,6 +377,14 @@ class IpodTrack:
     title: str
     artist: str
     album: str
+    # The image this row points at in the iPod's artwork database, or 0. Art in
+    # the file's own tags is invisible on the device without this, so it is the
+    # only way to tell whether a track will actually show a cover.
+    artwork_id: int = 0
+
+    @property
+    def has_artwork(self) -> bool:
+        return self.artwork_id > 0
 
 
 def _file_for(mount: Path, location: str) -> Path:

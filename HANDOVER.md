@@ -23,12 +23,13 @@ project's state and its reasoning.
 | Device pairing + sync API | Working, verified end to end |
 | Local app: pair / status / devices | Working, verified against the live server |
 | Local app: the sync engine | Working, verified on real hardware |
+| Album art on the device | Working — verified by decoding it back off the iPod |
 | Local app: GUI | First version — status, sync, live progress, cancel |
 | Bundled ffmpeg | Fetch script written; binaries are gitignored |
 | **Packaging to a single executable** | **Not started — this is next** |
 
 Roughly 14,700 lines across 45 JavaScript files, 13 Python modules, 4 SQL
-migrations. 135 Python tests, all passing.
+migrations. 144 Python tests, all passing.
 
 ### Live instance
 
@@ -238,6 +239,39 @@ only, never on a download. And one track got `403 Forbidden` after eighteen
 downloads in quick succession, which succeeded on the next run; the engine
 handled it correctly by failing that track alone.
 
+### Artwork lives in two places, and only one of them is obvious
+
+Writing album art into a file's tags does **nothing** for the iPod's screen. The
+device reads a separate store — `iPod_Control/Artwork`, an `ArtworkDB` plus one
+`.ithmb` of raw RGB565 frames per size — and a track whose row does not point
+into it shows no cover, however well tagged the file is.
+
+pyPodLib writes both atomically, but only if `pc_file_paths` is passed down to
+the database commit, and `IPod.save()` never sets it. That one unset argument is
+the entire reason art did not appear. `device.py` now builds the payload with it.
+
+Three things about that path:
+
+- **`pc_file_paths` can point at the copy already on the iPod.** The art is read
+  out of the audio file itself, so nothing has to survive from the download.
+- **Pass only the tracks this tool manages.** pyPodLib converges the device: a
+  track given a source file has its art rebuilt, a track without one keeps what
+  it had, and a track given a source file with no embedded cover has its art
+  *cleared*. The attached iPod arrived with a 78MB artwork store from
+  MediaHuman; handing pyPodLib all 202 tracks would have re-encoded all of it
+  and risked wiping art whose source was never in the files.
+- **The parser self-heals a stale link**, re-deriving `artwork_id_ref` from the
+  `ArtworkDB`'s own song ids. So "does this track have art" is answered by the
+  row *after* parsing, and a zeroed row is not a reliable way to simulate a
+  device without artwork — the test helper has to delete the store as well.
+
+Verified by decoding a frame back off the device: the 320x320 image for
+"Calvin Harris, Dua Lipa - One Kiss" is the real cover, and a pre-existing
+MediaHuman track's art came back byte-intact.
+
+Needs `numpy` and `Pillow`, so the dependency is `pypodlib[artwork]` rather than
+plain `pypodlib`. Not optional: without them the feature silently does nothing.
+
 ### Infrastructure traps
 
 - **OCI drops inbound ports before they reach the host.** A firewalld rule is
@@ -304,13 +338,9 @@ thing that makes it usable by anyone who does not have Python.
 
 ### Then
 
-1. **Artwork on the device.** The manifest carries `artworkUrl` and it is already
-   embedded in the file's tags, but the iPod's own artwork database
-   (`Artwork/ArtworkDB`) is not written, so the album art does not show on the
-   device. pyPodLib has an `artworkdb_writer` and an `artwork` extra.
-2. **Pairing from the GUI.** It is CLI-only, which is defensible for a
+1. **Pairing from the GUI.** It is CLI-only, which is defensible for a
    once-per-computer job but is the one thing that still forces a terminal.
-3. **Furnishing** — Mohamed's word for visual polish. `web/public/css/theme.css`
+2. **Furnishing** — Mohamed's word for visual polish. `web/public/css/theme.css`
    is all tokens and the GUI has a copy, so re-theming is two files that must be
    kept in step.
 

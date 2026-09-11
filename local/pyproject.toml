@@ -30,7 +30,11 @@ classifiers = [
 # iPod's database. A surprise upgrade there is the one that corrupts a device.
 # Raise it deliberately, after testing on real hardware.
 dependencies = [
-  "pypodlib==0.1.0",
+  # The artwork extra (numpy + Pillow) is not optional here. Without it the
+  # iPod's own artwork database cannot be written, and album art that is sitting
+  # in the file's tags simply never appears on the device screen - which reads
+  # as the feature being broken rather than as an extra not installed.
+  "pypodlib[artwork]==0.1.0",
   "yt-dlp>=2025.1.1",
   "mutagen>=1.47.0",
   "httpx>=0.27.0",

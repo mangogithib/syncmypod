@@ -328,6 +328,7 @@ terminal prints, so neither can drift from the other.
 | `tagging.py` | Writing the manifest's metadata onto the file, with mutagen |
 | `transcode.py` | Making a file the device can play — **imports pyPodLib** |
 | `ledger.py` | The record, kept on the iPod, of what this tool put there |
+| `tagging.py` + `device.py` | Album art: into the file's tags, then into the device's own artwork database |
 | `workspace.py` | The scratch directory, and its guaranteed removal |
 | `ffmpeg.py` | Finding ffmpeg — bundled copy first, then PATH |
 | `gui/` | A localhost server and one page, over the same engine |
@@ -349,6 +350,29 @@ the library adopt its contents rather than duplicate them.
 
 The consequence that matters most: **a track this tool did not add can never be
 removed by it.** An iPod may hold years of music put there by something else.
+
+### Artwork
+
+Album art lives in **two** places on an iPod and both are needed.
+
+The file's own tags are what a computer reads, and `tagging.py` writes those
+from the manifest's `artworkUrl`. The *device* reads something else entirely: a
+separate database of pre-scaled RGB565 images in `iPod_Control/Artwork`, an
+`ArtworkDB` plus one `.ithmb` per size. Art embedded in a file but absent from
+that database is **invisible on the iPod's screen** — which is
+indistinguishable, from the user's side, from the feature not working.
+
+pyPodLib writes both, and does it atomically with the iTunesDB. The subtlety is
+which tracks to hand it: it converges the whole device, so a track it is given a
+source file for has its art rebuilt, and a track it is *not* given one for keeps
+whatever it already had. Only the tracks in the ledger are passed. Handing it
+everything would re-encode art this tool never wrote, and clear it outright for
+any track whose file has no embedded cover but whose art came from iTunes.
+
+"Missing cover art" counts as work to do, so a library synced before this
+existed picks it up without re-downloading a byte. A track is only counted as
+missing if its database row points at no image — and that row heals itself,
+because the parser re-links tracks from the `ArtworkDB`'s own song ids.
 
 ### Conversion
 

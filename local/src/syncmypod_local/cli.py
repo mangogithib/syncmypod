@@ -4,10 +4,14 @@ Subcommands, each doing one thing:
 
     syncmypod pair <server> <code>   link this computer to a library
     syncmypod status                 what is paired, what is plugged in
+    syncmypod devices                just the attached iPods
+    syncmypod sync                   do the work
+    syncmypod gui                    the same thing, in a browser
     syncmypod unpair                 forget the local pairing
 
-The sync command itself arrives with the sync engine; the commands here are the
-ones that can be used and tested without an iPod present.
+This is one of two front ends over the engine in ``sync.py``; the GUI is the
+other. Neither owns any behaviour - the engine reports progress as events and
+both of them only render those, so the two cannot drift apart.
 
 Exit codes are meaningful, so this can be driven from a script or a scheduled
 task: 0 success, 1 a problem the user can fix, 2 bad usage, 130 interrupted.
@@ -425,6 +429,10 @@ class _SyncReporter:
             self._console.print(f"[dim]Writing {data['count']} playlist(s)...[/dim]")
         elif event == "removing":
             self._console.print(f"[dim]Removing {data['count']} track(s)...[/dim]")
+        elif event == "artwork":
+            self._console.print(
+                f"[dim]Building cover art for {data['count']} track(s)...[/dim]"
+            )
 
     def _print_plan(self, plan: sync_engine.Plan) -> None:
         table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
@@ -438,6 +446,8 @@ class _SyncReporter:
             table.add_row("No longer in the library", str(len(plan.removals)))
         if plan.playlists:
             table.add_row("Playlists", str(len(plan.playlists)))
+        if plan.artwork_missing:
+            table.add_row("Missing cover art", str(len(plan.artwork_missing)))
         if plan.excluded:
             table.add_row("Excluded (unresolved metadata)", str(len(plan.excluded)))
         self._console.print()
@@ -464,7 +474,15 @@ def _print_summary(report: sync_engine.Report, *, dry_run: bool) -> None:
         parts.append(f"{report.removed} removed")
     if report.playlists_written:
         parts.append(f"{report.playlists_written} playlist(s) written")
+    if report.artwork_linked:
+        parts.append(f"{report.artwork_linked} with cover art")
     console.print("  ".join(parts))
+
+    if report.artwork_error:
+        console.print()
+        console.print(
+            f"[yellow]The music synced, but the cover art did not:[/yellow] {report.artwork_error}"
+        )
 
     if report.failed:
         console.print()

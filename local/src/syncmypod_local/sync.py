@@ -94,10 +94,15 @@ class Plan:
     playlists: list[tuple[str, list[int]]] = field(default_factory=list)
     excluded: list[dict[str, Any]] = field(default_factory=list)
     manifest: dict[str, Any] = field(default_factory=dict)
+    # Tracks already on the device whose covers would not show on its screen,
+    # because nothing points at an image in the iPod's artwork database. Counts
+    # as work: a library synced before artwork was implemented should pick it up
+    # without having to be downloaded again.
+    artwork_missing: list[str] = field(default_factory=list)
 
     @property
     def nothing_to_do(self) -> bool:
-        return not self.to_download and not self.removals
+        return not self.to_download and not self.removals and not self.artwork_missing
 
 
 @dataclass(slots=True)
@@ -112,6 +117,9 @@ class Result:
     file_size: int | None = None
     source_used: str | None = None
     error: str | None = None
+    # Where it landed on the device. Local bookkeeping, never sent to the
+    # server - it is how the artwork step finds the tracks this run added.
+    location: str | None = None
 
     def as_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"trackId": self.track_id, "state": self.state}
@@ -135,6 +143,8 @@ class Report:
     results: list[Result] = field(default_factory=list)
     removed: int = 0
     playlists_written: int = 0
+    artwork_linked: int = 0
+    artwork_error: str | None = None
     backup_id: str | None = None
     run_id: int | None = None
     status: str = "done"
@@ -225,6 +235,15 @@ def build_plan(
                     label=f"{entry.artist or 'Unknown'} - {entry.title or 'Untitled'}",
                 )
             )
+
+    by_location = {track.location: track for track in on_device if track.location}
+    plan.artwork_missing = [
+        entry.location
+        for track_id, entry in record.entries.items()
+        if track_id in wanted_ids
+        and entry.location in by_location
+        and not by_location[entry.location].has_artwork
+    ]
 
     plan.playlists = [
         (str(p.get("name") or "Untitled"), [int(t) for t in p.get("trackIds") or []])
@@ -406,6 +425,25 @@ def _execute(
         say("playlists", {"count": len(plan.playlists)})
         report.playlists_written = _write_playlists(ipod, plan, record)
 
+    # Artwork last, and never fatal. A cover is decoration: a sync that got the
+    # music onto the device has done its job, and failing it at the final step
+    # over a picture would be the wrong trade.
+    #
+    # Only the tracks that need it are passed. Every other track on the device
+    # keeps the artwork it already has, so this costs one image decode per track
+    # that gained one rather than a full re-encode of the library every run.
+    needs_artwork = sorted(
+        {r.location for r in report.results if r.state == "synced" and r.location}
+        | set(plan.artwork_missing)
+    )
+    if needs_artwork:
+        say("artwork", {"count": len(needs_artwork)})
+        try:
+            report.artwork_linked = ipod.write_artwork(needs_artwork)
+        except device_module.DeviceError as err:
+            logger.warning("Could not write the artwork database: %s", err)
+            report.artwork_error = str(err)
+
     if remove and plan.removals:
         say("removing", {"count": len(plan.removals)})
         report.removed = ipod.remove_locations([r.location for r in plan.removals])
@@ -491,6 +529,7 @@ def _commit_batch(
             file_format=result.format or "",
             size=result.file_size or 0,
         )
+        result.location = location
         results.append(result)
 
     # The rule the architecture rests on: nothing downloaded outlives the sync.

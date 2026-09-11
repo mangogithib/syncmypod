@@ -270,6 +270,9 @@ function handle(event) {
     case "removing":
       note(`Removing ${event.count} track(s)…`);
       break;
+    case "artwork":
+      note(`Building cover art for ${event.count} track(s)…`);
+      break;
     case "cancelling":
       note("Stopping after the current track…");
       break;
@@ -289,6 +292,7 @@ function renderPlan(event) {
     ["Playlists", event.playlists],
   ];
   if (event.removals.length) entries.push(["To remove", event.removals.length]);
+  if (event.artworkMissing) entries.push(["Missing art", event.artworkMissing]);
   if (event.excluded) entries.push(["Unresolved", event.excluded]);
 
   for (const [label, value] of entries) {
@@ -384,11 +388,24 @@ function showSummary(summary) {
   if (summary.failed.length) parts.push(`${summary.failed.length} failed`);
   if (summary.removed) parts.push(`${summary.removed} removed`);
   if (summary.playlists) parts.push(`${summary.playlists} playlist(s) written`);
+  if (summary.artwork) parts.push(`${summary.artwork} with cover art`);
 
   const tone = summary.failed.length ? "notice-warn" : "notice-ok";
   body.append(node("p", `notice ${tone}`, parts.join(" · ")));
 
   if (summary.message) body.append(node("p", "subtle", summary.message));
+
+  // Artwork failing is not a failed sync - the music is on the device - but it
+  // is the kind of thing that would otherwise look like it silently did nothing.
+  if (summary.artworkError) {
+    body.append(
+      node(
+        "p",
+        "notice notice-warn",
+        `The music synced, but the cover art did not: ${summary.artworkError}`
+      )
+    );
+  }
 
   if (summary.failed.length) {
     const list = node("ul", "failures");

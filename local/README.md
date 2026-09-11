@@ -126,8 +126,9 @@ is a revoked token, not a password reset.
    iPod cannot play the format
 6. Write tracks and playlists to the iPod database, signing it if the device
    requires that
-7. Ask before removing anything no longer in the library
-8. **Delete every downloaded file**
+7. Build the device's artwork database, so covers show on its screen
+8. Ask before removing anything no longer in the library
+9. **Delete every downloaded file**
 
 Step 5 is the rule the whole architecture exists for: whatever metadata a
 download source embedded is discarded and replaced with the server's resolved

@@ -222,6 +222,7 @@ class GuiServer:
                 adopted=len(plan.adopted),
                 removals=[{"id": r.track_id, "label": r.label} for r in plan.removals],
                 playlists=len(plan.playlists),
+                artworkMissing=len(plan.artwork_missing),
                 excluded=len(plan.excluded),
                 tracks=[{"id": t.id, "label": t.label} for t in plan.to_download],
             )
@@ -240,7 +241,7 @@ class GuiServer:
             )
         elif event == "track-failed":
             self.session.add("track-failed", id=data["item"].id, error=data["error"])
-        elif event in {"writing", "playlists", "removing"}:
+        elif event in {"writing", "playlists", "removing", "artwork"}:
             self.session.add(event, count=data.get("count", 0))
 
 
@@ -252,6 +253,8 @@ def _summarise(report: sync_engine.Report, *, dry_run: bool) -> dict[str, Any]:
         "failed": [{"label": r.label, "error": r.error} for r in report.failed],
         "removed": report.removed,
         "playlists": report.playlists_written,
+        "artwork": report.artwork_linked,
+        "artworkError": report.artwork_error,
         "excluded": len(report.plan.excluded),
         "message": report.message,
         "toDownload": len(report.plan.to_download),

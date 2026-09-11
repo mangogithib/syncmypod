@@ -18,54 +18,10 @@ import httpx
 import pytest
 import respx
 
+from helpers import CLASSIC_6G, SERVER, manifest, mock_server, reported, track
 from syncmypod_local import config, device, downloader, ledger, sync, transcode
 
 FIXTURES = Path(__file__).parent / "fixtures"
-SERVER = "https://pod.example.org:8444"
-
-CLASSIC_6G = "MB562"  # the model this project was tested against in the flesh
-
-
-def manifest(tracks=None, playlists=None, excluded=None):
-    return {
-        "manifestVersion": 1,
-        "generatedAt": "2026-09-11T10:00:00.000Z",
-        "device": {"id": 2, "name": "Test PC", "ipodGeneration": "6.5th Gen"},
-        "conventions": {"artistJoin": ", ", "retagFromManifest": True},
-        "tracks": tracks if tracks is not None else [track(1), track(2)],
-        "playlists": playlists or [],
-        "excluded": excluded or [],
-        "counts": {"tracks": len(tracks or []), "playlists": 0, "excluded": 0},
-    }
-
-
-def track(track_id, **overrides):
-    base = {
-        "id": track_id,
-        "title": f"Track {track_id}",
-        "artist": "Aurora Kane",
-        "album": "Longer Days",
-        "albumArtist": "Aurora Kane",
-        "trackNo": track_id,
-        "discNo": 1,
-        "totalTracks": 11,
-        "durationMs": 268000,
-        "isrc": f"AA6Q7200004{track_id}",
-        "genre": "Alternative",
-        "explicit": False,
-        "year": 2022,
-        "artworkUrl": None,
-        "sourceHint": None,
-        "deviceState": None,
-        "artists": [{"name": "Aurora Kane", "role": "primary", "position": 0}],
-        "searchTerms": {
-            "primary": f"Aurora Kane - Track {track_id}",
-            "withAlbum": f"Aurora Kane Track {track_id} Longer Days",
-            "isrc": None,
-            "durationMs": 268000,
-        },
-    }
-    return base | overrides
 
 
 @pytest.fixture
@@ -99,42 +55,6 @@ def audio_source(monkeypatch):
 
     monkeypatch.setattr(downloader, "fetch", fake_fetch)
     return asked
-
-
-def mock_server(manifest_body, *, run_id=7):
-    """The endpoints a run touches, in the shape docs/LOCAL_APP_API.md specifies."""
-    respx.get(f"{SERVER}/api/sync/hello").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "manifestVersion": 1,
-                "device": {"id": 2, "name": "Test PC"},
-                "user": {"id": 1, "username": "mo"},
-                "supportedManifestVersions": [1],
-            },
-        )
-    )
-    respx.post(f"{SERVER}/api/sync/device").mock(return_value=httpx.Response(200, json={"ok": True}))
-    respx.get(f"{SERVER}/api/sync/manifest").mock(return_value=httpx.Response(200, json=manifest_body))
-    respx.post(f"{SERVER}/api/sync/runs").mock(
-        return_value=httpx.Response(200, json={"id": run_id, "startedAt": "2026-09-11T10:00:00Z"})
-    )
-    results = respx.post(f"{SERVER}/api/sync/runs/{run_id}/results").mock(
-        return_value=httpx.Response(200, json={"recorded": 1})
-    )
-    finish = respx.post(f"{SERVER}/api/sync/runs/{run_id}/finish").mock(
-        return_value=httpx.Response(200, json={"ok": True})
-    )
-    return results, finish
-
-
-def reported(route):
-    """Every result payload the run posted, flattened."""
-    out = []
-    for call in route.calls:
-        out.extend(json.loads(call.request.content)["results"])
-    return out
 
 
 # ---------------------------------------------------------------------------
