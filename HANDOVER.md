@@ -687,11 +687,19 @@ cd local/dist && unzip -p SyncMyPod-*.zip '*/_internal/**/app.js' | grep -c rend
 - A test device named **"Dev container"** is paired against the live server from
   CLI testing, and **"Mo Desktop"** is the Windows machine used for hardware
   testing. Revoke either from the web interface when convenient.
-- **The live library contains test data.** 18 tracks from resolver verification,
-  plus a 50-track playlist named "Chroma: Today's Dance Hits" imported on
-  12 September to prove the YouTube playlist path end to end. Both are real,
-  correctly resolved data; neither is a curated library. Delete the playlist
-  from the Playlists page when it stops being useful as a demonstration.
+- **The live library holds 61 tracks, all of them from feature testing.** By
+  how they arrived: 37 from the follow-artist backfill, 19 from search, 3 from a
+  pasted list, 1 from a Deezer playlist, 1 from YouTube search. Real, correctly
+  resolved data, but not a curated library — and 43 of them would sync to an
+  iPod, so it is worth clearing before a real one is built.
+
+  A 50-track YouTube playlist imported on 12 September to prove that path end to
+  end was **removed again afterwards**, because the tracks resolved and would
+  therefore have gone onto the iPod on the next sync without anyone choosing
+  them. Import any public playlist link to see it work.
+- **A `uitest` account was created and deleted on 12 September** to verify the
+  new Import page renders and submits, since the `mo` password is not recorded
+  anywhere. `DELETE FROM users` cascades; no orphan rows were left.
 - **The attached iPod is not Mohamed's.** It is "Nihal's ipod", and the 18
   library tracks were written onto it alongside 184 that were already there. It
   has a full backup in `%LOCALAPPDATA%\SyncMyPod\backups` taken before the first
