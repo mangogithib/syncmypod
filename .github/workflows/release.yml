@@ -48,6 +48,13 @@ jobs:
           pip install -e ".[dev]"
           pip install pyinstaller
 
+      # Before the tests, not just before packaging. The sync tests convert
+      # audio for real, and ffmpeg.find() looks in _bin first - so fetching it
+      # here is what makes them runnable, and it is the same copy that ends up
+      # in the download.
+      - name: Fetch ffmpeg
+        run: python scripts/fetch_ffmpeg.py
+
       # The suite runs against simulated iPods, so this genuinely exercises the
       # database writer before anything is published. A broken build is worth
       # catching here rather than in a download.
@@ -55,7 +62,7 @@ jobs:
         run: pytest -m "not hardware"
 
       - name: Build
-        run: python scripts/build.py
+        run: python scripts/build.py --skip-ffmpeg
 
       - name: Name the artefact
         id: artefact
@@ -74,7 +81,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: local/dist/SyncMyPod-*.zip
-          draft: true
+          # Published, not held back. A tag is the deliberate act; having to
+          # then remember to press a button in a web page is how a release ends
+          # up sitting as a draft nobody can download.
+          draft: false
           generate_release_notes: true
           body: |
             The local sync app for Windows.

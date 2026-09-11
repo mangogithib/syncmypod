@@ -43,11 +43,21 @@ jobs:
           cache: pip
           cache-dependency-path: local/pyproject.toml
 
+      # Two of them.
+      #
       # pypodlib talks to USB to identify a device. It only needs the library
       # present to import; no device is required for the suite, which runs
       # against simulated iPods.
+      #
+      # ffmpeg is needed because the sync tests genuinely convert audio rather
+      # than mocking the transcoder - the conversion is the part most likely to
+      # break, so faking it would test nothing. The shipped application carries
+      # its own copy; a runner has to be given one, and the distribution's is
+      # fine here because CI is not what gets distributed.
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libusb-1.0-0
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libusb-1.0-0 ffmpeg
 
       - name: Install
         run: pip install -e ".[dev]"
