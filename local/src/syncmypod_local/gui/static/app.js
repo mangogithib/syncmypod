@@ -137,10 +137,7 @@ function renderLibrary(data) {
   clear(body);
 
   if (!data.paired) {
-    body.append(node("p", "muted", "This computer is not paired with a library."));
-    const how = node("p", "subtle", "Pair it from a terminal: ");
-    how.append(node("code", null, "syncmypod pair <server> <code>"));
-    body.append(how);
+    renderPairingForm(body);
     return;
   }
 
@@ -151,6 +148,16 @@ function renderLibrary(data) {
   row(rows, "Audio tools", data.ffmpeg.found ? "ready" : "missing");
   body.append(rows);
 
+  const unpair = node("button", "link-button", "Unpair this computer");
+  unpair.type = "button";
+  unpair.style.marginTop = "12px";
+  unpair.addEventListener("click", async () => {
+    unpair.disabled = true;
+    await api("/api/unpair", { method: "POST", body: "{}" }).catch(() => {});
+    refreshState();
+  });
+  body.append(unpair);
+
   if (!data.ffmpeg.found) {
     body.append(
       node(
@@ -160,6 +167,80 @@ function renderLibrary(data) {
       )
     );
   }
+}
+
+/* -- pairing ------------------------------------------------------------- */
+
+/*
+  Pairing, in the page.
+
+  It was a terminal command, which meant the application could not be used at
+  all without one - a poor first instruction for something whose whole point is
+  that it has a window. The password is still never involved: a short code is
+  traded for a device token, exactly as the command did it.
+*/
+
+function renderPairingForm(body) {
+  body.append(node("p", "device-name", "Not paired"));
+  body.append(
+    node(
+      "p",
+      "subtle",
+      "Generate a pairing code in your library's web interface, under Devices."
+    )
+  );
+
+  const server = node("input", "input-field");
+  server.type = "text";
+  server.placeholder = "your-server.example.org:8444";
+  server.autocomplete = "off";
+  server.spellcheck = false;
+
+  const code = node("input", "input-field");
+  code.type = "text";
+  code.placeholder = "ABCD1234";
+  code.autocomplete = "off";
+  code.spellcheck = false;
+  // The codes are printed in capitals and the alphabet excludes the ambiguous
+  // characters, so accepting any case and showing it back uppercased is free.
+  code.style.textTransform = "uppercase";
+
+  const button = node("button", "button button-small button-primary", "Pair");
+  button.type = "submit";
+
+  const message = node("p", "subtle");
+  const form = node("form", "pair-form");
+  form.append(labelled("Server address", server), labelled("Code", code), button, message);
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    button.disabled = true;
+    button.textContent = "Pairing…";
+    message.className = "subtle";
+    message.textContent = "";
+    try {
+      const result = await api("/api/pair", {
+        method: "POST",
+        body: JSON.stringify({ server: server.value, code: code.value }),
+      });
+      if (!result.paired) throw new Error(result.error || "Could not pair.");
+      refreshState();
+      return;
+    } catch (error) {
+      message.className = "notice notice-danger";
+      message.textContent = error.message;
+    }
+    button.disabled = false;
+    button.textContent = "Pair";
+  });
+
+  body.append(form);
+}
+
+function labelled(text, control) {
+  const wrapper = node("label", "field");
+  wrapper.append(node("span", "field-label", text), control);
+  return wrapper;
 }
 
 /* -- audio source -------------------------------------------------------- */
@@ -224,6 +305,11 @@ function renderYouTube(data) {
     for (const browser of youtubeState.browsers || []) {
       const option = node("option", null, browser);
       option.value = browser;
+      // Defaulted to whichever browser is reading this page. It cannot hand
+      // over its own YouTube session - a localhost page reading youtube.com's
+      // cookies is what the same-origin policy exists to stop - but it can at
+      // least say which browser to look in.
+      if (browser === youtubeState.likely) option.selected = true;
       picker.append(option);
     }
     actions.append(picker);

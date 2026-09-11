@@ -34,7 +34,7 @@ from .. import device as device_module
 from .. import ffmpeg as ffmpeg_finder
 from .. import sync as sync_engine
 from .. import youtube as youtube_module
-from ..api import ApiError
+from ..api import ApiError, claim_pairing_code
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ class GuiServer:
 
     # -- actions the page can ask for ---------------------------------------
 
-    def state(self) -> dict[str, Any]:
+    def state(self, user_agent: str = "") -> dict[str, Any]:
         """What to show before anything has been asked for.
 
         Every part is optional and failures are reported rather than raised: a
@@ -127,6 +127,11 @@ class GuiServer:
             "youtube": {
                 "signedIn": youtube_module.is_signed_in(),
                 "browsers": list(youtube_module.BROWSERS),
+                # Which browser is reading this page, so the form can default to
+                # it rather than asking. The page cannot hand over its own
+                # YouTube session - same-origin policy - so the browser still
+                # has to be named, but it should not have to be chosen.
+                "likely": youtube_module.browser_from_user_agent(user_agent),
             },
             "running": self.session.running,
             "ipod": None,
@@ -167,6 +172,54 @@ class GuiServer:
         )
         self._worker.start()
         return {"started": True}
+
+    def pair(self, server_url: str, code: str, device_name: str) -> dict[str, Any]:
+        """Exchange a pairing code for a device token, from the page.
+
+        This was a terminal-only command, which meant the application could not
+        be used at all without one. Pairing is a once-per-computer job, but it
+        is also the very first thing anybody does, and "open a terminal" is a
+        poor first instruction.
+
+        The account password is still never involved: a code is traded for a
+        token, exactly as the CLI does it.
+        """
+        import platform as platform_module
+
+        address = str(server_url or "").strip()
+        pairing_code = str(code or "").strip()
+        if not address:
+            return {"paired": False, "error": "Enter the address of your library server."}
+        if not pairing_code:
+            return {"paired": False, "error": "Enter the pairing code from the web interface."}
+
+        # A bare hostname is what people type. Without a scheme the request
+        # would fail with something about a missing protocol, which is a poor
+        # way to say "add https://".
+        if not address.startswith(("http://", "https://")):
+            address = f"https://{address}"
+
+        name = str(device_name or "").strip() or platform_module.node() or "This computer"
+
+        try:
+            pairing = claim_pairing_code(
+                address, pairing_code, name, platform_module.system().lower()
+            )
+        except ApiError as err:
+            return {"paired": False, "error": str(err)}
+
+        config_module.save(
+            config_module.Config(
+                server_url=pairing.server_url,
+                token=pairing.token,
+                device_name=pairing.device_name,
+            )
+        )
+        return {"paired": True, "server": pairing.server_url, "deviceName": pairing.device_name}
+
+    def unpair(self) -> dict[str, Any]:
+        """Forget the pairing on this computer only."""
+        return {"unpaired": config_module.clear()}
 
     def youtube_check(self) -> dict[str, Any]:
         """Ask YouTube what bitrate this session is offered."""
@@ -389,7 +442,7 @@ def _make_handler(gui: GuiServer):
                 return
 
             if path == "/api/state":
-                self._json(200, gui.state())
+                self._json(200, gui.state(self.headers.get("User-Agent") or ""))
             elif path == "/api/events":
                 since = int(parse_qs(parsed.query).get("since", ["0"])[0] or 0)
                 self._json(
@@ -431,6 +484,17 @@ def _make_handler(gui: GuiServer):
                 )
             elif path == "/api/cancel":
                 self._json(200, gui.cancel())
+            elif path == "/api/pair":
+                self._json(
+                    200,
+                    gui.pair(
+                        str(body.get("server") or ""),
+                        str(body.get("code") or ""),
+                        str(body.get("deviceName") or ""),
+                    ),
+                )
+            elif path == "/api/unpair":
+                self._json(200, gui.unpair())
             elif path == "/api/youtube/check":
                 self._json(200, gui.youtube_check())
             elif path == "/api/youtube/sign-in":

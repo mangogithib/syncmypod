@@ -63,6 +63,10 @@ syncmypod.cmd sync --dry-run
 Everything below works the same way through `syncmypod` itself once the package
 is installed.
 
+Nothing here needs a terminal: `syncmypod.exe` opens a window that pairs, signs
+in to YouTube, and syncs. The commands below are the same actions for a script
+or a scheduled task.
+
 ```bash
 # Link this computer to your library. Generate the code in the web
 # interface under Devices. Your password is never needed or stored here.

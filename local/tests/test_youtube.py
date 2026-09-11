@@ -161,6 +161,67 @@ class TestTheSavedSession:
         assert youtube.BROWSERS[0] == "firefox", "the one that works on Windows comes first"
 
 
+class TestBrowserDetection:
+    """Which browser is reading the page, so the form can default to it.
+
+    The page cannot hand over its own YouTube session - a localhost page reading
+    youtube.com's cookies is exactly what the same-origin policy prevents - so
+    the browser must still be named. It should not have to be chosen.
+    """
+
+    def test_firefox(self):
+        assert (
+            youtube.browser_from_user_agent(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) "
+                "Gecko/20100101 Firefox/121.0"
+            )
+            == "firefox"
+        )
+
+    def test_edge_is_not_mistaken_for_chrome(self):
+        """Every Chromium browser also claims to be Chrome, so order matters."""
+        assert (
+            youtube.browser_from_user_agent(
+                "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
+            )
+            == "edge"
+        )
+
+    def test_opera_is_not_mistaken_for_chrome(self):
+        assert (
+            youtube.browser_from_user_agent(
+                "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/120.0 "
+                "Safari/537.36 OPR/106.0.0.0"
+            )
+            == "opera"
+        )
+
+    def test_plain_chrome(self):
+        assert (
+            youtube.browser_from_user_agent(
+                "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+            == "chrome"
+        )
+
+    def test_nothing_recognisable_is_none_rather_than_a_guess(self):
+        """A wrong default is worse than none - it would read the wrong
+        browser's cookie database and report no YouTube session."""
+        assert youtube.browser_from_user_agent("") is None
+        assert youtube.browser_from_user_agent("curl/8.4.0") is None
+
+    def test_it_only_ever_names_a_browser_that_is_offered(self):
+        for agent in (
+            "Mozilla/5.0 Safari/537.36",
+            "Mozilla/5.0 Firefox/121.0",
+            "Mozilla/5.0 Chrome/120.0 Safari/537.36",
+        ):
+            detected = youtube.browser_from_user_agent(agent)
+            assert detected is None or detected in youtube.BROWSERS
+
+
 class TestReportingWhatWasObserved:
     """A signed-in account without Premium is indistinguishable from no account
     at all, so the bitrate is measured rather than the state asserted."""

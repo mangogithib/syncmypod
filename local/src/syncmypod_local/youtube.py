@@ -102,6 +102,43 @@ class Availability:
         )
 
 
+def browser_from_user_agent(user_agent: str) -> str | None:
+    """Which browser is asking, so the sign-in form can default to it.
+
+    The page cannot hand over its own YouTube session - a localhost page reading
+    cookies belonging to youtube.com is exactly what the same-origin policy
+    exists to prevent, and if it were possible here it would be possible from
+    any site you visit. So the session is read from the browser's cookie
+    database on disk instead, which means knowing which browser.
+
+    Asking the request which one it came from turns that into a default rather
+    than a question. It stays a default and not a decision: someone may browse
+    in one browser and be signed in to YouTube in another.
+
+    Order matters. Every Chromium browser also claims to be Chrome, so the
+    specific ones have to be recognised first. Brave is deliberately absent -
+    it strips its own identifier to resist fingerprinting, so it is
+    indistinguishable from Chrome here, which is one more reason the control
+    stays editable.
+    """
+    agent = (user_agent or "").lower()
+    if not agent:
+        return None
+
+    for marker, browser in (
+        ("edg/", "edge"),
+        ("opr/", "opera"),
+        ("vivaldi", "vivaldi"),
+        ("firefox/", "firefox"),
+        ("chromium/", "chromium"),
+        ("chrome/", "chrome"),
+        ("safari/", "safari"),
+    ):
+        if marker in agent and browser in BROWSERS:
+            return browser
+    return None
+
+
 def cookies_path() -> Path:
     return config_dir() / COOKIES_FILENAME
 

@@ -137,6 +137,65 @@ class TestRuns:
         assert server.session.cancelled is True
 
 
+class TestPairing:
+    """Pairing from the page, so nothing needs a terminal."""
+
+    @pytest.fixture
+    def fresh(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SYNCMYPOD_CONFIG_DIR", str(tmp_path))
+        return tmp_path
+
+    def test_an_empty_server_is_refused_before_any_request(self, server, fresh):
+        _status, body = call(
+            server,
+            "/api/pair",
+            token=server.session.token,
+            method="POST",
+            body={"server": "", "code": "ABCD1234"},
+        )
+        assert body["paired"] is False
+        assert "address" in body["error"]
+
+    def test_an_empty_code_is_refused(self, server, fresh):
+        _status, body = call(
+            server,
+            "/api/pair",
+            token=server.session.token,
+            method="POST",
+            body={"server": "https://pod.example", "code": "  "},
+        )
+        assert body["paired"] is False
+        assert "code" in body["error"]
+
+    def test_a_server_that_cannot_be_reached_reports_it(self, server, fresh):
+        """An unreachable address is the commonest typo, and the message has to
+        be the one the user sees rather than a traceback."""
+        _status, body = call(
+            server,
+            "/api/pair",
+            token=server.session.token,
+            method="POST",
+            body={"server": "https://127.0.0.1:1", "code": "ABCD1234"},
+        )
+        assert body["paired"] is False
+        assert body["error"]
+
+    def test_it_needs_the_token(self, server, fresh):
+        with pytest.raises(HTTPError) as raised:
+            call(server, "/api/pair", method="POST", body={"server": "x", "code": "y"})
+        assert raised.value.code == 401
+
+    def test_unpairing_reports_whether_there_was_anything_to_forget(self, server, fresh):
+        from syncmypod_local import config
+
+        config.save(config.Config(server_url="https://pod.example", token="smp_t"))
+        _status, body = call(
+            server, "/api/unpair", token=server.session.token, method="POST", body={}
+        )
+        assert body == {"unpaired": True}
+        assert not config.load().is_paired
+
+
 class TestEvents:
     def test_they_are_numbered_so_a_reload_can_catch_up(self, server):
         server.session.add("track", label="one")
