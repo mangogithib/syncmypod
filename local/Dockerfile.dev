@@ -1,0 +1,29 @@
+# Development and test environment only.
+#
+# The shipped artefact is a single-file executable, not a container. This exists
+# so the suite runs identically on a machine without Python 3.11+, and so
+# "works on my machine" is not part of any bug report.
+#
+#   docker build -f Dockerfile.dev -t syncmypod-local-dev .
+#   docker run --rm syncmypod-local-dev pytest
+FROM python:3.12-slim
+
+# ffmpeg: an iPod cannot play the Opus audio most sources return, so transcoding
+#         is not optional.
+# libusb: pypodlib uses USB only to identify a device; reads and writes go
+#         through the mounted filesystem.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libusb-1.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Dependencies first, so a code change does not re-resolve the whole tree.
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip install --no-cache-dir -e ".[dev]"
+
+COPY . .
+
+CMD ["pytest"]
