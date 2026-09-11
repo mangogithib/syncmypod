@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { rateLimit, requireUser } from '../auth/middleware.js';
 import { many } from '../db/pool.js';
-import { handler, str } from '../lib/api.js';
+import { badRequest, handler, notFound, str } from '../lib/api.js';
 import { joinArtists } from '../lib/normalise.js';
 import * as deezer from '../providers/deezer.js';
 import * as itunes from '../providers/itunes.js';
@@ -74,9 +74,15 @@ searchRoutes.get(
       return res.json({ results: [], provider: null, providers: providerStatus() });
     }
 
-    const type = ['track', 'album', 'artist'].includes(String(req.query.type))
-      ? String(req.query.type)
-      : 'track';
+    // "all" is the default, because someone searching for a name usually wants
+    // whichever of the three it turns out to be, and making them guess the
+    // category first is a question the search can answer itself.
+    const requested = String(req.query.type || 'all');
+    const type = ['track', 'album', 'artist', 'all'].includes(requested) ? requested : 'all';
+
+    if (type === 'all') {
+      return res.json(await searchEverything(q));
+    }
 
     // Tries each enabled provider in order and returns the first that answers
     // with something. Falling through on error rather than failing means an
@@ -169,6 +175,89 @@ searchRoutes.get(
         results: [],
       });
     }
+  })
+);
+
+// Songs, albums and artists in one pass.
+//
+// Each category runs the same provider ladder independently, because they fail
+// independently: Deezer may know an artist that MusicBrainz does not, and
+// falling back for one category should not drag the others onto a weaker
+// source. Run together rather than in sequence - three round trips one after
+// another would make the default search three times slower than the old one.
+async function searchEverything(q) {
+  const categories = ['track', 'album', 'artist'];
+  const settled = await Promise.all(categories.map((type) => searchOne(q, type)));
+
+  const groups = {};
+  const answered = {};
+  categories.forEach((type, index) => {
+    groups[type] = settled[index].results;
+    if (settled[index].provider) answered[type] = settled[index].provider;
+  });
+
+  return {
+    type: 'all',
+    providers: providerStatus(),
+    answeredBy: answered,
+    groups,
+    // Kept flat as well so anything counting results does not need to know the
+    // response gained a shape.
+    results: [...groups.track, ...groups.album, ...groups.artist],
+  };
+}
+
+// One category, down the provider ladder, never throwing. A category that finds
+// nothing is an ordinary outcome and must not take the other two with it.
+async function searchOne(q, type) {
+  for (const provider of PROVIDERS) {
+    if (!provider.module.isEnabled()) continue;
+    try {
+      const found = await provider.module.searchAll(q, { types: type, limit: 12 });
+      const results = shape(found, type);
+      if (results.length > 0) return { provider: provider.name, results };
+    } catch (err) {
+      console.error(`[search] ${provider.name} ${type} failed:`, err.message);
+    }
+  }
+  return { provider: null, results: [] };
+}
+
+// An artist's page: who they are, what they released, and what to play first.
+searchRoutes.get(
+  '/artist',
+  rateLimit({ windowMs: 60_000, max: 30, key: (req) => `user:${req.user?.id}` }),
+  handler(async (req, res) => {
+    const deezerId = str(req.query.deezerId, 'deezerId', { max: 60 });
+    if (!deezerId) {
+      throw badRequest('An artist page needs a Deezer id.');
+    }
+    if (!deezer.isEnabled()) {
+      return res.status(503).json({ error: 'Deezer is turned off in Settings.' });
+    }
+
+    // Three independent calls, none of which should lose the page. An artist
+    // with no albums on Deezer still has a name and top tracks worth showing.
+    const [artist, albums, topTracks] = await Promise.all([
+      deezer.getArtist(deezerId).catch(() => null),
+      deezer.getArtistAlbums(deezerId, { limit: 50 }).catch(() => []),
+      deezer.getArtistTopTracks(deezerId, { limit: 15 }).catch(() => []),
+    ]);
+
+    if (!artist) throw notFound('That artist could not be found.');
+
+    res.json({
+      artist: {
+        kind: 'artist',
+        name: artist.name,
+        deezerId: artist.deezerId,
+        imageUrl: artist.imageUrl,
+        subtitle: (artist.genres || []).slice(0, 3).join(', '),
+      },
+      // Newest first, which is the order a discography is read in.
+      albums: shape({ albums }, 'album').sort((a, b) => (b.year || 0) - (a.year || 0)),
+      topTracks: shape({ tracks: topTracks }, 'track'),
+    });
   })
 );
 

@@ -140,8 +140,11 @@ export function notice(message, kind = '', iconName = 'info') {
 
 // Album art, falling back to a placeholder glyph. Artwork is loaded straight
 // from the provider CDN, so a broken or blocked image must not leave a gap.
-export function artwork(url, { size = 36, large = false } = {}) {
-  const className = large ? 'thumb thumb-lg' : 'thumb';
+export function artwork(url, { size = 36, large = false, round = false } = {}) {
+  // Artists are circles and records are squares, the way every music interface
+  // has drawn them since the CD booklet.
+  const className =
+    (large ? 'thumb thumb-lg' : 'thumb') + (round ? ' thumb-round' : '');
   if (!url) {
     return h(
       `div.${className.split(' ').join('.')}.thumb-placeholder`,

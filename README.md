@@ -80,6 +80,8 @@ syncmypod pair https://your-server:8444 ABCD1234
 | Metadata resolution (Deezer → iTunes → MusicBrainz, no API keys) | Working |
 | Bulk import (pasted list, Deezer playlist) | Working |
 | YouTube search, on request | Working — for music the catalogues do not have |
+| Combined search, artist and album pages | Working — browse before adding |
+| Follow an artist, with back catalogue | Working — optional, imported in the background |
 | Device pairing and the sync API | Working |
 | Public HTTPS with an automatic certificate | Working |
 | Local app: pairing, device detection | Working |

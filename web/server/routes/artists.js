@@ -117,14 +117,71 @@ artistRoutes.post(
       ]
     );
 
-    // The artist's existing catalogue is recorded as already-seen without adding
-    // any of it. Following someone should mean "tell me what is new from now
-    // on", not "download twenty years of back catalogue tonight".
+    // Following someone means "tell me what is new from now on" by default, so
+    // the existing catalogue is recorded as already-seen without adding any of
+    // it. Asking for the back catalogue as well is a deliberate choice, and it
+    // is the same code path with that baselining skipped: with nothing marked
+    // seen, every release reads as new and gets added.
+    if (bool(req.body?.importExisting, false)) {
+      startBackfill(req.user.id, artistId);
+      return res.status(202).json({ artistId, importing: true });
+    }
+
     const baseline = await checkFollowedArtist(req.user.id, artistId, {
       baselineOnly: true,
     });
 
     res.status(201).json({ artistId, baseline });
+  })
+);
+
+// Back-catalogue imports, and how far along they are.
+//
+// An artist with fifty releases is several hundred tracks, each needing a
+// Deezer lookup and a resolution pass - minutes of work, far past what a
+// request should hold open. So it runs detached and the page asks how it is
+// going.
+//
+// In memory rather than in a table on purpose: this is progress, not a record.
+// If the server restarts mid-import the answer the user needs is in their
+// library, which is where the tracks actually landed, and a half-written job
+// row would only be something else to reconcile. Keyed per user and artist, so
+// two imports do not overwrite each other's state.
+const backfills = new Map();
+const backfillKey = (userId, artistId) => `${userId}:${artistId}`;
+
+function startBackfill(userId, artistId) {
+  const key = backfillKey(userId, artistId);
+  if (backfills.get(key)?.state === 'running') return;
+
+  backfills.set(key, { state: 'running', added: 0, failed: 0, startedAt: Date.now() });
+
+  checkFollowedArtist(userId, artistId)
+    .then((outcome) => {
+      backfills.set(key, {
+        state: 'done',
+        added: outcome.added || 0,
+        failed: outcome.failed || 0,
+        releases: (outcome.newReleases || []).length,
+        reason: outcome.checked ? null : outcome.reason,
+      });
+      console.log(
+        `[follows] back catalogue for artist ${artistId}: ${outcome.added || 0} added, ` +
+          `${outcome.failed || 0} failed`
+      );
+    })
+    .catch((err) => {
+      console.error('[follows] back catalogue import failed:', err.message);
+      backfills.set(key, { state: 'failed', added: 0, failed: 0, reason: err.message });
+    });
+}
+
+artistRoutes.get(
+  '/follows/:id/import',
+  handler(async (req, res) => {
+    const artistId = id(req.params.id, 'artistId');
+    const progress = backfills.get(backfillKey(req.user.id, artistId));
+    res.json(progress || { state: 'idle' });
   })
 );
 

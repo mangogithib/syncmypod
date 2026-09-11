@@ -498,9 +498,13 @@ export async function saveResolvedTrack(resolved, { client } = {}) {
 // tagged with an unverified video title is exactly what this design avoids.
 export async function saveUnresolvedTrack(input, resolution, { client } = {}) {
   const run = async (tx) => {
+    // matchKeyExtra keeps two different recordings apart when there is nothing
+    // else to tell them by. A track saved from YouTube deliberately carries no
+    // artist and no album, so without it every song called "Intro" would
+    // collapse into one row through the ON CONFLICT below.
     const key = matchKey({
       name: input.title,
-      extra: [input.artist, input.album].filter(Boolean).join(' '),
+      extra: [input.artist, input.album, input.matchKeyExtra].filter(Boolean).join(' '),
     });
 
     const { rows } = await tx.query(

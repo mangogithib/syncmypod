@@ -318,6 +318,10 @@ export function followDialog(artist, onSaved, playlists) {
     type: 'checkbox',
     checked: artist.includeCompilations ?? false,
   });
+  // Off by default. Following someone is a small commitment; pulling in twenty
+  // years of back catalogue is not, and it should be asked for rather than
+  // assumed.
+  const importExisting = h('input', { type: 'checkbox' });
 
   const playlistSelect = h(
     'select.select',
@@ -345,6 +349,18 @@ export function followDialog(artist, onSaved, playlists) {
       ),
       h('label.checkbox', singles, h('span', 'Include singles and EPs')),
       h('label.checkbox', compilations, h('span', 'Include compilations')),
+      h(
+        'label.checkbox',
+        importExisting,
+        h(
+          'span',
+          h('div', 'Also import everything released so far'),
+          h(
+            'div.small.subtle',
+            'Adds the existing catalogue, not only future releases. This runs in the background and can take a few minutes.'
+          )
+        )
+      ),
       playlists
         ? h(
             'div.field',
@@ -354,7 +370,7 @@ export function followDialog(artist, onSaved, playlists) {
           )
         : null,
       notice(
-        'Following starts from today. Existing releases are recorded as already seen, so your back catalogue is not pulled in.',
+        'Following starts from today unless you ask for the back catalogue above. Existing releases are otherwise recorded as already seen.',
         '',
         'info'
       ),
@@ -387,8 +403,16 @@ export function followDialog(artist, onSaved, playlists) {
                 includeSingles: singles.checked,
                 includeCompilations: compilations.checked,
                 targetPlaylistId: playlistSelect.value ? Number(playlistSelect.value) : null,
+                importExisting: importExisting.checked,
               });
-              toast(`Following ${artist.name}.`, 'ok');
+              if (importExisting.checked) {
+                toast(
+                  `Following ${artist.name}. Importing their catalogue in the background.`,
+                  'ok'
+                );
+              } else {
+                toast(`Following ${artist.name}.`, 'ok');
+              }
               control.close();
               onSaved?.();
             } catch (err) {

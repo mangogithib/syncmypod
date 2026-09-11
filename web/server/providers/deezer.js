@@ -332,6 +332,16 @@ export async function getArtist(deezerId) {
   });
 }
 
+// An artist's best-known recordings, for the artist page - the equivalent of
+// what any streaming service puts at the top of it. Cached, because unlike the
+// release check this is not looking for something new.
+export async function getArtistTopTracks(deezerId, { limit = 20 } = {}) {
+  return cached(`deezer:artist-top:${deezerId}:${limit}`, 'deezer', async () => {
+    const body = await get(`/artist/${encodeURIComponent(deezerId)}/top`, { limit });
+    return (body?.data || []).map(toLightTrack).filter(Boolean);
+  });
+}
+
 // Used by the followed-artist check. Not cached: the entire point is to notice
 // something that was not there yesterday.
 export async function getArtistAlbums(deezerId, { limit = 50 } = {}) {

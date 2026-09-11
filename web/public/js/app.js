@@ -11,6 +11,7 @@ import { renderSearch } from './views/search.js';
 import { renderSettings } from './views/settings.js';
 import { renderArtists } from './views/artists.js';
 import { renderAlbums } from './views/albums.js';
+import { renderAlbumPage, renderArtistPage } from './views/browse.js';
 
 // Application shell: session bootstrap, hash routing, navigation.
 
@@ -33,6 +34,10 @@ const routes = [
   { path: 'playlists/:id', title: 'Playlist', render: renderPlaylist },
   { path: 'search', title: 'Add music', render: renderSearch, nav: 'Add music', icon: 'search', group: 'Add' },
   { path: 'import', title: 'Import', render: renderImport, nav: 'Import', icon: 'download', group: 'Add' },
+  // Provider-backed browsing, reached from a search result rather than the
+  // sidebar: these are pages about music that is not in the library yet.
+  { path: 'artist/:id', title: 'Artist', render: renderArtistPage },
+  { path: 'album/:id', title: 'Album', render: renderAlbumPage },
   { path: 'devices', title: 'Devices', render: renderDevices, nav: 'Devices', icon: 'device', group: 'Sync' },
   { path: 'settings', title: 'Settings', render: renderSettings, nav: 'Settings', icon: 'settings', group: 'Sync' },
 ];

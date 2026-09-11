@@ -4,7 +4,12 @@ import { one, query, transaction } from '../db/pool.js';
 import { badRequest, handler, id, notFound, pagination, str } from '../lib/api.js';
 import * as library from '../services/library.js';
 import { appendToPlaylist } from '../services/playlist-writes.js';
-import { resolveAndSave, resolveTrack, saveResolvedTrack } from '../services/resolver.js';
+import {
+  resolveAndSave,
+  resolveTrack,
+  saveResolvedTrack,
+  saveUnresolvedTrack,
+} from '../services/resolver.js';
 
 export const libraryRoutes = Router();
 libraryRoutes.use(requireUser);
@@ -86,6 +91,32 @@ libraryRoutes.post(
           trackId = id(item.trackId, 'trackId');
           const exists = await one('SELECT id FROM tracks WHERE id = $1', [trackId]);
           if (!exists) throw notFound(`Track ${trackId} not found.`);
+        } else if (item?.skipResolve) {
+          // Saved with a title and nothing else, on purpose.
+          //
+          // This is the YouTube path. A video title and a channel name are not
+          // metadata - the channel is not the artist, and there is no album at
+          // all - so writing them into those fields produces a library that
+          // looks populated and is wrong. Running the resolver on them is no
+          // better: it matches a title against the catalogues with no artist to
+          // check against, and confidently returns the wrong recording.
+          //
+          // So nothing is guessed. The track lands unresolved, which the
+          // manifest excludes from syncing until someone fills in the artist
+          // and album by hand - at which point it becomes 'manual' and syncs.
+          // An empty field the user can see and fix beats a filled one they
+          // have to notice is wrong.
+          trackId = await saveUnresolvedTrack(
+            {
+              title: str(item?.title, 'Title', { required: true, max: 500 }),
+              artist: '',
+              album: null,
+              durationMs: item?.durationMs ? Number(item.durationMs) : null,
+              matchKeyExtra: str(item?.sourceHint, 'sourceHint', { max: 1000 }),
+            },
+            null
+          );
+          state = 'unresolved';
         } else {
           const outcome = await resolveAndSave({
             title: str(item?.title, 'Title', { required: true, max: 500 }),

@@ -109,6 +109,21 @@ iPod with an unverified tag.
 `manual` is sacred: automated resolution will not overwrite it without an
 explicit `overwriteManual` flag.
 
+### Browsing
+
+Search returns songs, albums and artists together by default, because someone
+typing a name usually wants whichever of the three it turns out to be, and
+being made to pick the category first is a question the search can answer
+itself. The three run as independent provider ladders in parallel — they
+fail independently, and falling back for one category should not drag the
+others onto a weaker source. The single-category filters remain.
+
+An album or artist result opens a **page** rather than a dialog: the artist's
+releases and popular tracks, or an album's track listing with the option to
+take two songs rather than all twelve. These read from the providers, not the
+library, because this is where you decide what to add — so by definition
+the music is not in the library yet.
+
 ### YouTube, on request
 
 Deezer, iTunes and MusicBrainz cover licensed commercial releases — most music,

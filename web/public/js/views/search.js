@@ -22,7 +22,10 @@ import { followDialog } from './artists.js';
 
 export async function renderSearch(view, context) {
   const results = h('div');
-  let type = 'track';
+  // Everything, unless the user narrows it. Someone typing a name usually wants
+  // whichever of the three it turns out to be, and being made to pick the
+  // category first is a question the search can answer itself.
+  let type = 'all';
   let controller = null;
   let playlists = [];
 
@@ -53,6 +56,7 @@ export async function renderSearch(view, context) {
     mount(
       toolbar,
       h('div.search-input', icon('search', 15), searchBox),
+      typeButton('all', 'All'),
       typeButton('track', 'Songs'),
       typeButton('album', 'Albums'),
       typeButton('artist', 'Artists')
@@ -100,7 +104,7 @@ export async function renderSearch(view, context) {
         iconName: 'search',
         title: 'Search for music to add',
         body:
-          'Results come from Deezer first, then iTunes, then MusicBrainz. Metadata is taken from whichever answered, never from wherever the audio eventually comes from.',
+          'Songs, albums and artists together. Results come from Deezer first, then iTunes, then MusicBrainz - metadata is taken from whichever answered, never from wherever the audio eventually comes from.',
       })
     );
   }
@@ -136,7 +140,27 @@ export async function renderSearch(view, context) {
           // The case this exists for. Nothing in the licensed catalogues
           // matched, which for regional releases and small labels is common
           // and does not mean the song is unfindable.
-          type === 'track' ? youtubeFallback(q) : null
+          type === 'track' || type === 'all' ? youtubeFallback(q) : null
+        );
+        return;
+      }
+
+      if (data.groups) {
+        // Sections rather than one merged list. A song, an album and an artist
+        // are different things to do next - add, open, follow - and a single
+        // ranked list would put three kinds of row under one heading.
+        mount(
+          results,
+          data.groups.track.length
+            ? group('Songs', h('div.card', h('div.list', data.groups.track.map(trackRow))))
+            : null,
+          data.groups.album.length
+            ? group('Albums', h('div.tile-grid', data.groups.album.map(albumTile)))
+            : null,
+          data.groups.artist.length
+            ? group('Artists', h('div.card', h('div.list', data.groups.artist.map(artistRow))))
+            : null,
+          youtubeFallback(q)
         );
         return;
       }
@@ -211,10 +235,21 @@ export async function renderSearch(view, context) {
     );
   }
 
+  function group(title, body) {
+    return h('section.browse-section', h('h3.section-heading', title), body);
+  }
+
   function albumTile(result) {
     return h(
       'button.tile',
-      { type: 'button', onclick: () => openAlbum(result) },
+      {
+        type: 'button',
+        // A page rather than the old modal. An album is somewhere to look
+        // before deciding, not a yes/no about adding all of it - and the modal
+        // could not be linked to, shared or navigated back from.
+        onclick: () =>
+          result.deezerId ? context.navigate(`album/${result.deezerId}`) : openAlbum(result),
+      },
       artwork(result.artworkUrl, { large: true }),
       h('div.tile-name', result.name),
       h('div.tile-sub', result.artistCredit || 'Various artists'),
@@ -228,9 +263,14 @@ export async function renderSearch(view, context) {
   }
 
   function artistRow(result) {
+    const open = () => {
+      if (result.deezerId) context.navigate(`artist/${result.deezerId}`);
+    };
+
     return h(
-      'div.list-row',
-      artwork(result.imageUrl, { size: 42 }),
+      'div.list-row' + (result.deezerId ? '.list-row-clickable' : ''),
+      { onclick: result.deezerId ? open : undefined },
+      artwork(result.imageUrl, { size: 42, round: true }),
       h(
         'div.list-main',
         h('div.list-title', result.name),
@@ -242,7 +282,12 @@ export async function renderSearch(view, context) {
           'button.btn.btn-sm',
           {
             type: 'button',
-            onclick: () => followDialog(result, () => toast('Follow saved.', 'ok'), playlists),
+            // Stopped from reaching the row, which would open the page behind
+            // the dialog that just opened.
+            onclick: (event) => {
+              event.stopPropagation();
+              followDialog(result, () => toast('Follow saved.', 'ok'), playlists);
+            },
           },
           icon('heart', 14),
           'Follow'
@@ -266,11 +311,14 @@ export async function renderSearch(view, context) {
         // A track can be added but unresolved when the provider that answered
         // the search is not the one that can confirm the metadata. Saying so is
         // better than a bare "Added" for something that will not sync.
+        button.textContent = 'Added';
         if (entry.metadataState === 'resolved') {
-          button.textContent = 'Added';
           toast('Added to library.', 'ok');
+        } else if (item) {
+          // The YouTube path, where empty metadata is the design rather than a
+          // failure - so it is phrased as the next step, not as a problem.
+          toast('Added. Set the artist and album before it can sync.', 'info');
         } else {
-          button.textContent = 'Added';
           toast('Added, but the metadata needs review before it can sync.', 'info');
         }
         context.refreshStats();
@@ -473,8 +521,8 @@ export async function renderSearch(view, context) {
       h(
         'p.small.subtle',
         { style: { margin: '0 0 8px' } },
-        `${found.length} from YouTube. Titles come from the uploader, so check them - `,
-        h('span', 'the library will try to match each one against the catalogues when you add it.')
+        `${found.length} from YouTube. Added without an artist or album - `,
+        h('span', 'a channel name is not an artist, so you set those yourself afterwards.')
       ),
       h('div.card', h('div.list', found.map(youtubeRow)))
     );
@@ -507,18 +555,24 @@ export async function renderSearch(view, context) {
     );
   }
 
-  // The video is kept as the source hint, not as the metadata. The ordinary add
-  // route still runs the resolver on the title and artist, so a YouTube result
-  // that also exists on Deezer is saved properly credited and merely downloads
-  // from the video the user chose; one that exists nowhere else is saved
-  // unresolved and waits to be corrected. Either way the iPod never sees a
-  // video title.
+  // The video supplies a title and a download address. Nothing else.
+  //
+  // A channel is not an artist and a video has no album, so filling those
+  // fields from YouTube produces a library that looks populated and is wrong -
+  // and wrong metadata is harder to notice than missing metadata. skipResolve
+  // stops the server guessing too: matching a bare title against the
+  // catalogues with no artist to check it against returns the wrong recording
+  // confidently.
+  //
+  // The track lands with the artist and album empty, which keeps it out of
+  // syncing until they are filled in. That is the intended flow, not a
+  // shortcoming.
   function youtubeItem(result) {
     return {
       title: result.trackTitle || result.title,
-      artist: result.artist || result.channel,
       durationMs: result.durationMs,
       sourceHint: result.url,
+      skipResolve: true,
     };
   }
 
