@@ -134,6 +134,8 @@ export const api = {
   previewTrackList: (text, order) => request('POST', '/api/import/preview', { text, order }),
   importTrackList: (payload) => request('POST', '/api/import/track-list', payload),
   importDeezerPlaylist: (payload) => request('POST', '/api/import/deezer-playlist', payload),
+  importYouTubePlaylist: (payload) =>
+    request('POST', '/api/import/youtube-playlist', payload),
   importJobs: () => request('GET', '/api/import/jobs'),
   importJob: (jobId) => request('GET', `/api/import/jobs/${jobId}`),
 

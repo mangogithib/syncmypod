@@ -110,9 +110,281 @@ export async function searchTracks(query, { limit = MAX_RESULTS } = {}) {
   return collectVideos(data, limit);
 }
 
-async function fetchSearchPage(query) {
-  const url = `${SEARCH}?search_query=${encodeURIComponent(query)}&sp=${VIDEOS_ONLY}`;
+// -- Playlists --------------------------------------------------------------
 
+// A playlist reference, however the user pasted it.
+//
+// People paste the whole address from the URL bar, which carries a video id and
+// a position alongside the list id, or they paste just the id. Both work.
+export function parsePlaylistRef(input) {
+  const text = String(input || '').trim();
+  if (!text) return null;
+
+  // A bare id. YouTube's own are PL/UU/OL/RD prefixed; accepting anything of
+  // the right shape avoids arguing with a prefix that has not been seen yet.
+  if (/^[A-Za-z0-9_-]{12,64}$/.test(text) && !text.includes('/')) return text;
+
+  try {
+    const url = new URL(text.startsWith('http') ? text : `https://${text}`);
+    if (!/(^|\.)youtube\.com$|(^|\.)youtu\.be$/.test(url.hostname)) return null;
+    const list = url.searchParams.get('list');
+    return list && /^[A-Za-z0-9_-]{12,64}$/.test(list) ? list : null;
+  } catch {
+    return null;
+  }
+}
+
+// Everything in a public playlist, in its own order.
+//
+// The page renders roughly a hundred entries and fetches the rest as you
+// scroll. Those continuations are followed, because a playlist worth importing
+// is usually longer than a hundred - but not indefinitely: a channel's "all
+// uploads" list runs to thousands and nobody meant to import that in one click.
+export async function getPlaylist(playlistId, { maxTracks = 500 } = {}) {
+  if (!isEnabled()) {
+    throw new ProviderError('YouTube is turned off in Settings.', {
+      provider: 'youtube',
+      status: 503,
+    });
+  }
+
+  const html = await limiter(() =>
+    fetchPage(`https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}`)
+  );
+  const data = extractInitialData(html);
+  if (!data) {
+    throw new ProviderError(
+      'That playlist could not be read. It may be private, or YouTube changed the page.',
+      { provider: 'youtube', status: 502 }
+    );
+  }
+
+  const tracks = [];
+  const seen = new Set();
+  collectPlaylistVideos(data, tracks, seen, maxTracks);
+
+  // Paging uses the internal API the page itself calls, because the token is
+  // only meaningful to that endpoint. Its credentials come out of the page just
+  // fetched, so nothing is hardcoded and nothing needs an account.
+  let token = continuationToken(data);
+  const session = innertubeSession(html);
+  let pages = 0;
+  while (token && session && tracks.length < maxTracks && pages < 20) {
+    pages++;
+    let next;
+    try {
+      next = await limiter(() => innertubeBrowse(session, { continuation: token }));
+    } catch {
+      // A page of a long playlist failing is not worth losing the hundred
+      // already in hand - the import proceeds with what was read.
+      break;
+    }
+    const before = tracks.length;
+    collectPlaylistVideos(next, tracks, seen, maxTracks);
+    token = continuationToken(next);
+    if (tracks.length === before) break; // no progress: stop rather than spin
+  }
+
+  if (tracks.length === 0) {
+    throw new ProviderError(
+      'That playlist has no videos this could read. Private playlists are not visible here.',
+      { provider: 'youtube', status: 404 }
+    );
+  }
+
+  return {
+    id: playlistId,
+    name: playlistTitle(data) || 'YouTube playlist',
+    tracks: tracks.slice(0, maxTracks),
+    truncated: Boolean(token) && tracks.length >= maxTracks,
+  };
+}
+
+// Walks a response and appends every video entry it finds, in page order.
+//
+// Two shapes, because YouTube is midway through replacing one with the other.
+// `playlistVideoRenderer` is the long-standing form; `lockupViewModel` is the
+// newer component the playlist page currently serves. Reading both means the
+// import keeps working whichever is returned, including during the changeover
+// when one response can carry a mixture.
+export function collectPlaylistVideos(node, out = [], seen = new Set(), limit = 500) {
+  if (!node || typeof node !== 'object' || out.length >= limit) return out;
+
+  if (Array.isArray(node)) {
+    for (const item of node) collectPlaylistVideos(item, out, seen, limit);
+    return out;
+  }
+
+  const entry = node.playlistVideoRenderer
+    ? shapeVideo(node.playlistVideoRenderer)
+    : node.lockupViewModel
+      ? shapeLockup(node.lockupViewModel)
+      : null;
+
+  if (entry && !seen.has(entry.videoId)) {
+    seen.add(entry.videoId);
+    out.push(entry);
+    return out; // nothing useful is nested inside an entry
+  }
+
+  for (const value of Object.values(node)) collectPlaylistVideos(value, out, seen, limit);
+  return out;
+}
+
+// The newer playlist row. The same five facts, in different places.
+function shapeLockup(lockup) {
+  const videoId = lockup.contentId;
+  if (!videoId || !/^[\w-]{11}$/.test(videoId)) return null;
+  // Playlists can hold other playlists and channel cards. Only videos.
+  if (lockup.contentType && !/VIDEO/.test(lockup.contentType)) return null;
+
+  const meta = lockup.metadata?.lockupMetadataViewModel;
+  const title = meta?.title?.content ? String(meta.title.content) : '';
+  if (!title) return null;
+
+  // The first metadata row is the channel; the rows after it are view counts
+  // and ages, which are not wanted.
+  const channel = String(
+    meta?.metadata?.contentMetadataViewModel?.metadataRows?.[0]?.metadataParts?.[0]?.text
+      ?.content || ''
+  );
+
+  const durationMs = parseDuration(durationBadge(lockup.contentImage));
+  // No length means a live stream, a premiere, or an entry that has since been
+  // deleted. None of those is a song.
+  if (!durationMs) return null;
+
+  return {
+    kind: 'youtube',
+    videoId,
+    url: `https://www.youtube.com/watch?v=${videoId}`,
+    title,
+    channel,
+    ...splitArtistTitle(title, channel),
+    durationMs,
+    artworkUrl: thumbnailFor(videoId),
+    views: null,
+    official: /\s-\s*topic$/i.test(channel),
+  };
+}
+
+// The duration sits in a badge overlaid on the thumbnail, several wrappers
+// down. Found by shape rather than by path: those wrappers are exactly the part
+// of this structure that keeps being renamed.
+function durationBadge(node, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 8) return null;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const found = durationBadge(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  const badge = node.thumbnailBadgeViewModel;
+  if (badge?.text && /^\d+(:\d\d)+$/.test(String(badge.text).trim())) {
+    return String(badge.text).trim();
+  }
+  for (const value of Object.values(node)) {
+    const found = durationBadge(value, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+// The token that asks for the next page of entries.
+function continuationToken(node, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 14) return null;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const found = continuationToken(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  const token =
+    node.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token ||
+    node.continuationItemViewModel?.continuationEndpoint?.continuationCommand?.token ||
+    node.continuationCommand?.token;
+  if (token) return String(token);
+
+  for (const value of Object.values(node)) {
+    const found = continuationToken(value, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+function playlistTitle(data) {
+  // The heading lives in a different place depending on which layout was
+  // served, so this looks for the first plausible one rather than following a
+  // path that changes.
+  let title = null;
+  const visit = (node, depth = 0) => {
+    if (title || !node || typeof node !== 'object' || depth > 12) return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item, depth + 1);
+      return;
+    }
+    const candidate =
+      firstText(node.playlistHeaderRenderer?.title) ||
+      node.pageHeaderViewModel?.title?.dynamicTextViewModel?.text?.content ||
+      '';
+    if (candidate) {
+      title = String(candidate);
+      return;
+    }
+    for (const value of Object.values(node)) visit(value, depth + 1);
+  };
+  visit(data);
+  return title;
+}
+
+// --- YouTube's own internal API ---------------------------------------------
+//
+// Used only for paging. The credentials come out of the page already fetched,
+// so this is the same request the browser makes when you scroll.
+
+function innertubeSession(html) {
+  const key = /"INNERTUBE_API_KEY":"([^"]+)"/.exec(html);
+  const version = /"INNERTUBE_CLIENT_VERSION":"([^"]+)"/.exec(html);
+  return key && version ? { key: key[1], version: version[1] } : null;
+}
+
+async function innertubeBrowse(session, payload) {
+  const response = await fetch(
+    `https://www.youtube.com/youtubei/v1/browse?key=${encodeURIComponent(session.key)}`,
+    {
+      method: 'POST',
+      headers: {
+        ...HEADERS,
+        'content-type': 'application/json',
+        'x-youtube-client-name': '1',
+        'x-youtube-client-version': session.version,
+      },
+      body: JSON.stringify({
+        context: {
+          client: { clientName: 'WEB', clientVersion: session.version, hl: 'en', gl: 'US' },
+        },
+        ...payload,
+      }),
+      signal: AbortSignal.timeout(20_000),
+    }
+  );
+  if (!response.ok) {
+    throw new ProviderError(`YouTube returned ${response.status}.`, {
+      provider: 'youtube',
+      status: 502,
+      retryable: response.status >= 500,
+    });
+  }
+  return response.json();
+}
+
+async function fetchSearchPage(query) {
+  return fetchPage(`${SEARCH}?search_query=${encodeURIComponent(query)}&sp=${VIDEOS_ONLY}`);
+}
+
+async function fetchPage(url) {
   let response;
   try {
     response = await fetch(url, {
@@ -236,8 +508,14 @@ function shapeVideo(renderer) {
   const title = firstText(renderer.title);
   if (!title) return null;
 
+  // A search result names its channel in ownerText; a playlist entry uses
+  // shortBylineText instead. Same renderer shape otherwise, so one function
+  // covers both as long as it looks in all three places.
   const channel =
-    firstText(renderer.ownerText) || firstText(renderer.longBylineText) || '';
+    firstText(renderer.ownerText) ||
+    firstText(renderer.shortBylineText) ||
+    firstText(renderer.longBylineText) ||
+    '';
   const durationMs = parseDuration(
     renderer.lengthText?.simpleText || firstText(renderer.lengthText)
   );

@@ -7,12 +7,13 @@ import {
   parseTrackList,
   startDeezerPlaylistImport,
   startTrackListImport,
+  startYouTubePlaylistImport,
 } from '../services/import.js';
 
 export const importRoutes = Router();
 importRoutes.use(requireUser);
 
-// Bulk import. Both sources need no account or key - see services/import.js.
+// Bulk import. No source here needs an account or a key - see services/import.js.
 //
 // There is no OAuth here any more. The Spotify integration that used to live in
 // this file needed it, and went when Spotify started refusing Web API access to
@@ -87,6 +88,29 @@ importRoutes.post(
       res.status(202).json({ jobId });
     } catch (err) {
       // A malformed URL is the user's mistake to correct, not a server fault.
+      throw badRequest(err.message);
+    }
+  })
+);
+
+importRoutes.post(
+  '/youtube-playlist',
+  rateLimit({ windowMs: 60_000, max: 10, key: (req) => `user:${req.user?.id}` }),
+  handler(async (req, res) => {
+    const ref = str(req.body?.playlist, 'Playlist', { required: true, max: 500 });
+
+    const targetPlaylistId = req.body?.targetPlaylistId
+      ? id(req.body.targetPlaylistId, 'targetPlaylistId')
+      : null;
+    if (targetPlaylistId) await assertOwnedPlaylist(targetPlaylistId, req.user.id);
+
+    try {
+      const jobId = await startYouTubePlaylistImport(req.user.id, ref, {
+        createPlaylist: bool(req.body?.createPlaylist, true),
+        targetPlaylistId,
+      });
+      res.status(202).json({ jobId });
+    } catch (err) {
       throw badRequest(err.message);
     }
   })

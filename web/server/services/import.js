@@ -1,14 +1,16 @@
 import { one, query, transaction } from '../db/pool.js';
 import * as deezer from '../providers/deezer.js';
+import * as youtube from '../providers/youtube.js';
 import { appendToPlaylist } from './playlist-writes.js';
 import { resolveAndSave } from './resolver.js';
 
 // Bulk-importing tracks into the library.
 //
-// Two sources, both needing no account or key:
+// Three sources, none of which needs an account or a key:
 //
-//   deezer-playlist  a public Deezer playlist, by URL or id
-//   track-list       pasted text, one track per line
+//   deezer-playlist   a public Deezer playlist, by URL or id
+//   youtube-playlist  a public YouTube playlist, by URL or id
+//   track-list        pasted text, one track per line
 //
 // The pasted list is the more important of the two, and exists because there is
 // no longer an API route into a Spotify library. It is also the only source that
@@ -49,6 +51,45 @@ export async function startDeezerPlaylistImport(userId, playlistRef, options = {
   // The catch is essential - an unhandled rejection here would take the process
   // down and lose every other job with it.
   runJob(job.id, () => importDeezerPlaylist(job.id, userId, playlistId, options)).catch(
+    (err) => console.error(`[import] job ${job.id} crashed:`, err.message)
+  );
+
+  return job.id;
+}
+
+// A public YouTube playlist.
+//
+// The metadata rule is the same one the YouTube search button follows, applied
+// to a whole playlist at once: nothing YouTube says about a track is written to
+// the library unless a real catalogue agrees with it.
+//
+// So each entry is cross-checked. The video title is split into a rough artist
+// and title, and that guess - plus the duration, which is the strongest signal
+// available and is why live streams are dropped when reading the playlist - is
+// put to Deezer, iTunes and MusicBrainz in turn. A confident match means the
+// track is stored with the catalogue's artist, album, artwork and ISRC, exactly
+// as if it had been added from a search.
+//
+// A track no catalogue knows keeps its title and nothing else. Not the channel
+// name as an artist, not the video title as an album. Those are the tracks that
+// show up needing attention, and they are the ones that genuinely only exist on
+// YouTube - which is the case this whole path is for.
+export async function startYouTubePlaylistImport(userId, playlistRef, options = {}) {
+  const playlistId = youtube.parsePlaylistRef(playlistRef);
+  if (!playlistId) {
+    throw new Error(
+      'That does not look like a YouTube playlist. Paste the playlist link, or just the part after "list=".'
+    );
+  }
+
+  const job = await one(
+    `INSERT INTO import_jobs (user_id, source, source_ref, status, target_playlist_id)
+     VALUES ($1, 'youtube-playlist', $2, 'queued', $3)
+     RETURNING id`,
+    [userId, playlistId, options.targetPlaylistId || null]
+  );
+
+  runJob(job.id, () => importYouTubePlaylist(job.id, userId, playlistId, options)).catch(
     (err) => console.error(`[import] job ${job.id} crashed:`, err.message)
   );
 
@@ -246,6 +287,49 @@ async function importDeezerPlaylist(jobId, userId, playlistId, options) {
   );
 }
 
+async function importYouTubePlaylist(jobId, userId, playlistId, options) {
+  await query(`UPDATE import_jobs SET status = 'running' WHERE id = $1`, [jobId]);
+
+  const playlist = await youtube.getPlaylist(playlistId);
+
+  await query(`UPDATE import_jobs SET total = $2, source_name = $3 WHERE id = $1`, [
+    jobId,
+    playlist.tracks.length,
+    playlist.name,
+  ]);
+
+  let targetPlaylistId = options.targetPlaylistId || null;
+  if (!targetPlaylistId && options.createPlaylist !== false) {
+    targetPlaylistId = await ensurePlaylist(userId, playlist.name, {
+      source: 'youtube',
+      sourceRef: playlist.id,
+    });
+    await query('UPDATE import_jobs SET target_playlist_id = $2 WHERE id = $1', [
+      jobId,
+      targetPlaylistId,
+    ]);
+  }
+
+  await processItems(
+    jobId,
+    userId,
+    playlist.tracks.map((entry) => ({
+      // The guess, offered to the resolver as a search - never stored as-is.
+      title: entry.title,
+      artist: entry.artist || null,
+      durationMs: entry.durationMs,
+      // Keeps two different videos with the same title apart when neither
+      // resolves, since both will have an empty artist by then.
+      matchKeyExtra: entry.url,
+    })),
+    {
+      targetPlaylistId,
+      addedVia: 'youtube-import',
+      discardUnverifiedMetadata: true,
+    }
+  );
+}
+
 async function importTrackList(jobId, userId, parsed, options) {
   await query(`UPDATE import_jobs SET status = 'running' WHERE id = $1`, [jobId]);
 
@@ -266,7 +350,12 @@ async function importTrackList(jobId, userId, parsed, options) {
 
 // The shared body of every import: resolve each item, add it to the library,
 // optionally add it to a playlist, and keep the job row current.
-async function processItems(jobId, userId, items, { targetPlaylistId, addedVia }) {
+async function processItems(
+  jobId,
+  userId,
+  items,
+  { targetPlaylistId, addedVia, discardUnverifiedMetadata = false }
+) {
   let processed = 0;
   let added = 0;
   let skipped = 0;
@@ -275,7 +364,9 @@ async function processItems(jobId, userId, items, { targetPlaylistId, addedVia }
 
   for (const item of items) {
     try {
-      const { trackId, resolution } = await resolveAndSave(item);
+      const { trackId, resolution } = await resolveAndSave(item, {
+        discardUnverifiedMetadata,
+      });
 
       const result = await query(
         `INSERT INTO library_tracks (user_id, track_id, added_via)
@@ -293,7 +384,9 @@ async function processItems(jobId, userId, items, { targetPlaylistId, addedVia }
         report.push({
           title: item.title,
           state: resolution.state,
-          reason: resolution.reason || 'Could not resolve metadata.',
+          reason: discardUnverifiedMetadata
+            ? 'No catalogue had this, so it was added with a title only. Fill in the artist to sync it.'
+            : resolution.reason || 'Could not resolve metadata.',
         });
       }
     } catch (err) {

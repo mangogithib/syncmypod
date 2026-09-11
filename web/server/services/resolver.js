@@ -532,12 +532,27 @@ export async function saveUnresolvedTrack(input, resolution, { client } = {}) {
 }
 
 // Convenience for the common path: resolve, then persist whichever way it went.
+//
+// `discardUnverifiedMetadata` changes only the failure case, and exists for
+// sources whose own metadata is a guess rather than a record - YouTube, where
+// the "artist" was cut out of a video title and the channel may be a re-upload.
+// When such a track resolves, the catalogue's metadata is used and the guess is
+// discarded as it always is. When it does not resolve, the guess is discarded
+// too: the track is stored with a title and nothing else, and waits for a human.
+//
+// The alternative is writing an unverified artist into the library, where it
+// looks exactly like a verified one. A blank field a user can see and fill in
+// beats a plausible wrong one they have to notice.
 export async function resolveAndSave(input, options = {}) {
   const resolution = await resolveTrack(input, options);
   if (resolution.state === 'resolved') {
     const trackId = await saveResolvedTrack(resolution, options);
     return { trackId, resolution };
   }
-  const trackId = await saveUnresolvedTrack(input, resolution, options);
+
+  const toStore = options.discardUnverifiedMetadata
+    ? { ...input, artist: '', album: null, isrc: null }
+    : input;
+  const trackId = await saveUnresolvedTrack(toStore, resolution, options);
   return { trackId, resolution };
 }

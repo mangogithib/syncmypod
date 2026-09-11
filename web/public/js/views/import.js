@@ -12,16 +12,17 @@ import {
 
 // Bulk import.
 //
-// Two sources, neither needing an account or a key:
+// Three sources, none of which needs an account or a key:
 //
 //   * A pasted list of tracks, one per line. The universal route - it works for
 //     a library held anywhere, including a Spotify export, a spreadsheet, or
 //     something typed out by hand.
 //   * A public Deezer playlist, by URL.
+//   * A public YouTube playlist, by URL.
 //
-// There is no "connect your account" step any more. The Spotify integration
-// that used to be here needed OAuth, and went when Spotify started refusing Web
-// API access to apps whose owner is not a Premium subscriber.
+// The Spotify integration that used to be here needed OAuth, and went when
+// Spotify started refusing Web API access to apps whose owner is not a Premium
+// subscriber.
 
 export async function renderImport(view, context) {
   const jobsSlot = h('div');
@@ -40,7 +41,7 @@ export async function renderImport(view, context) {
       '',
       'info'
     ),
-    h('div.grid-2', trackListCard(), deezerCard()),
+    h('div.grid-2', trackListCard(), deezerCard(), youtubeCard()),
     jobsSlot
   );
 
@@ -240,6 +241,78 @@ export async function renderImport(view, context) {
           ),
           notice(
             'Playlist entries already carry a Deezer track id, so these resolve by direct lookup rather than by search - a long playlist imports quickly and accurately.',
+            '',
+            'info'
+          ),
+          h('div', submit)
+        )
+      )
+    );
+  }
+
+  // --- YouTube playlist ----------------------------------------------------
+
+  function youtubeCard() {
+    const input = h('input.input', {
+      type: 'text',
+      placeholder: 'https://www.youtube.com/playlist?list=PL...',
+    });
+    const createPlaylist = h('input', { type: 'checkbox', checked: true });
+    const submit = h('button.btn.btn-primary', { type: 'submit' }, 'Import playlist');
+
+    return h(
+      'div.card',
+      h(
+        'div.card-head',
+        h('h2', 'Import a YouTube playlist'),
+        h('div.spacer'),
+        badge('No account needed', 'ok')
+      ),
+      h(
+        'div.card-body',
+        h(
+          'form.stack',
+          {
+            onsubmit: async (event) => {
+              event.preventDefault();
+              if (!input.value.trim()) {
+                toast('Paste a YouTube playlist link.', 'error');
+                return;
+              }
+              submit.disabled = true;
+              try {
+                const response = await api.importYouTubePlaylist({
+                  playlist: input.value.trim(),
+                  createPlaylist: createPlaylist.checked,
+                });
+                watchJob(response.jobId, 'YouTube playlist');
+                input.value = '';
+              } catch (err) {
+                toast(err.message, 'error');
+              } finally {
+                submit.disabled = false;
+              }
+            },
+          },
+          h(
+            'div.field',
+            h('label', 'Playlist link'),
+            input,
+            h(
+              'span.hint',
+              'The playlist must be public or unlisted. Copying the address straight out of the browser works, even if it is a link to one video inside the playlist.'
+            )
+          ),
+          h('label.checkbox', createPlaylist, h('span', 'Recreate it as a playlist here')),
+          notice(
+            h(
+              'div',
+              h('strong', 'Every track is checked against a real catalogue first. '),
+              h(
+                'span',
+                'A video title is not metadata, so it is only ever used as a search. Tracks the catalogues recognise arrive with proper artist, album and artwork. Tracks that only exist on YouTube arrive with their title and nothing else, and wait in your library until you fill in the artist - so nothing wrong is ever written to your iPod.'
+              )
+            ),
             '',
             'info'
           ),
