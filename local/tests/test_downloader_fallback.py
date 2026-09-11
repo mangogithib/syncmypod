@@ -22,7 +22,9 @@ TRACK = {
 
 def candidates(*urls):
     return [
-        downloader.Candidate(url=url, title="t", uploader="u", duration=268.0, score=s, reason="")
+        downloader.Candidate(
+            url=url, title="t", uploader="u", duration=268.0, score=s, reason=""
+        )
         for s, url in zip(range(len(urls), 0, -1), urls, strict=True)
     ]
 

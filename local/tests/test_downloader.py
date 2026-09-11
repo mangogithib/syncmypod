@@ -115,7 +115,9 @@ class TestRanking:
     def test_the_best_candidate_sorts_first(self):
         results = [
             downloader._score(entry(uploader="randomuser", duration=262.0), TRACK, "a"),
-            downloader._score(entry(uploader="Aurora Kane - Topic", duration=268.0), TRACK, "b"),
+            downloader._score(
+                entry(uploader="Aurora Kane - Topic", duration=268.0), TRACK, "b"
+            ),
             downloader._score(entry(uploader="another", duration=265.0), TRACK, "c"),
         ]
         ranked = sorted([r for r in results if r], key=lambda c: c.score, reverse=True)

@@ -159,7 +159,9 @@ class TestArtwork:
     @respx.mock
     def test_embedded_in_mp4(self, m4a):
         respx.get("https://cdn.example/cover.png").mock(
-            return_value=httpx.Response(200, content=self.IMAGE, headers={"content-type": "image/png"})
+            return_value=httpx.Response(
+                200, content=self.IMAGE, headers={"content-type": "image/png"}
+            )
         )
         art = tagging.fetch_artwork("https://cdn.example/cover.png")
         assert art is not None
@@ -170,7 +172,9 @@ class TestArtwork:
     @respx.mock
     def test_embedded_in_mp3(self, mp3):
         respx.get("https://cdn.example/cover.png").mock(
-            return_value=httpx.Response(200, content=self.IMAGE, headers={"content-type": "image/png"})
+            return_value=httpx.Response(
+                200, content=self.IMAGE, headers={"content-type": "image/png"}
+            )
         )
         tagging.apply(mp3, TRACK, tagging.fetch_artwork("https://cdn.example/cover.png"))
         assert MP3(mp3).tags["APIC:Cover"].data == self.IMAGE

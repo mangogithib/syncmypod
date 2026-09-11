@@ -77,9 +77,12 @@ above; the build configuration is recorded in the output of `ffmpeg -version`.
 def target() -> str:
     system = platform.system().lower()
     machine = platform.machine().lower()
-    machine = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}.get(
-        machine, machine
-    )
+    machine = {
+        "amd64": "x86_64",
+        "x86_64": "x86_64",
+        "arm64": "aarch64",
+        "aarch64": "aarch64",
+    }.get(machine, machine)
     return f"{system}-{machine}"
 
 

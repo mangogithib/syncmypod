@@ -87,7 +87,56 @@ console = Console()
 err_console = Console(stderr=True)
 
 
+def _owns_its_console() -> bool:
+    """Whether this process was double-clicked rather than run from a shell.
+
+    Windows gives a double-clicked executable a console of its own, and takes it
+    away the instant the process ends. So the packaged application launched from
+    Explorer with no arguments printed its help text and vanished - "a black box
+    flashes and nothing happens", which is exactly what it looked like.
+
+    The distinction is how many processes share the console. One means this
+    program is alone in a window that was created for it; more means it was
+    started from a shell that is still there, where printing help and exiting is
+    the correct behaviour.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        # The buffer only has to be big enough to tell "one" from "more than
+        # one" - the count is returned whether or not it fits.
+        buffer = (ctypes.c_uint * 2)()
+        return ctypes.windll.kernel32.GetConsoleProcessList(buffer, 2) <= 1
+    except Exception:
+        return False
+
+
+def _wait_before_closing() -> None:
+    """Keep a double-clicked window open long enough to read it."""
+    try:
+        console.print()
+        console.input("[dim]Press Enter to close...[/dim]")
+    except (EOFError, KeyboardInterrupt, OSError):
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    double_clicked = argv is None and len(sys.argv) == 1 and _owns_its_console()
+    if double_clicked:
+        # Someone who double-clicks wants the application, not a list of
+        # subcommands they cannot type into a window that is about to close.
+        argv = ["gui"]
+
+    try:
+        return _run(argv)
+    finally:
+        if double_clicked:
+            _wait_before_closing()
+
+
+def _run(argv: list[str] | None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -257,9 +306,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Leave downloaded files on disk for debugging. Prints where they are.",
     )
-    sync.add_argument(
-        "--yes", action="store_true", help="Do not ask before removing tracks"
-    )
+    sync.add_argument("--yes", action="store_true", help="Do not ask before removing tracks")
     sync.add_argument(
         "--eject",
         action="store_true",
@@ -524,9 +571,7 @@ def _cmd_youtube_sign_in(args: argparse.Namespace) -> int:
     elif available.error:
         console.print(f"[yellow]Saved, but the check failed:[/yellow] {available.error}")
     else:
-        console.print(
-            f"[yellow]Signed in, but still only {available.describe()}.[/yellow]"
-        )
+        console.print(f"[yellow]Signed in, but still only {available.describe()}.[/yellow]")
         console.print(
             "256kbps needs an active YouTube Music Premium subscription on the "
             "account that browser is signed in with."
@@ -656,7 +701,9 @@ def _print_summary(report: sync_engine.Report, *, dry_run: bool) -> None:
     if dry_run:
         console.print("[yellow]Dry run.[/yellow] Nothing was written to the iPod.")
         if report.plan.to_download:
-            console.print(f"Run without --dry-run to sync {len(report.plan.to_download)} track(s).")
+            console.print(
+                f"Run without --dry-run to sync {len(report.plan.to_download)} track(s)."
+            )
         return
 
     if report.message and not report.results:

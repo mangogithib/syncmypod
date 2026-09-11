@@ -182,7 +182,9 @@ class TestTheDiff:
 
         audio_source.clear()
         respx.get(f"{SERVER}/api/sync/manifest").mock(
-            return_value=httpx.Response(200, json=manifest(tracks=[track(1, deviceState="synced")]))
+            return_value=httpx.Response(
+                200, json=manifest(tracks=[track(1, deviceState="synced")])
+            )
         )
         second = sync.run(paired, mount=str(ipod.mount_path))
 
@@ -240,7 +242,9 @@ class TestPlaylists:
         handle.library().create_playlist("Made on the iPod")
         handle.save()
 
-        mock_server(manifest(tracks=[track(1)], playlists=[{"id": 1, "name": "Mine", "trackIds": [1]}]))
+        mock_server(
+            manifest(tracks=[track(1)], playlists=[{"id": 1, "name": "Mine", "trackIds": [1]}])
+        )
         sync.run(paired, mount=str(ipod.mount_path))
 
         names = device.open_at(ipod.mount_path).playlist_names()
@@ -307,9 +311,7 @@ class TestRemovals:
 
 class TestFailures:
     @respx.mock
-    def test_one_track_failing_does_not_stop_the_others(
-        self, ipod, paired, monkeypatch
-    ):
+    def test_one_track_failing_does_not_stop_the_others(self, ipod, paired, monkeypatch):
         def fail_for_two(track_dict, destination):
             if track_dict["id"] == 2:
                 raise downloader.DownloadError("No source found")
@@ -401,9 +403,7 @@ class TestGuards:
 @pytest.mark.skipif(not transcode.available(), reason="ffmpeg is not installed")
 class TestTranscoding:
     @respx.mock
-    def test_opus_is_converted_because_an_ipod_cannot_play_it(
-        self, ipod, paired, monkeypatch
-    ):
+    def test_opus_is_converted_because_an_ipod_cannot_play_it(self, ipod, paired, monkeypatch):
         """The one format conversion that is not optional."""
 
         def opus_source(track_dict, destination):

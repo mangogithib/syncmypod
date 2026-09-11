@@ -27,10 +27,10 @@ source checkout.
 
 ## Install
 
-**Download the latest release**, unpack the zip anywhere, and run
-`syncmypod.exe`. Double-clicking opens the window; it also takes commands
-(`syncmypod.exe sync --dry-run`). ffmpeg is included, so there is nothing else
-to install.
+**Download the latest release**, unpack the zip anywhere, and double-click
+`syncmypod.exe` - that opens the window. It also takes commands when run from a
+terminal (`syncmypod.exe sync --dry-run`), where it prints its help rather than
+opening anything. ffmpeg is included, so there is nothing else to install.
 
 Windows Defender may quarantine it on first run. That is a false positive every
 unsigned build attracts, not a sign of anything wrong with the download — code

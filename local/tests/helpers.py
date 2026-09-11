@@ -97,7 +97,9 @@ def mock_server(manifest_body: dict[str, Any], *, run_id: int = 7):
         return_value=httpx.Response(200, json=manifest_body)
     )
     respx.post(f"{SERVER}/api/sync/runs").mock(
-        return_value=httpx.Response(200, json={"id": run_id, "startedAt": "2026-09-11T10:00:00Z"})
+        return_value=httpx.Response(
+            200, json={"id": run_id, "startedAt": "2026-09-11T10:00:00Z"}
+        )
     )
     results = respx.post(f"{SERVER}/api/sync/runs/{run_id}/results").mock(
         return_value=httpx.Response(200, json={"recorded": 1})

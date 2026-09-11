@@ -142,8 +142,11 @@ def fetch(track: dict[str, Any], destination: Path) -> Download:
     for candidate in candidates[:DOWNLOAD_ATTEMPTS]:
         logger.info(
             "Trying %r by %r (%.0fs, score %.2f: %s)",
-            candidate.title, candidate.uploader, candidate.duration or 0,
-            candidate.score, candidate.reason,
+            candidate.title,
+            candidate.uploader,
+            candidate.duration or 0,
+            candidate.score,
+            candidate.reason,
         )
         try:
             return _download(candidate.url, destination, source="youtube")
@@ -432,7 +435,9 @@ def _normalise(value: str) -> str:
 
 
 def _describe(track: dict[str, Any]) -> str:
-    return f"{track.get('artist') or 'unknown artist'} - {track.get('title') or 'unknown title'}"
+    return (
+        f"{track.get('artist') or 'unknown artist'} - {track.get('title') or 'unknown title'}"
+    )
 
 
 def _float(value: Any) -> float | None:

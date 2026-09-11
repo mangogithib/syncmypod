@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 COOKIES_FILENAME = "youtube-cookies.txt"
 
+
 def _browsers_here() -> tuple[str, ...]:
     """The browsers whose cookies can actually be read on this platform.
 
@@ -96,7 +97,9 @@ class Availability:
         quality = f"{self.best_aac_kbps}kbps AAC"
         if self.premium:
             return f"{quality} (Premium)"
-        return f"{quality}" + (" - signed in, but no Premium on this account" if self.signed_in else "")
+        return f"{quality}" + (
+            " - signed in, but no Premium on this account" if self.signed_in else ""
+        )
 
 
 def cookies_path() -> Path:

@@ -25,11 +25,23 @@ def config_home(tmp_path, monkeypatch):
 def cookie(name: str, domain: str, value: str = "secret"):
     """A cookie in the shape a browser's jar hands over."""
     return http.cookiejar.Cookie(
-        version=0, name=name, value=value, port=None, port_specified=False,
-        domain=domain, domain_specified=True, domain_initial_dot=domain.startswith("."),
-        path="/", path_specified=True, secure=True,
-        expires=int(time.time()) + 86400, discard=False,
-        comment=None, comment_url=None, rest={}, rfc2109=False,
+        version=0,
+        name=name,
+        value=value,
+        port=None,
+        port_specified=False,
+        domain=domain,
+        domain_specified=True,
+        domain_initial_dot=domain.startswith("."),
+        path="/",
+        path_specified=True,
+        secure=True,
+        expires=int(time.time()) + 86400,
+        discard=False,
+        comment=None,
+        comment_url=None,
+        rest={},
+        rfc2109=False,
     )
 
 

@@ -211,9 +211,7 @@ class TestItLeavesOtherTracksAlone:
 
 class TestPlanning:
     @respx.mock
-    def test_a_dry_run_reports_missing_art_without_writing(
-        self, ipod, paired, audio_with_art
-    ):
+    def test_a_dry_run_reports_missing_art_without_writing(self, ipod, paired, audio_with_art):
         serve_artwork()
         mock_server(manifest(tracks=[track(1, artworkUrl="https://cdn.example/cover.png")]))
         sync.run(paired, mount=str(ipod.mount_path))

@@ -21,7 +21,13 @@ def test_an_iPod_with_no_record_starts_empty(tmp_path):
 
 def test_what_is_written_survives_a_reload(tmp_path):
     record = ledger.load(tmp_path, SERVER, 1)
-    record.record(7, location=":iPod_Control:Music:F00:ABCD.m4a", track=TRACK, file_format="m4a", size=4096)
+    record.record(
+        7,
+        location=":iPod_Control:Music:F00:ABCD.m4a",
+        track=TRACK,
+        file_format="m4a",
+        size=4096,
+    )
     record.save()
 
     reloaded = ledger.load(tmp_path, SERVER, 1)

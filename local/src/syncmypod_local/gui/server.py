@@ -246,7 +246,9 @@ class GuiServer:
         if event == "device":
             ipod = data["device"]
             self.session.add(
-                "device", label=ipod.describe(), mount=str(ipod.mount_path),
+                "device",
+                label=ipod.describe(),
+                mount=str(ipod.mount_path),
                 freeBytes=ipod.free_bytes,
             )
         elif event == "plan":
@@ -266,14 +268,20 @@ class GuiServer:
             self.session.add("backup")
         elif event == "track":
             self.session.add(
-                "track", index=data["index"], total=data["total"],
-                id=data["item"].id, label=data["item"].label,
+                "track",
+                index=data["index"],
+                total=data["total"],
+                id=data["item"].id,
+                label=data["item"].label,
             )
         elif event == "track-ready":
             result = data["result"]
             self.session.add(
-                "track-ready", id=data["item"].id, format=result.format,
-                bitrate=result.bitrate, size=result.file_size,
+                "track-ready",
+                id=data["item"].id,
+                format=result.format,
+                bitrate=result.bitrate,
+                size=result.file_size,
             )
         elif event == "track-failed":
             self.session.add("track-failed", id=data["item"].id, error=data["error"])
@@ -314,7 +322,13 @@ def _make_handler(gui: GuiServer):
             # bury the sync's own output.
             logger.debug("gui: " + fmt, *args)
 
-        def _send(self, status: int, body: bytes, content_type: str, extra: dict[str, str] | None = None) -> None:
+        def _send(
+            self,
+            status: int,
+            body: bytes,
+            content_type: str,
+            extra: dict[str, str] | None = None,
+        ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
@@ -369,7 +383,9 @@ def _make_handler(gui: GuiServer):
                 return
 
             if not self._authorised():
-                self._json(401, {"error": "Open this page from the link the application printed."})
+                self._json(
+                    401, {"error": "Open this page from the link the application printed."}
+                )
                 return
 
             if path == "/api/state":
@@ -386,7 +402,7 @@ def _make_handler(gui: GuiServer):
                     },
                 )
             elif path.startswith("/static/"):
-                self._serve_static(path[len("/static/"):])
+                self._serve_static(path[len("/static/") :])
             else:
                 self._json(404, {"error": "Not found."})
 
@@ -395,7 +411,9 @@ def _make_handler(gui: GuiServer):
                 self._json(403, {"error": "This server only answers to localhost."})
                 return
             if not self._authorised():
-                self._json(401, {"error": "Open this page from the link the application printed."})
+                self._json(
+                    401, {"error": "Open this page from the link the application printed."}
+                )
                 return
 
             body = self._read_json()
@@ -457,8 +475,7 @@ def _make_handler(gui: GuiServer):
                 "text/html; charset=utf-8",
                 {
                     "Set-Cookie": (
-                        f"{COOKIE_NAME}={gui.session.token}; Path=/; "
-                        "SameSite=Strict; HttpOnly"
+                        f"{COOKIE_NAME}={gui.session.token}; Path=/; SameSite=Strict; HttpOnly"
                     )
                 },
             )

@@ -70,7 +70,9 @@ class TrackPlan:
 
     @property
     def label(self) -> str:
-        return f"{self.track.get('artist') or 'Unknown'} - {self.track.get('title') or 'Untitled'}"
+        return (
+            f"{self.track.get('artist') or 'Unknown'} - {self.track.get('title') or 'Untitled'}"
+        )
 
 
 @dataclass(slots=True)
@@ -298,7 +300,9 @@ def run(
         say("device", {"device": ipod})
 
         try:
-            api.report_device(ipod.as_report() | {"appVersion": _version(), "platform": _platform()})
+            api.report_device(
+                ipod.as_report() | {"appVersion": _version(), "platform": _platform()}
+            )
         except ApiError as err:
             # Reporting the device is bookkeeping for the web UI. Losing it
             # should not stop a sync that can otherwise run.
@@ -368,9 +372,10 @@ def _execute(
     stop: Callable[[], bool],
 ) -> None:
     """Download, tag, write and report, a batch at a time."""
-    with workspace.Workspace(keep=keep_downloads) as work, httpx.Client(
-        timeout=20.0, follow_redirects=True
-    ) as artwork_client:
+    with (
+        workspace.Workspace(keep=keep_downloads) as work,
+        httpx.Client(timeout=20.0, follow_redirects=True) as artwork_client,
+    ):
         pending: list[Result] = []
         staged: list[tuple[TrackPlan, Path, Result]] = []
 
@@ -400,7 +405,9 @@ def _execute(
             except Exception as err:  # a failed track must not end the run
                 logger.warning("%s failed: %s", item.label, err)
                 pending.append(
-                    Result(track_id=item.id, state="failed", label=item.label, error=str(err)[:500])
+                    Result(
+                        track_id=item.id, state="failed", label=item.label, error=str(err)[:500]
+                    )
                 )
                 work.discard(item.id)
                 say("track-failed", {"item": item, "error": str(err)})
@@ -540,9 +547,7 @@ def _commit_batch(
     return results
 
 
-def _write_playlists(
-    ipod: device_module.IpodDevice, plan: Plan, record: ledger.Ledger
-) -> int:
+def _write_playlists(ipod: device_module.IpodDevice, plan: Plan, record: ledger.Ledger) -> int:
     """Write the library's playlists in the order the manifest gives them.
 
     Tracks that are not on the device - a download that failed, or one excluded
@@ -627,9 +632,7 @@ def _detect(mount: str | None) -> device_module.IpodDevice:
         )
     if len(found) > 1:
         names = ", ".join(f"{d.describe()} at {d.mount_path}" for d in found)
-        raise SyncError(
-            f"More than one iPod is attached ({names}). Choose one with --mount."
-        )
+        raise SyncError(f"More than one iPod is attached ({names}). Choose one with --mount.")
     return found[0]
 
 

@@ -82,7 +82,9 @@ def prepare(source: Path, destination: Path) -> Converted:
 
     destination.mkdir(parents=True, exist_ok=True)
     try:
-        result = transcode(source, destination, output_filename="converted", plan=plan, options=options)
+        result = transcode(
+            source, destination, output_filename="converted", plan=plan, options=options
+        )
     except Exception as err:
         raise TranscodeError(f"Converting {source.name} failed: {err}") from err
 
