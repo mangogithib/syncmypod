@@ -28,6 +28,16 @@ nothing keeping them in step.
 That contract is [`docs/LOCAL_APP_API.md`](docs/LOCAL_APP_API.md), and it lives
 at the root because it belongs to neither half.
 
+### Where to read next
+
+| | |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How it works and why it is built this way — data model, resolution, security, the sync protocol |
+| [`docs/LOCAL_APP_API.md`](docs/LOCAL_APP_API.md) | The contract between the two halves |
+| [`HANDOVER.md`](HANDOVER.md) | Project state, decisions already made, traps discovered, what is next |
+| [`web/README.md`](web/README.md) | Running and configuring the server |
+| [`local/README.md`](local/README.md) | Using the sync app |
+
 ### Why the split exists at all
 
 Browsers cannot see USB devices, so a pure web app has no way to detect an iPod
