@@ -32,6 +32,7 @@ from urllib.parse import parse_qs, urlparse
 from .. import config as config_module
 from .. import device as device_module
 from .. import ffmpeg as ffmpeg_finder
+from .. import quality as quality_module
 from .. import sync as sync_engine
 from ..api import ApiError
 
@@ -121,6 +122,13 @@ class GuiServer:
             "server": stored.server_url,
             "deviceName": stored.device_name,
             "ffmpeg": {"found": found is not None, "detail": ffmpeg_finder.describe()},
+            "quality": stored.quality.as_json(),
+            "qualityChoices": {
+                "presets": list(quality_module.PRESETS),
+                "codecs": list(quality_module.CODECS),
+                "bitrates": list(quality_module.BITRATE_CHOICES),
+                "sourceFloors": list(quality_module.SOURCE_FLOOR_CHOICES),
+            },
             "running": self.session.running,
             "ipod": None,
             "ipodError": None,
@@ -160,6 +168,42 @@ class GuiServer:
         )
         self._worker.start()
         return {"started": True}
+
+    def set_quality(self, changes: dict[str, Any]) -> dict[str, Any]:
+        """Change the stored quality settings.
+
+        A preset resets everything and the individual fields then adjust it, so
+        the page can offer both without the two fighting.
+        """
+        stored = config_module.load()
+        if not stored.is_paired:
+            return {"saved": False, "error": "This computer is not paired."}
+
+        updated = (
+            quality_module.preset(str(changes["preset"]))
+            if changes.get("preset") in quality_module.PRESETS
+            else stored.quality
+        )
+
+        adjustments: dict[str, Any] = {}
+        if changes.get("codec") in quality_module.CODECS:
+            adjustments["codec"] = changes["codec"]
+        ceiling = _bounded(changes.get("maxBitrateKbps"), 32, 320)
+        if ceiling is not None:
+            adjustments["max_bitrate_kbps"] = ceiling
+        floor = _bounded(changes.get("minSourceKbps"), 0, 320)
+        if floor is not None:
+            adjustments["min_source_kbps"] = floor
+        if isinstance(changes.get("preferNoReencode"), bool):
+            adjustments["prefer_no_reencode"] = changes["preferNoReencode"]
+        if isinstance(changes.get("shrinkToCeiling"), bool):
+            adjustments["shrink_to_ceiling"] = changes["shrinkToCeiling"]
+        if adjustments:
+            updated = updated.with_changes(**adjustments)
+
+        stored.quality = updated
+        config_module.save(stored)
+        return {"saved": True, "quality": updated.as_json()}
 
     def cancel(self) -> dict[str, Any]:
         """Ask the run to stop at the next track boundary.
@@ -243,6 +287,22 @@ class GuiServer:
             self.session.add("track-failed", id=data["item"].id, error=data["error"])
         elif event in {"writing", "playlists", "removing", "artwork"}:
             self.session.add(event, count=data.get("count", 0))
+
+
+def _bounded(value: Any, low: int, high: int) -> int | None:
+    """A number inside the range, or None if it was not a number at all.
+
+    None rather than a bound, because "leave it alone" is the right response to
+    something unreadable. Clamping to the minimum would answer a malformed
+    request by quietly setting the user's bitrate to 32kbps.
+    """
+    if value is None:
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(low, min(high, number))
 
 
 def _summarise(report: sync_engine.Report, *, dry_run: bool) -> dict[str, Any]:
@@ -377,6 +437,8 @@ def _make_handler(gui: GuiServer):
                 )
             elif path == "/api/cancel":
                 self._json(200, gui.cancel())
+            elif path == "/api/quality":
+                self._json(200, gui.set_quality(body))
             else:
                 self._json(404, {"error": "Not found."})
 

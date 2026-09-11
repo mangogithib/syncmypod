@@ -70,8 +70,10 @@ async function refreshState() {
   }
 
   el("server-label").textContent = data.paired ? data.server : "Not paired";
+  lastChoices = data.qualityChoices || lastChoices;
   renderIpod(data);
   renderLibrary(data);
+  renderQuality(data);
 
   // Both halves have to be present before a sync can do anything: an iPod to
   // write to, and a pairing to know what belongs on it.
@@ -160,6 +162,82 @@ function renderLibrary(data) {
     );
   }
 }
+
+/* -- audio quality ------------------------------------------------------- */
+
+/*
+  The settings are written back the moment a control changes, with no Save
+  button. There are five of them and they are all cheap to reverse, so a save
+  step would be ceremony - and a form you can leave half-applied is worse than
+  one that just keeps up.
+*/
+
+function renderQuality(data) {
+  const quality = data.quality;
+  const choices = data.qualityChoices;
+  if (!quality || !choices) return;
+
+  el("quality-summary").textContent = summariseQuality(quality);
+
+  const presets = el("quality-presets");
+  clear(presets);
+  for (const name of choices.presets) {
+    const button = node("button", "preset", name);
+    button.type = "button";
+    button.setAttribute("aria-pressed", String(quality.name === name));
+    button.addEventListener("click", () => saveQuality({ preset: name }));
+    presets.append(button);
+  }
+
+  fillSelect(el("quality-codec"), choices.codecs.map((c) => [c, c.toUpperCase()]), quality.codec);
+  fillSelect(
+    el("quality-bitrate"),
+    choices.bitrates.map((b) => [b, `${b} kbps`]),
+    quality.maxBitrateKbps
+  );
+  fillSelect(
+    el("quality-floor"),
+    choices.sourceFloors.map((b) => [b, b ? `${b} kbps` : "accept anything"]),
+    quality.minSourceKbps
+  );
+
+  // Phrased as what the user wants rather than as the internal flag, which is
+  // the negative of it.
+  el("quality-best-source").checked = !quality.preferNoReencode;
+  el("quality-shrink").checked = Boolean(quality.shrinkToCeiling);
+}
+
+function summariseQuality(quality) {
+  const parts = [`${quality.name} · ${quality.codec.toUpperCase()} up to ${quality.maxBitrateKbps}kbps`];
+  if (quality.minSourceKbps) parts.push(`refusing below ${quality.minSourceKbps}kbps`);
+  if (!quality.preferNoReencode) parts.push("best source");
+  if (quality.shrinkToCeiling) parts.push("shrinking larger files");
+  return parts.join(" · ");
+}
+
+function fillSelect(select, options, selected) {
+  clear(select);
+  for (const [value, label] of options) {
+    const option = node("option", null, label);
+    option.value = String(value);
+    if (String(value) === String(selected)) option.selected = true;
+    select.append(option);
+  }
+}
+
+async function saveQuality(changes) {
+  try {
+    const result = await api("/api/quality", {
+      method: "POST",
+      body: JSON.stringify(changes),
+    });
+    if (result.saved) renderQuality({ quality: result.quality, qualityChoices: lastChoices });
+  } catch (error) {
+    el("quality-summary").textContent = `Could not save: ${error.message}`;
+  }
+}
+
+let lastChoices = null;
 
 function renderProblem(body, message) {
   clear(body);
@@ -430,6 +508,27 @@ function showSummary(summary) {
 }
 
 /* -- wiring -------------------------------------------------------------- */
+
+el("quality-toggle").addEventListener("click", () => {
+  const form = el("quality-form");
+  form.hidden = !form.hidden;
+  el("quality-toggle").setAttribute("aria-expanded", String(!form.hidden));
+  el("quality-toggle").textContent = form.hidden ? "Change" : "Done";
+});
+
+el("quality-codec").addEventListener("change", (e) => saveQuality({ codec: e.target.value }));
+el("quality-bitrate").addEventListener("change", (e) =>
+  saveQuality({ maxBitrateKbps: Number(e.target.value) })
+);
+el("quality-floor").addEventListener("change", (e) =>
+  saveQuality({ minSourceKbps: Number(e.target.value) })
+);
+el("quality-best-source").addEventListener("change", (e) =>
+  saveQuality({ preferNoReencode: !e.target.checked })
+);
+el("quality-shrink").addEventListener("change", (e) =>
+  saveQuality({ shrinkToCeiling: e.target.checked })
+);
 
 el("btn-sync").addEventListener("click", () => start({ dryRun: false }));
 el("btn-check").addEventListener("click", () => start({ dryRun: true }));

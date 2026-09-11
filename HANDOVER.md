@@ -24,12 +24,13 @@ project's state and its reasoning.
 | Local app: pair / status / devices | Working, verified against the live server |
 | Local app: the sync engine | Working, verified on real hardware |
 | Album art on the device | Working — verified by decoding it back off the iPod |
+| Audio quality settings | Working, per computer rather than per library |
 | Local app: GUI | First version — status, sync, live progress, cancel |
 | Bundled ffmpeg | Fetch script written; binaries are gitignored |
 | **Packaging to a single executable** | **Not started — this is next** |
 
 Roughly 14,700 lines across 45 JavaScript files, 13 Python modules, 4 SQL
-migrations. 144 Python tests, all passing.
+migrations. 184 Python tests, all passing.
 
 ### Live instance
 
@@ -99,6 +100,18 @@ fine, but start from the reasoning rather than from scratch.
   An iPod moved between two computers then continues one history rather than
   starting a second, which is the same reasoning as the pairing design. It is
   keyed by server and user, so two accounts can share a device.
+- **Quality settings live in the local config, not on the server.** Mohamed
+  asked for quality selection "from the local app", and it is genuinely a
+  per-computer decision: what will fit on this iPod and what this connection
+  will download. Putting it server-side would have meant a migration, an API
+  change and web UI work for a setting that is not about the library.
+- **There is deliberately no way to ask for more quality than the source has.**
+  Almost everything comes from YouTube at roughly 128kbps AAC, and encoding
+  that at 320 produces a file two and a half times the size holding identical
+  sound. The ceiling is capped at the source's own bitrate, and "compact" only
+  re-encodes files genuinely above it - converting 128 to 128 costs quality and
+  saves nothing. If a bitrate menu is ever demanded, this is the argument
+  against it.
 - **A track this tool did not add is never removed by it.** This is the property
   the ledger exists to guarantee. An iPod may hold years of music from iTunes or
   another tool, and the cost of being wrong here is somebody's music.
@@ -271,6 +284,22 @@ MediaHuman track's art came back byte-intact.
 
 Needs `numpy` and `Pillow`, so the dependency is `pypodlib[artwork]` rather than
 plain `pypodlib`. Not optional: without them the feature silently does nothing.
+
+### Store Python hides the config and the backups
+
+Python installed from the Microsoft Store runs in an app container that
+redirects writes under `%LOCALAPPDATA%` into
+`AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_.../LocalCache`.
+The redirect is invisible to the writing process - it reads the file back from
+the path it asked for - so `syncmypod status` reported a config path that File
+Explorer insisted did not exist. The 1.2GB of iPod backups are in there too.
+
+Not a bug, and it disappears once the app is packaged, because a PyInstaller
+executable is an ordinary Win32 process. But two consequences: the pairing and
+quality settings made during development will **not** carry over to the
+packaged build, and anything stored now is lost if that Python is reset. The
+CLI now prints `os.path.realpath` of the config path, which resolves the
+redirect and shows somewhere a person can actually navigate to.
 
 ### Infrastructure traps
 

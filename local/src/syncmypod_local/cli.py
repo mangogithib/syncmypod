@@ -7,6 +7,7 @@ Subcommands, each doing one thing:
     syncmypod devices                just the attached iPods
     syncmypod sync                   do the work
     syncmypod gui                    the same thing, in a browser
+    syncmypod quality                how good the audio should be
     syncmypod eject                  make it safe to unplug
     syncmypod unpair                 forget the local pairing
 
@@ -32,6 +33,7 @@ from rich.table import Table
 
 from . import __version__, config, device
 from . import ffmpeg as ffmpeg_finder
+from . import quality as quality_module
 from . import sync as sync_engine
 from .api import ApiError, DeviceApi, NotPairedError, claim_pairing_code
 
@@ -123,6 +125,54 @@ def _build_parser() -> argparse.ArgumentParser:
     devices = subparsers.add_parser("devices", help="List attached iPods")
     devices.set_defaults(handler=_cmd_devices)
 
+    quality = subparsers.add_parser(
+        "quality",
+        help="Show or change how good the audio should be",
+        description=(
+            "With no arguments, shows the current settings. There is deliberately "
+            "no option to raise quality above what a source actually holds: "
+            "re-encoding a 128kbps download at 256 produces a file twice the size "
+            "containing the same sound."
+        ),
+    )
+    quality.add_argument(
+        "preset",
+        nargs="?",
+        choices=quality_module.PRESETS,
+        help="high chases the best source and converts; balanced takes what the "
+        "iPod can already play; compact does that and shrinks anything oversized",
+    )
+    quality.add_argument(
+        "--codec",
+        choices=quality_module.CODECS,
+        help="What a conversion produces (default aac)",
+    )
+    quality.add_argument(
+        "--bitrate",
+        type=int,
+        metavar="KBPS",
+        help="The most to spend on a conversion. Never exceeds the source's own.",
+    )
+    quality.add_argument(
+        "--min-source",
+        type=int,
+        metavar="KBPS",
+        help="Refuse a track whose best source is below this. 0 accepts anything.",
+    )
+    quality.add_argument(
+        "--best-source",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Chase the highest-bitrate stream even when it needs converting",
+    )
+    quality.add_argument(
+        "--shrink",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Re-encode files that are already playable but above the ceiling",
+    )
+    quality.set_defaults(handler=_cmd_quality)
+
     eject = subparsers.add_parser(
         "eject",
         help="Flush and unmount the iPod so it is safe to unplug",
@@ -183,6 +233,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Unmount the iPod when the sync finishes, so it is safe to unplug",
     )
+    sync.add_argument(
+        "--quality",
+        choices=quality_module.PRESETS,
+        default=None,
+        help="Use this preset for one run, without changing the stored setting",
+    )
     sync.add_argument("--verbose", action="store_true", help="Log what each step is doing")
     sync.set_defaults(handler=_cmd_sync)
 
@@ -232,7 +288,7 @@ def _cmd_pair(args: argparse.Namespace) -> int:
         )
     )
 
-    console.print(f"[green]Paired.[/green] Saved to {config.config_path()}")
+    console.print(f"[green]Paired.[/green] Saved to {_where(config.config_path())}")
     console.print(
         "\nThe token is stored on this computer only. Revoke it any time from "
         "the web interface under Devices."
@@ -263,6 +319,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
         "ffmpeg",
         ffmpeg_finder.describe() if found else "[red]not found[/red] - audio cannot be fetched",
     )
+    table.add_row("Quality", stored.quality.describe())
     console.print(table)
 
     # Reaching the server is a separate question from being paired, and worth
@@ -361,6 +418,10 @@ def _cmd_sync(args: argparse.Namespace) -> int:
                 remove = False
         reporter.reset()
 
+    chosen = quality_module.preset(args.quality) if args.quality else stored.quality
+    if args.quality:
+        console.print(f"[dim]Using the {chosen.name} quality setting for this run.[/dim]")
+
     report = sync_engine.run(
         stored,
         mount=args.mount,
@@ -370,6 +431,7 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         batch_size=max(1, args.batch),
         keep_downloads=args.keep_downloads,
         progress=reporter,
+        quality=chosen,
     )
 
     _print_summary(report, dry_run=args.dry_run)
@@ -390,6 +452,72 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     if report.failed and not report.synced:
         return EXIT_FAILURE
     return EXIT_OK
+
+
+def _cmd_quality(args: argparse.Namespace) -> int:
+    stored = config.load()
+    current = stored.quality
+
+    # A preset resets everything; the individual flags then adjust it. So
+    # `quality compact --bitrate 160` means "compact, but at 160", and a flag on
+    # its own changes one thing and leaves the rest alone.
+    updated = quality_module.preset(args.preset) if args.preset else current
+
+    changes: dict[str, object] = {}
+    if args.codec:
+        changes["codec"] = args.codec
+    if args.bitrate is not None:
+        changes["max_bitrate_kbps"] = max(32, min(320, args.bitrate))
+    if args.min_source is not None:
+        changes["min_source_kbps"] = max(0, min(320, args.min_source))
+    if args.best_source is not None:
+        changes["prefer_no_reencode"] = not args.best_source
+    if args.shrink is not None:
+        changes["shrink_to_ceiling"] = args.shrink
+    if changes:
+        updated = updated.with_changes(**changes)
+
+    if updated != current:
+        config.save(config.Config(**{**_as_kwargs(stored), "quality": updated}))
+        console.print(f"[green]Saved.[/green]  {_where(config.config_path())}")
+
+    _print_quality(updated)
+    return EXIT_OK
+
+
+def _print_quality(current) -> None:
+    table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    table.add_column(style="dim")
+    table.add_column()
+    table.add_row("Setting", current.name)
+    table.add_row("Convert to", current.codec.upper())
+    table.add_row("Ceiling", f"{current.max_bitrate_kbps} kbps")
+    table.add_row(
+        "Minimum source",
+        f"{current.min_source_kbps} kbps" if current.min_source_kbps else "accept anything",
+    )
+    table.add_row(
+        "Source preference",
+        "whatever the iPod plays as-is" if current.prefer_no_reencode else "the best available",
+    )
+    table.add_row("Shrink oversized files", "yes" if current.shrink_to_ceiling else "no")
+    console.print(table)
+    console.print()
+    console.print(
+        "[dim]The ceiling is never exceeded, and never reached when the source is "
+        "worse - a 128kbps download stays 128kbps rather than being inflated.[/dim]"
+    )
+
+
+def _as_kwargs(stored: config.Config) -> dict[str, object]:
+    """The stored pairing as constructor arguments, so one field can change."""
+    return {
+        "server_url": stored.server_url,
+        "token": stored.token,
+        "device_name": stored.device_name,
+        "last_ipod_name": stored.last_ipod_name,
+        "last_ipod_model": stored.last_ipod_model,
+    }
 
 
 def _cmd_eject(args: argparse.Namespace) -> int:
@@ -579,6 +707,24 @@ def _cmd_unpair(_args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _where(path) -> str:
+    """A path the user can actually navigate to.
+
+    Python installed from the Microsoft Store runs inside an app container that
+    silently redirects writes under %LOCALAPPDATA% into a per-package
+    ``AppData/Local/Packages/PythonSoftwareFoundation.../LocalCache`` tree. The
+    redirect is invisible to the process doing the writing - it reads the file
+    back from the path it asked for - but File Explorer and every other program
+    see nothing there at all. Printing the resolved path is the difference
+    between "your settings are saved somewhere you can find" and a directory
+    that appears not to exist. Harmless everywhere else: without a redirect this
+    resolves to the same path.
+    """
+    import os
+
+    return os.path.realpath(path)
 
 
 def _default_device_name() -> str:

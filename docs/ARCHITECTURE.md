@@ -331,6 +331,7 @@ terminal prints, so neither can drift from the other.
 | `tagging.py` + `device.py` | Album art: into the file's tags, then into the device's own artwork database |
 | `workspace.py` | The scratch directory, and its guaranteed removal |
 | `ffmpeg.py` | Finding ffmpeg — bundled copy first, then PATH |
+| `quality.py` | What "quality" means, and the three honest controls over it |
 | `gui/` | A localhost server and one page, over the same engine |
 
 ### The diff
@@ -373,6 +374,28 @@ any track whose file has no embedded cover but whose art came from iTunes.
 existed picks it up without re-downloading a byte. A track is only counted as
 missing if its database row points at no image — and that row heals itself,
 because the parser re-links tracks from the `ArtworkDB`'s own song ids.
+
+### Quality
+
+Three controls, chosen because they are the three that can honestly be offered.
+
+A bitrate menu running to 320kbps would be a lie: almost every track here comes
+from YouTube at roughly 128kbps AAC, and encoding that at 320 produces a file
+two and a half times the size holding the same sound. So the ceiling is a
+maximum, never a target — `Quality.bitrate_for` caps it at the source's own
+bitrate — and the only settings that exist are ones that change something real:
+
+- **Which stream to take.** AAC plays untouched; a higher-bitrate Opus is a
+  better source but forces a conversion, because an iPod cannot play Opus.
+- **A floor.** Applied as a yt-dlp `abr` filter before anything is downloaded,
+  so a track with no good enough source fails with a reason rather than
+  arriving at 64kbps. Setting a floor deliberately removes the catch-all
+  fallback from the format chain, or the floor would be decoration.
+- **A ceiling**, for when a conversion has to happen anyway.
+
+Kept in the local config rather than on the server: it is a decision about this
+computer and this iPod — what will fit, and what this connection will download
+— not about the library. The CLI and the GUI read and write the same setting.
 
 ### Conversion
 

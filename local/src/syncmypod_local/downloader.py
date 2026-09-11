@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from . import ffmpeg as ffmpeg_finder
+from .quality import Quality, preset
 
 logger = logging.getLogger(__name__)
 
@@ -113,17 +114,21 @@ class Candidate:
     reason: str
 
 
-def fetch(track: dict[str, Any], destination: Path) -> Download:
+def fetch(
+    track: dict[str, Any], destination: Path, quality: Quality | None = None
+) -> Download:
     """Find and download the audio for one manifest track.
 
     A user-supplied ``sourceHint`` short-circuits the search entirely: if
     someone has pasted the URL they want, second-guessing it would be rude and
     would usually be wrong.
     """
+    wanted = quality or preset("balanced")
+
     hint = (track.get("sourceHint") or "").strip()
     if hint:
         logger.info("Using the source hint for %r", track.get("title"))
-        return _download(hint, destination, source="source-hint")
+        return _download(hint, destination, source="source-hint", quality=wanted)
 
     candidates = search(track)
     if not candidates:
@@ -145,7 +150,7 @@ def fetch(track: dict[str, Any], destination: Path) -> Download:
             candidate.score, candidate.reason,
         )
         try:
-            return _download(candidate.url, destination, source="youtube")
+            return _download(candidate.url, destination, source="youtube", quality=wanted)
         except DownloadError as err:
             logger.info("%s did not work: %s", candidate.url, err)
             failures.append(str(err))
@@ -213,16 +218,13 @@ def _search_raw(query: str) -> list[dict[str, Any]]:
     return [e for e in (info or {}).get("entries") or [] if e]
 
 
-def _download(url: str, destination: Path, *, source: str) -> Download:
+def _download(url: str, destination: Path, *, source: str, quality: Quality) -> Download:
     from yt_dlp import YoutubeDL
     from yt_dlp.utils import DownloadError as YtDlpError
 
     destination.mkdir(parents=True, exist_ok=True)
     options = _base_options() | {
-        # AAC first, so the common case needs no re-encode at all. The fallbacks
-        # run down to "whatever audio exists" rather than failing, because a
-        # track in the wrong format can be transcoded but a missing one cannot.
-        "format": "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best",
+        "format": format_selector(quality),
         "outtmpl": str(destination / "source.%(ext)s"),
         "noplaylist": True,
         "overwrites": True,
@@ -236,9 +238,9 @@ def _download(url: str, destination: Path, *, source: str) -> Download:
         with YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=True)
     except YtDlpError as err:
-        raise DownloadError(f"Download failed: {_clean(str(err))}") from err
+        raise DownloadError(_explain(str(err), quality)) from err
     except Exception as err:  # pragma: no cover - yt-dlp raises broadly
-        raise DownloadError(f"Download failed: {_clean(str(err))}") from err
+        raise DownloadError(_explain(str(err), quality)) from err
 
     if not info:
         raise DownloadError(f"Nothing was downloaded from {url}")
@@ -281,6 +283,39 @@ def _downloaded_path(info: dict[str, Any], destination: Path) -> Path | None:
         reverse=True,
     )
     return files[0] if files else None
+
+
+def format_selector(quality: Quality) -> str:
+    """The yt-dlp format expression for these settings.
+
+    Two things are encoded here.
+
+    **Order** carries the re-encode preference. YouTube usually has the same
+    recording as AAC and as Opus; an iPod plays the first untouched and cannot
+    play the second at all. Asking for AAC first means the common case never
+    gets re-encoded. Asking for the best stream first means a better source at
+    the cost of a mandatory conversion, which is what "high" chooses.
+
+    **The abr filter** is the minimum-quality floor, applied by yt-dlp before a
+    byte is downloaded rather than by this code afterwards. When a floor is set
+    there is deliberately no unfiltered fallback: falling back to "any audio at
+    all" would quietly defeat the setting, so a track with nothing good enough
+    fails and says so.
+    """
+    gate = f"[abr>={quality.min_source_kbps}]" if quality.min_source_kbps else ""
+
+    if quality.prefer_no_reencode:
+        chain = [
+            f"bestaudio[ext=m4a]{gate}",
+            f"bestaudio[acodec^=mp4a]{gate}",
+            f"bestaudio{gate}",
+        ]
+    else:
+        chain = [f"bestaudio{gate}", f"bestaudio[ext=m4a]{gate}"]
+
+    if not quality.min_source_kbps:
+        chain.append("best")
+    return "/".join(chain)
 
 
 def _base_options() -> dict[str, Any]:
@@ -441,3 +476,19 @@ def _bitrate(info: dict[str, Any]) -> int | None:
 def _clean(message: str) -> str:
     """yt-dlp prefixes its errors; the prefix means nothing to a user."""
     return re.sub(r"^ERROR:\s*", "", message.strip())
+
+
+def _explain(message: str, quality: Quality) -> str:
+    """Turn yt-dlp's phrasing into something that says what to do.
+
+    The one worth translating is the minimum-bitrate refusal. yt-dlp reports it
+    as "Requested format is not available", which sounds like a bug in this
+    application rather than the setting the user chose.
+    """
+    cleaned = _clean(message)
+    if quality.min_source_kbps and "requested format is not available" in cleaned.lower():
+        return (
+            f"No source found above {quality.min_source_kbps}kbps. "
+            "Lower the minimum quality, or paste a source URL for this track."
+        )
+    return f"Download failed: {cleaned}"

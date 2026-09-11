@@ -10,10 +10,14 @@ from __future__ import annotations
 import json
 import os
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from platformdirs import user_config_dir
+
+from .quality import Quality
+from .quality import from_json as quality_from_json
+from .quality import preset as quality_preset
 
 APP_NAME = "SyncMyPod"
 CONFIG_FILENAME = "config.json"
@@ -66,6 +70,10 @@ class Config:
     # last used with, without needing the device present.
     last_ipod_name: str | None = None
     last_ipod_model: str | None = None
+    # How good the audio should be. Kept here rather than on the server because
+    # it is a decision about this computer and this iPod - what will fit, and
+    # what this connection is willing to download - not about the library.
+    quality: Quality = field(default_factory=lambda: quality_preset("balanced"))
 
     @property
     def is_paired(self) -> bool:
@@ -84,6 +92,7 @@ class Config:
             "token": f"{self.token[:10]}..." if self.token else "",
             "last_ipod_name": self.last_ipod_name,
             "last_ipod_model": self.last_ipod_model,
+            "quality": self.quality.describe(),
         }
 
 
@@ -109,6 +118,7 @@ def load() -> Config:
         device_name=str(raw.get("device_name") or ""),
         last_ipod_name=raw.get("last_ipod_name"),
         last_ipod_model=raw.get("last_ipod_model"),
+        quality=quality_from_json(raw.get("quality")),
     )
 
 
@@ -129,6 +139,7 @@ def save(config: Config) -> Path:
         "device_name": config.device_name,
         "last_ipod_name": config.last_ipod_name,
         "last_ipod_model": config.last_ipod_model,
+        "quality": config.quality.as_json(),
     }
 
     # Written to a temporary file and moved into place, so an interrupted write
