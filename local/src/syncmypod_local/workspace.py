@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -145,7 +146,7 @@ def _remove_tree(path: Path) -> bool:
         return True
     for attempt in (0, 1):
         try:
-            shutil.rmtree(path, onexc=_make_writable)
+            shutil.rmtree(path, **_RMTREE_HANDLER)
             return True
         except OSError:
             if attempt == 0:
@@ -164,3 +165,12 @@ def _make_writable(func, path, _exc):  # type: ignore[no-untyped-def]
         func(path)
     except OSError:
         pass
+
+
+# `onexc` replaced `onerror` in Python 3.12, and this project still supports
+# 3.11 because pyPodLib does. The two differ only in what the third argument is -
+# an exception rather than the older exc_info triple - and the handler above
+# ignores it either way, so choosing the keyword is the whole difference.
+_RMTREE_HANDLER = (
+    {"onexc": _make_writable} if sys.version_info >= (3, 12) else {"onerror": _make_writable}
+)
