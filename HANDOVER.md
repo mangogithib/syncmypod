@@ -27,10 +27,11 @@ project's state and its reasoning.
 | YouTube Premium sign-in | Working — 256kbps where the account allows it |
 | Local app: GUI | First version — status, sync, live progress, cancel |
 | Bundled ffmpeg | Fetch script written; binaries are gitignored |
-| **Packaging to a single executable** | **Not started — this is next** |
+| Packaging to a downloadable app | Working — 174MB zip, built by CI on a tag |
+| **Furnishing (visual polish)** | **Not started — this is next** |
 
 Roughly 14,700 lines across 45 JavaScript files, 13 Python modules, 4 SQL
-migrations. 144 Python tests, all passing.
+migrations. 165 Python tests, all passing.
 
 ### Live instance
 
@@ -340,6 +341,42 @@ Three things that cost a round of testing each:
   Everything after the first pipe is dropped, and a right-hand side that only
   describes the upload is rejected.
 
+### What packaging found
+
+Freezing the application surfaced two bugs that source runs had hidden, which is
+the argument for packaging before furnishing rather than after.
+
+**A Malayalam track title crashed the sync.** Windows consoles default to a
+legacy code page, and rich's Windows renderer encodes to it - so printing the
+progress line for a track whose name is outside cp1252 raised
+UnicodeEncodeError, which propagated out and killed the run. The library is full
+of such titles, so this would have been the first thing hit. Fixed by switching
+the console to UTF-8 and reconfiguring the streams with `errors="replace"`, at
+import rather than in `main()`, because rich reads a stream's encoding when the
+Console is constructed.
+
+**The workspace prefix was too broad.** `purge_abandoned()` deletes anything in
+the temp directory matching `syncmypod-*` that is a few hours old - which
+included `syncmypod-build`, PyInstaller's working directory. A sync running
+during a build would have deleted it. The prefix is now `syncmypod-run-`.
+
+Other things worth knowing about the build:
+
+- **Submodules are collected wholesale**, not listed. pypodlib defers nearly
+  every internal import into the function that needs it, and reaches the artwork
+  writer through a module-level `__getattr__`; PyInstaller's static analysis
+  sees none of it. Listing them by hand would produce a build that works now and
+  fails on the next pypodlib release.
+- **PyInstaller hits Windows' 260-character path limit easily.** The first build
+  failed copying a `.dist-info` file into a deep scratch directory. The build
+  script defaults to a short temporary path for that reason.
+- **A folder, not one file.** One-file mode unpacks the bundle on every launch,
+  which with 148MB of ffmpeg is a ten-second startup. The zip keeps the download
+  to a single file.
+- **ffmpeg is the shared LGPL build on Windows**: 148MB against 255MB for the
+  static one, because the two executables share DLLs instead of each embedding
+  every codec. Linux stays static, where a shared build would need an rpath fix.
+
 ### Infrastructure traps
 
 - **OCI drops inbound ports before they reach the host.** A firewalld rule is
@@ -385,32 +422,37 @@ Worth knowing so they are not reintroduced:
 
 ## 5. What is next
 
-### Immediately: packaging
+### Immediately: furnishing
 
-The engine and a GUI both work from a source checkout. What is missing is the
-thing that makes it usable by anyone who does not have Python.
+Mohamed's word for visual polish, and the last thing on the list by his own
+sequencing - polish before the features settle means polishing twice.
+`web/public/css/theme.css` is all tokens and the local app's GUI carries a copy,
+so re-theming is two files that must be kept in step.
 
-- PyInstaller, one executable per platform. The GUI's static files and the
-  bundled ffmpeg both need to be declared as data; `ffmpeg.find()` already looks
-  in `sys._MEIPASS` and beside the executable, so the lookup side is done.
-- `local/scripts/fetch_ffmpeg.py` fetches LGPL builds into
-  `src/syncmypod_local/_bin` (gitignored, ~254MB for the pair on Windows). LGPL
-  rather than the more commonly linked GPL builds, because this project is MIT
-  and there is no reason to lean on the separate-process argument when an LGPL
-  build does everything needed.
-- **macOS is unresolved.** Every readily available static macOS ffmpeg build is
-  GPL. The script refuses rather than quietly bundling one, because that is a
-  licensing decision and not a download.
-- Expect Windows antivirus false positives on a PyInstaller binary. Code signing
-  is the real fix and costs money.
+### Packaging, as it now stands
+
+- `python scripts/build.py` fetches ffmpeg, runs PyInstaller and writes
+  `local/dist/SyncMyPod-<version>-windows-x64.zip` — 174MB, 395MB unpacked.
+- `.github/workflows/release.yml` does the same on a `local-v*` tag and attaches
+  the zip to a draft GitHub release. Not committed to the repository, because a
+  few hundred megabytes per version would live in the history forever.
+- **Windows only.** PyInstaller does not cross-compile — it bundles the
+  interpreter and native libraries of the machine it runs on. Linux means adding
+  a runner; macOS means that *and* resolving the ffmpeg licensing question,
+  since every readily available static macOS build is GPL and this project is
+  MIT. `fetch_ffmpeg.py` refuses macOS rather than quietly bundling one.
+- Expect Windows Defender false positives on an unsigned build. Code signing is
+  the real fix and costs money.
 
 ### Then
 
-1. **Pairing from the GUI.** It is CLI-only, which is defensible for a
-   once-per-computer job but is the one thing that still forces a terminal.
-2. **Furnishing** — Mohamed's word for visual polish. `web/public/css/theme.css`
-   is all tokens and the GUI has a copy, so re-theming is two files that must be
-   kept in step.
+1. **Pairing from the GUI.** CLI-only, which is defensible for a once-per-computer
+   job but is the one thing that still forces a terminal.
+2. **A local-files source.** The highest-quality option available and the only
+   one with no downside: point the app at a folder of music already owned, match
+   manifest tracks against it, and skip downloading entirely. The iPod Classic
+   plays Apple Lossless, so a CD rip can go on untouched. Discussed with Mohamed
+   on 11 September and deferred; the engine already has every piece it needs.
 
 ### Open questions not yet decided
 

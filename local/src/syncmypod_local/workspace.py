@@ -22,7 +22,12 @@ from types import TracebackType
 
 logger = logging.getLogger(__name__)
 
-_PREFIX = "syncmypod-"
+# Specific enough that nothing else can match it. It was "syncmypod-", and
+# purge_abandoned() deletes anything matching it that is a few hours old - which
+# meant the build directory, "syncmypod-build", was a candidate for deletion by
+# a sync running at the same time. A prefix used for automatic removal should
+# name exactly one thing.
+_PREFIX = "syncmypod-run-"
 
 # How long a workspace from a previous run has to be untouched before it is
 # treated as abandoned rather than as another sync in progress. Generous,

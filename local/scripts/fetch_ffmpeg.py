@@ -1,12 +1,12 @@
 """Fetch the ffmpeg binaries that ship inside the application.
 
 Run once before packaging, or once in a source checkout to test the bundled
-path. The binaries land in ``src/syncmypod_local/_bin``, which is gitignored and
+path. Everything lands in ``src/syncmypod_local/_bin``, which is gitignored and
 is the first place ``ffmpeg.find()`` looks.
 
     python scripts/fetch_ffmpeg.py
 
-Two decisions are worth explaining.
+Three decisions are worth explaining.
 
 **Why bundle at all.** "Install ffmpeg and add it to your PATH" is not an
 instruction most people should have to follow, and without ffmpeg this
@@ -21,8 +21,17 @@ This project is MIT, and while ffmpeg is invoked as a separate process rather
 than linked - which is the usual argument for shipping a GPL build alongside a
 differently-licensed application - that argument is contested, and there is no
 reason to rely on it when an LGPL build does everything needed here. The LGPL
-still requires that the ffmpeg source be offered; SOURCE_NOTICE below is written
+still requires that the source be offered; SOURCE_NOTICE below is written
 alongside the binaries so the obligation travels with them.
+
+**Why shared libraries on Windows and static everywhere else.** The static
+Windows build is 255MB, because ffmpeg.exe and ffprobe.exe each embed a complete
+copy of every codec library. The shared build is 148MB for the same
+capabilities - the two executables shrink to under a megabyte between them and
+share one set of DLLs. Windows loads DLLs sitting next to the executable without
+being told to, so this costs nothing but a few more files. Elsewhere a shared
+build would need LD_LIBRARY_PATH or an rpath fixup to find its libraries, which
+is real complexity for a platform whose users mostly have ffmpeg already.
 """
 
 from __future__ import annotations
@@ -46,15 +55,18 @@ DESTINATION = Path(__file__).resolve().parent.parent / "src" / "syncmypod_local"
 RELEASES = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
 
 BUILDS = {
-    "windows-x86_64": f"{RELEASES}/ffmpeg-master-latest-win64-lgpl.zip",
+    "windows-x86_64": f"{RELEASES}/ffmpeg-master-latest-win64-lgpl-shared.zip",
     "linux-x86_64": f"{RELEASES}/ffmpeg-master-latest-linux64-lgpl.tar.xz",
     "linux-aarch64": f"{RELEASES}/ffmpeg-master-latest-linuxarm64-lgpl.tar.xz",
 }
 
+# The media player. Nothing here plays audio, and it is 18MB.
+UNWANTED = {"ffplay.exe", "ffplay"}
+
 SOURCE_NOTICE = """\
-ffmpeg and ffprobe in this directory are unmodified binaries from
-https://github.com/BtbN/FFmpeg-Builds, built from https://github.com/FFmpeg/FFmpeg
-and licensed under the LGPL v2.1 or later.
+ffmpeg and ffprobe in this directory, and the libraries beside them, are
+unmodified binaries from https://github.com/BtbN/FFmpeg-Builds, built from
+https://github.com/FFmpeg/FFmpeg and licensed under the LGPL v2.1 or later.
 
 They are invoked as separate processes and are not linked into this application.
 The corresponding source is available from the FFmpeg project at the address
@@ -74,9 +86,7 @@ def target() -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--platform",
-        default=target(),
-        help="Which build to fetch (default: this machine's)",
+        "--platform", default=target(), help="Which build to fetch (default: this machine's)"
     )
     parser.add_argument(
         "--force", action="store_true", help="Re-download even if binaries are already there"
@@ -92,47 +102,76 @@ def main() -> int:
         return 1
 
     exe = ".exe" if args.platform.startswith("windows") else ""
-    wanted = [f"ffmpeg{exe}", f"ffprobe{exe}"]
+    required = [f"ffmpeg{exe}", f"ffprobe{exe}"]
 
-    if not args.force and all((DESTINATION / name).is_file() for name in wanted):
+    if not args.force and all((DESTINATION / name).is_file() for name in required):
         print(f"Already present in {DESTINATION}. Use --force to replace them.")
         return 0
 
     url = BUILDS[args.platform]
     print(f"Downloading {url}")
-    with urllib.request.urlopen(url, timeout=300) as response:
+    with urllib.request.urlopen(url, timeout=600) as response:
         payload = response.read()
-    print(f"  {len(payload) / 1024 / 1024:.0f} MB")
+    print(f"  {len(payload) / 1024 / 1024:.0f} MB compressed")
 
+    # Replaced wholesale rather than merged: a leftover DLL from an older build
+    # sitting beside a new executable is the kind of mismatch that fails at the
+    # first conversion rather than at extraction time.
+    #
+    # The contents go, not the directory. Removing the directory itself fails on
+    # Windows whenever anything holds a handle to it - a sync client, the search
+    # indexer, an open Explorer window - and it emptied the folder before
+    # failing, which left the application with no ffmpeg at all.
     DESTINATION.mkdir(parents=True, exist_ok=True)
-    extracted = _extract(payload, url, wanted)
+    for existing in DESTINATION.iterdir():
+        if existing.is_dir():
+            shutil.rmtree(existing, ignore_errors=True)
+        else:
+            existing.unlink(missing_ok=True)
 
-    missing = set(wanted) - set(extracted)
+    extracted = _extract(payload, url)
+    missing = set(required) - set(extracted)
     if missing:
         print(f"The archive did not contain {', '.join(sorted(missing))}.", file=sys.stderr)
         return 1
 
     (DESTINATION / "SOURCE_NOTICE.txt").write_text(SOURCE_NOTICE, encoding="utf-8")
-    print(f"\nInstalled into {DESTINATION}:")
-    for name in wanted:
-        print(f"  {name}  ({(DESTINATION / name).stat().st_size / 1024 / 1024:.0f} MB)")
+
+    total = sum(path.stat().st_size for path in DESTINATION.iterdir() if path.is_file())
+    print(f"\nInstalled {len(extracted)} file(s) into {DESTINATION}:")
+    for name in sorted(extracted):
+        print(f"  {name:<24} {(DESTINATION / name).stat().st_size / 1024 / 1024:>7.1f} MB")
+    print(f"  {'total':<24} {total / 1024 / 1024:>7.1f} MB")
     print("\nCheck it is picked up with:  syncmypod status")
     return 0
 
 
-def _extract(payload: bytes, url: str, wanted: list[str]) -> list[str]:
-    """Pull just the two binaries out, flattening the archive's directories.
+def _extract(payload: bytes, url: str) -> list[str]:
+    """Pull the executables and their libraries out, flattening directories.
 
-    These archives nest everything under a versioned directory, which would put
-    the binaries somewhere the finder does not look.
+    These archives nest everything under a versioned directory and split
+    executables from libraries, which would put both somewhere the finder does
+    not look. Everything useful ends up in one flat directory, which is also
+    exactly how Windows expects to find a DLL: next to the executable that
+    needs it.
     """
+    keep_suffixes = (".exe", ".dll", ".so") if url.endswith(".zip") else ("",)
     found: list[str] = []
+
+    def wanted(name: str) -> bool:
+        if not name or name in UNWANTED:
+            return False
+        if url.endswith(".zip"):
+            return name.lower().endswith((".exe", ".dll"))
+        # The static tarballs carry the two binaries and nothing else worth
+        # having, so they are named rather than pattern-matched.
+        return name in {"ffmpeg", "ffprobe"}
 
     if url.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             for member in archive.namelist():
                 name = Path(member).name
-                if name in wanted:
+                if wanted(name):
                     with archive.open(member) as source, (DESTINATION / name).open("wb") as out:
                         shutil.copyfileobj(source, out)
                     found.append(name)
@@ -140,7 +179,7 @@ def _extract(payload: bytes, url: str, wanted: list[str]) -> list[str]:
         with tarfile.open(fileobj=io.BytesIO(payload), mode="r:xz") as archive:
             for member in archive.getmembers():
                 name = Path(member.name).name
-                if member.isfile() and name in wanted:
+                if member.isfile() and wanted(name):
                     source = archive.extractfile(member)
                     if source is None:
                         continue
@@ -150,8 +189,9 @@ def _extract(payload: bytes, url: str, wanted: list[str]) -> list[str]:
 
     # The executable bit does not survive extraction on POSIX.
     for name in found:
-        path = DESTINATION / name
-        path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        if name.endswith(keep_suffixes) or "." not in name:
+            path = DESTINATION / name
+            path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return found
 
 

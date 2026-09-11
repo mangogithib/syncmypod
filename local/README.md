@@ -27,6 +27,17 @@ source checkout.
 
 ## Install
 
+**Download the latest release**, unpack the zip anywhere, and run
+`syncmypod.exe`. Double-clicking opens the window; it also takes commands
+(`syncmypod.exe sync --dry-run`). ffmpeg is included, so there is nothing else
+to install.
+
+Windows Defender may quarantine it on first run. That is a false positive every
+unsigned build attracts, not a sign of anything wrong with the download — code
+signing is the real fix and it costs money.
+
+### From source
+
 Requires Python 3.11 or newer.
 
 ```bash
@@ -163,6 +174,22 @@ web interface without changing your password — which is the point: a lost lapt
 is a revoked token, not a password reset.
 
 ---
+
+## Building the download
+
+```bash
+python scripts/build.py
+```
+
+Fetches ffmpeg, runs PyInstaller, and writes
+`dist/SyncMyPod-<version>-windows-x64.zip` — about 174MB, 395MB unpacked, most
+of it ffmpeg. CI does the same on a `local-v*` tag and attaches the result to a
+GitHub release.
+
+A zipped folder rather than one executable, deliberately. PyInstaller's one-file
+mode unpacks the whole bundle to a temporary directory on every launch, which
+with 148MB of ffmpeg would be a ten-second wait each time. The download is still
+a single file; what comes out of it is a folder.
 
 ## How a sync runs
 

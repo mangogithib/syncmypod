@@ -69,7 +69,7 @@ class TestAbandonedWorkspaces:
     """A process killed outright leaves a directory nothing else would remove."""
 
     def test_an_old_one_is_purged_by_the_next_run(self, tmp_path):
-        stale = tmp_path / "syncmypod-deadbeef"
+        stale = tmp_path / f"{workspace._PREFIX}deadbeef"
         stale.mkdir()
         (stale / "orphan.m4a").write_bytes(b"audio")
         old = time.time() - (24 * 60 * 60)
@@ -83,7 +83,7 @@ class TestAbandonedWorkspaces:
 
     def test_a_recent_one_is_left_alone(self, tmp_path):
         """It may be another sync running right now. Deleting it would be worse."""
-        active = tmp_path / "syncmypod-inprogress"
+        active = tmp_path / f"{workspace._PREFIX}inprogress"
         active.mkdir()
         (active / "downloading.part").write_bytes(b"partial")
 
@@ -102,6 +102,27 @@ class TestAbandonedWorkspaces:
         with workspace.Workspace(parent=tmp_path):
             pass
         assert other.exists()
+
+    def test_the_prefix_is_specific_enough_to_be_safe(self, tmp_path):
+        """The prefix drives automatic deletion, so it must name exactly one thing.
+
+        It used to be "syncmypod-", which also matched "syncmypod-build" - the
+        directory PyInstaller builds the application in. A sync running while a
+        build was in progress would have deleted it.
+        """
+        import os
+
+        neighbour = tmp_path / "syncmypod-build"
+        neighbour.mkdir()
+        (neighbour / "artefact.bin").write_bytes(b"expensive to rebuild")
+        old = time.time() - (24 * 60 * 60)
+        os.utime(neighbour, (old, old))
+
+        with workspace.Workspace(parent=tmp_path):
+            pass
+
+        assert neighbour.exists(), "purged a directory that merely shares a name stem"
+        assert (neighbour / "artefact.bin").exists()
 
 
 def test_a_read_only_file_is_still_removed(tmp_path):

@@ -19,7 +19,7 @@ import pytest
 import respx
 
 from helpers import CLASSIC_6G, SERVER, manifest, mock_server, reported, track
-from syncmypod_local import config, device, downloader, ledger, sync, transcode
+from syncmypod_local import config, device, downloader, ledger, sync, transcode, workspace
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -102,7 +102,7 @@ class TestAFullRun:
 
         import tempfile
 
-        leftovers = list(Path(tempfile.gettempdir()).glob("syncmypod-*"))
+        leftovers = list(Path(tempfile.gettempdir()).glob(f"{workspace._PREFIX}*"))
         assert not leftovers, f"downloads left behind: {leftovers}"
 
     @respx.mock

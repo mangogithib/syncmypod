@@ -22,6 +22,7 @@ task: 0 success, 1 a problem the user can fix, 2 bad usage, 130 interrupted.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import platform
 import sys
@@ -41,6 +42,46 @@ EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_USAGE = 2
 EXIT_INTERRUPTED = 130
+
+
+def _make_output_utf8_safe() -> None:
+    """Stop a track name from crashing the run that is printing it.
+
+    Windows consoles default to a legacy code page - cp1252 in western locales -
+    and printing anything outside it raises UnicodeEncodeError. That is not a
+    cosmetic problem here: the exception propagates out of the progress line and
+    kills the sync. Found by packaging the application and syncing a library with
+    Malayalam titles, where it died on the first track.
+
+    Two fixes, because either alone leaves a gap. Switching the console to UTF-8
+    makes the characters display properly where the font has them. Reconfiguring
+    the streams with ``errors="replace"`` guarantees that a character neither can
+    handle degrades to a question mark instead of ending the sync - which is the
+    only acceptable outcome, since the name being printed has nothing to do with
+    whether the track can be written to the iPod.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            kernel32.SetConsoleOutputCP(65001)
+            kernel32.SetConsoleCP(65001)
+        except Exception:
+            # No console at all - a scheduled task, or output redirected to a
+            # file. The stream reconfiguration below is what matters there.
+            pass
+
+    for stream in (sys.stdout, sys.stderr):
+        # AttributeError when the stream has been replaced by something without
+        # reconfigure - a test harness, or a pipe wrapper.
+        with contextlib.suppress(AttributeError, ValueError, OSError):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+# Called at import rather than in main(), because rich reads a stream's encoding
+# when the Console is built and both are module-level.
+_make_output_utf8_safe()
 
 console = Console()
 err_console = Console(stderr=True)

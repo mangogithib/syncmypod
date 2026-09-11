@@ -87,7 +87,7 @@ syncmypod pair https://your-server:8444 ABCD1234
 | Local app: album art on the device | Working — tags and the iPod's own artwork database |
 | Local app: YouTube Premium sign-in | Working — 256kbps instead of 128 |
 | Local app: GUI | First version — device status, sync, live progress |
-| **Packaging to a single executable** | **Not built yet** |
+| Packaging to a downloadable app | Working — Windows, built and released by CI |
 
 ---
 
