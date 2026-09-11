@@ -8,7 +8,8 @@ For what the tool *is*, read [README.md](README.md). For how it works
 internally, read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). This file is the
 project's state and its reasoning.
 
-**Last updated:** 11 September 2026 (sync engine and first GUI)
+**Last updated:** 12 September 2026 (YouTube playlist import, connected YouTube
+account, first published release)
 
 ---
 
@@ -18,20 +19,25 @@ project's state and its reasoning.
 |---|---|
 | Web library manager | Working, deployed, publicly reachable over HTTPS |
 | Metadata resolution | Working — Deezer → iTunes → MusicBrainz, **no API keys needed** |
-| Bulk import | Working — pasted track list, public Deezer playlist |
-| Followed artists | Working — auto-adds new releases, via Deezer |
+| Search | Working — combined by default, YouTube as a named fallback |
+| Artist and album pages | Working — browse a discography before adding anything |
+| Bulk import: pasted list | Working |
+| Bulk import: Deezer playlist | Working |
+| Bulk import: YouTube playlist link | Working — verified on a real 50-track playlist |
+| Connected YouTube account | Built and tested against a stubbed Google; **needs a Google OAuth client to use for real** |
+| Followed artists | Working — future releases, and optionally the back catalogue |
 | Device pairing + sync API | Working, verified end to end |
-| Local app: pair / status / devices | Working, verified against the live server |
 | Local app: the sync engine | Working, verified on real hardware |
 | Album art on the device | Working — verified by decoding it back off the iPod |
-| YouTube Premium sign-in | Working — 256kbps where the account allows it |
-| Local app: GUI | First version — status, sync, live progress, cancel |
-| Bundled ffmpeg | Fetch script written; binaries are gitignored |
-| Packaging to a downloadable app | Working — 174MB zip, built by CI on a tag |
+| YouTube Premium sign-in (local) | Working — 256kbps where the account allows it |
+| Local app: GUI | Working — pairing, status, sync, live progress, cancel. No terminal anywhere |
+| Bundled ffmpeg | Working — fetched by the build, shipped in the zip |
+| Downloadable build | **Published** — see the release link below |
+| CI | Green as of 12 September, after two long-standing failures were fixed |
 | **Furnishing (visual polish)** | **Not started — this is next** |
 
-Roughly 14,700 lines across 45 JavaScript files, 13 Python modules, 4 SQL
-migrations. 165 Python tests, all passing.
+Roughly 16,000 lines across 48 JavaScript files, 13 Python modules, 5 SQL
+migrations. 176 Python tests, all passing.
 
 ### Live instance
 
@@ -43,7 +49,14 @@ migrations. 165 Python tests, all passing.
 | Deploy directory | `/root/syncmypod` |
 | Containers | `syncmypod-app-1`, `syncmypod-db-1`, `syncmypod-caddy-1` |
 | Certificate | Let's Encrypt, expires 10 Dec 2026, auto-renews |
-| Contents | 1 user, 18 tracks, 43 artists, 2 playlists, 3 paired devices |
+
+### The download
+
+<https://github.com/mangogithib/syncmypod/releases/tag/local-v0.1.0>
+
+`SyncMyPod-0.1.0-windows-x64.zip`, 174MB. Unpack anywhere and run
+`syncmypod.exe`. Everything — pairing included — happens in the window that
+opens.
 
 **Credentials are deliberately not recorded here.** This file is in a git
 repository, and repositories get cloned, shared and occasionally made public.
@@ -74,7 +87,42 @@ iPod attached.
 
 ---
 
-## 3. Decisions already made — please don't re-litigate these
+## 3. The metadata rule
+
+This is the single most important idea in the project, and every source has to
+obey it. It is worth stating on its own because it is the thing most likely to
+be quietly broken by a well-meaning change.
+
+**A download source's own metadata is never trusted.** Whatever a track claims
+to be, it is re-resolved against a real catalogue before anything is written to
+the iPod. A video title is not metadata. A channel name is not an artist.
+
+That produces three outcomes, and only three:
+
+| Outcome | Stored as | Syncs to the iPod? |
+|---|---|---|
+| A catalogue confirmed it | `resolved` — its artist, album, artwork, ISRC | Yes |
+| Nobody confirmed it | `unresolved` — **title only**, artist blank, album null | No |
+| A human filled it in | `manual` | Yes |
+
+The second row is the one that matters. The tempting alternative is to write the
+guess into the artist field, which produces a library that looks populated and
+is wrong — and wrong in a way nobody notices until it is on the device. A blank
+field a user can see beats a plausible wrong one they have to catch.
+
+In code this is `discardUnverifiedMetadata` in
+[`web/server/services/resolver.js`](web/server/services/resolver.js), and the
+`skipResolve` branch in `routes/library.js` for single tracks added from search.
+The sync manifest gates on `metadata_state IN ('resolved','manual')`, so an
+unresolved track physically cannot reach an iPod.
+
+Measured on a real 50-track YouTube playlist: 43 resolved with full credits and
+ISRCs, 7 left with a title only — all seven genuinely too new for the
+catalogues.
+
+---
+
+## 4. Decisions already made — please don't re-litigate these
 
 Each of these was a real choice with a reason. If one needs revisiting, that is
 fine, but start from the reasoning rather than from scratch.
@@ -88,37 +136,50 @@ fine, but start from the reasoning rather than from scratch.
   `local/`, so a change to it should be one commit that CI tests as a whole.
 - **`web/` not `server/`** — the Node app already contains its own `server/`
   directory, and `web/` matches the concept document's vocabulary.
-- **CLI before GUI** for the local app. The engine is identical either way, and
-  a CLI is testable. Both now exist over the same engine.
 - **The GUI is a page served to the local browser**, not a desktop toolkit.
   Mohamed chose this over Tkinter and PySide6. It adds no dependency, keeps the
   packaged executable small, and can use the web tool's own design tokens so the
   two halves look like one product. The cost is that it is a browser tab rather
-  than a window, and that `theme.css` now exists in two places that must be kept
-  in step.
+  than a window, and that `theme.css` now exists in two places.
+- **Nothing needs a terminal.** Pairing was CLI-only until 11 September;
+  Mohamed's words were "I dont want terminal, paring should be simple and sone
+  on GUI iteself. No terminal should be used." The executable now launches the
+  GUI when double-clicked and still takes commands when given them.
 - **The record of what was synced lives on the iPod**, in
   `iPod_Control/Device/SyncMyPod.json`, not in the computer's config directory.
   An iPod moved between two computers then continues one history rather than
-  starting a second, which is the same reasoning as the pairing design. It is
-  keyed by server and user, so two accounts can share a device.
+  starting a second. Keyed by server and user, so two accounts can share a
+  device.
 - **No audio quality setting, deliberately.** One was built on 11 September and
   removed the same day at Mohamed's request, and he was right: signed out,
   YouTube offers exactly one AAC stream at ~128kbps, and a Premium account is
   offered one at 256. There is nothing to choose between, so the policy is a
   single format expression that takes the best AAC the account is entitled to.
-  A bitrate menu would offer numbers no source can supply. If one is ever
-  demanded again, this is the argument against it.
-- **Signing in to YouTube stores only youtube.com cookies.** yt-dlp's extractor
-  calls `_get_cookies('https://www.youtube.com')` and nothing else, so a whole
-  browser jar would put every other signed-in session on disk for no benefit.
-  `google.com` is dropped with the rest, which is the difference between a file
-  granting YouTube access and one granting a Google account.
+  A bitrate menu would offer numbers no source can supply.
+- **Two YouTube sign-ins, deliberately separate.** They do different jobs and
+  must not share a credential:
+  - *In the local app:* the browser's own cookies, on the user's machine, used
+    to fetch the 256kbps stream a Premium account is entitled to. Never leaves
+    the machine.
+  - *In the web app:* a read-only OAuth grant held by the server, used to list
+    playlists. It cannot download and cannot write.
+
+  A server compromise cannot reach a download session, and revoking either
+  leaves the other working.
+- **Signing in to YouTube locally stores only youtube.com cookies.** yt-dlp's
+  extractor calls `_get_cookies('https://www.youtube.com')` and nothing else, so
+  a whole browser jar would put every other signed-in session on disk for no
+  benefit. `google.com` is dropped with the rest, which is the difference
+  between a file granting YouTube access and one granting a Google account.
 - **A track this tool did not add is never removed by it.** This is the property
   the ledger exists to guarantee. An iPod may hold years of music from iTunes or
   another tool, and the cost of being wrong here is somebody's music.
 - **Neutral theme, not Mango branding.** This is a personal project and must
   stay independent of the Mango tools sharing the same server — no `mango-net`,
   no shared Caddy, no shared auth. Mohamed was explicit about this.
+- **Base version first, then furnish.** Mohamed's own sequencing, stated on
+  11 September: get something whole working, then improve it. Polish before the
+  features settle means polishing twice.
 
 ### Technical
 
@@ -129,8 +190,8 @@ fine, but start from the reasoning rather than from scratch.
   `textContent`, which removes XSS as a category rather than relying on
   remembering to escape.
 - **Python 3.11+ for `local/`.** Not Go or Rust: the two hard parts —
-  `pyPodLib` (iTunesDB) and `yt-dlp` — are both Python libraries. Reimplementing
-  either would be a large reverse-engineering effort for no gain.
+  `pyPodLib` (iTunesDB) and `yt-dlp` — are both Python libraries. The 3.11 floor
+  is real: pyPodLib requires it, and people run whatever Python they have.
 - **Provider credentials live in the database**, editable on the Settings page,
   with environment variables taking precedence when set. For a self-hosted tool
   this is the difference between a setting being adjustable and being frozen
@@ -138,10 +199,15 @@ fine, but start from the reasoning rather than from scratch.
 - **ISRC is the primary track identity.** It is the one identifier that survives
   crossing between services, so the same recording found via two providers
   collapses to one catalogue row rather than becoming two entries on the iPod.
+- **Background jobs, not long requests.** Every bulk import returns
+  `202 {jobId}` immediately and works through an `import_jobs` row while the
+  client polls. A 300-track list means 300 resolutions; a request that takes
+  four minutes gets killed by a proxy long before it finishes. State is in
+  Postgres, so progress survives a container restart.
 
 ---
 
-## 4. Hard-won facts
+## 5. Hard-won facts
 
 These cost real time to discover. Trust them.
 
@@ -155,8 +221,6 @@ and it killed both metadata resolution and playlist import.
 
 Mohamed's credentials were valid. Do not go looking for a bug. Migration
 `004_drop_spotify.sql` removed the provider, the OAuth table and the id columns.
-Re-adding it means a new provider module plus a migration — contained work,
-since the provider layer is pluggable, but only worth doing if he gets Premium.
 
 ### pyPodLib is much larger than it looks
 
@@ -174,9 +238,8 @@ Two consequences already taken:
   — keyed to whichever device is currently open. Writing "if Opus then AAC" by
   hand would have been wrong in three ways that only show up on the device.
 - **`IPod.add_tracks()` reads metadata back out of the file with mutagen.** So
-  the order is download → convert → tag → hand over, and the tags written from
-  the manifest are what reaches the database. Tagging after conversion, because
-  ffmpeg does not carry every tag across.
+  the order is download → convert → tag → hand over. Tagging after conversion,
+  because ffmpeg does not carry every tag across.
 
 `IPod.backup()` is a full content-addressed snapshot of the device, not just the
 database. The first one costs the size of the music on the iPod; later ones are
@@ -191,22 +254,17 @@ inspection:
 - Top level is only `scan_ipods()`, `connect(path)`, `library_from_path()`, and
   the `IPod` / `Library` / `Playlist` / `Track` types.
   `identify_ipod_at_path` is in `pypodlib.device`, **not** top level.
-- `IPod` properties: `path`, `name`, `display_name`, `model_number`,
-  `model_family`, `generation`, `serial`, `capacity`, `color`, `checksum_type`,
-  `firewire_guid`. Methods: `library()`, `add_tracks()`, `save()`, `backup()`,
-  `restore()`.
 - **`capacity` is a string** (`"160GB"`), not bytes. Free space is not reported
   at all — use `shutil.disk_usage`.
 - **An iPod Classic 7th gen (MC297) uses `ChecksumType.HASH58`, not hash72.**
   `hash72` is for iPhone-OS-era devices. A 5th gen Video (MA146) is
-  `ChecksumType.NONE`. An earlier assumption of mine said otherwise and was
-  wrong.
+  `ChecksumType.NONE`.
 - `pypodlib.device.create_virtual_ipod(path, model_number)` simulates any of
   **204 models**. This is how the sync path gets tested without hardware, and it
   is the single most useful thing about the library.
 
-pyPodLib is pinned to `==0.1.0` — alpha, one release, published 30 Aug 2026 —
-and quarantined in `local/src/syncmypod_local/device.py`, the only module that
+Pinned to `==0.1.0` — alpha, one release, published 30 Aug 2026 — and
+quarantined in `local/src/syncmypod_local/device.py`, the only module that
 imports it. Everything else uses the local `IpodDevice` type, so replacing or
 forking it changes one file.
 
@@ -216,9 +274,8 @@ forking it changes one file.
 one. pyPodLib reads the timezone the iPod itself is set to, so on Windows
 **every** iTunesDB parse failed outright — `ZoneInfoNotFoundError` for
 `Europe/Dublin`, which is what the attached device happened to be set to. The
-`tzdata` package is now a Windows-only dependency. Nothing else on any platform
-is affected, and it is invisible until you try a real device on a real Windows
-machine.
+`tzdata` package is now a Windows-only dependency. Invisible until you try a
+real device on a real Windows machine.
 
 ### Writing the database back is lossless
 
@@ -283,29 +340,27 @@ Verified by decoding a frame back off the device: the 320x320 image for
 "Calvin Harris, Dua Lipa - One Kiss" is the real cover, and a pre-existing
 MediaHuman track's art came back byte-intact.
 
-Needs `numpy` and `Pillow`, so the dependency is `pypodlib[artwork]` rather than
-plain `pypodlib`. Not optional: without them the feature silently does nothing.
+Needs `numpy` and `Pillow`, so the dependency is `pypodlib[artwork]`. Not
+optional: without them the feature silently does nothing.
 
 ### Store Python hides the config and the backups
 
 Python installed from the Microsoft Store runs in an app container that
-redirects writes under `%LOCALAPPDATA%` into a per-package
-`AppData/Local/Packages/PythonSoftwareFoundation.Python.3.13_.../LocalCache`
-tree. The redirect is invisible to the writing process - it reads the file back
-from the path it asked for - so `syncmypod status` reported a config path that
-File Explorer insisted did not exist. The 1.2GB of iPod backups are in there too.
+redirects writes under `%LOCALAPPDATA%` into a per-package `LocalCache` tree.
+The redirect is invisible to the writing process — it reads the file back from
+the path it asked for — so `syncmypod status` reported a config path that File
+Explorer insisted did not exist. The 1.2GB of iPod backups are in there too.
 
 Not a bug, and it disappears once the app is packaged, because a PyInstaller
-executable is an ordinary Win32 process. But two consequences: the pairing made
-during development will **not** carry over to the packaged build, and anything
-stored now is lost if that Python is reset. The CLI prints
-`os.path.realpath` of the config path, which resolves the redirect.
+executable is an ordinary Win32 process. But the pairing made during development
+does **not** carry over to the packaged build. The CLI prints `os.path.realpath`
+of the config path, which resolves the redirect.
 
 ### YouTube's 256kbps stream needs an authenticated Premium session
 
 Verified by listing formats on a real track. Signed out, the best available is
 itag 140 (AAC, 129kbps) or itag 251 (Opus, 133kbps). Itag 141, the 256kbps AAC,
-simply does not appear in the format list - it is offered only to a signed-in
+simply does not appear in the format list — it is offered only to a signed-in
 YouTube Music Premium account.
 
 So Opus is never the better choice despite the higher number: an iPod cannot
@@ -314,17 +369,16 @@ play it, so taking it means a re-encode that ends up worse than the AAC it beat.
 Cookie extraction has two failure modes worth knowing. Chromium locks its cookie
 database while running, and since Chrome 127 seals it with App-Bound Encryption
 that another process cannot unwrap on Windows at all. **Firefox is the one that
-works there**, which is why it is listed first and is the default. Safari is
-only offered on macOS because yt-dlp refuses it elsewhere.
+works there.** Safari is only offered on macOS because yt-dlp refuses it
+elsewhere.
 
 ### YouTube search works from the server without a key
 
 Assumed it would need the Data API v3, because datacentre IPs are treated more
-harshly than residential ones and the unofficial route tends to hit bot walls.
-Measured instead, from the deployment host: the ordinary search page returns
-HTTP 200 with a full `ytInitialData` payload in about half a second, and parses
-to twenty results. No key, no Google Cloud project, nothing for the user to set
-up.
+harshly than residential ones. Measured instead, from the deployment host: the
+ordinary search page returns HTTP 200 with a full `ytInitialData` payload in
+about half a second, and parses to twenty results. No key, no Google Cloud
+project, nothing to set up.
 
 Three things that cost a round of testing each:
 
@@ -341,22 +395,78 @@ Three things that cost a round of testing each:
   Everything after the first pipe is dropped, and a right-hand side that only
   describes the upload is rejected.
 
+### YouTube is replacing its page components mid-flight
+
+Discovered building playlist import on 12 September. The playlist page no longer
+contains `playlistVideoRenderer` at all — entries are now `lockupViewModel`,
+with the title, channel and duration in entirely different places, and the
+duration buried in a thumbnail badge several wrappers down.
+
+Three consequences:
+
+- **Both shapes are parsed.** A response during the changeover can carry a
+  mixture, and reading only the new one would break again when a cached page
+  serves the old.
+- **The InnerTube JSON API returns the same new components.** Switching to
+  `youtubei/v1/browse` does not avoid this — the WEB client is what migrated.
+  It is used only for paging, where the continuation token is meaningless to
+  anything else.
+- **Things are found by shape, not by path.** The wrappers are exactly the part
+  that keeps being renamed, so the parser searches for a recognisable node
+  rather than following a fixed route into the tree.
+
+Do not "simplify" these walkers back into direct property access. They are
+defensive on purpose, and the page has already changed once during this
+project's lifetime.
+
+### Reading someone's own YouTube playlists needs OAuth, and that cannot be avoided
+
+Everything else in this app works with no account and no key. The connected
+YouTube account is the one exception, and it is not an oversight:
+
+- Reading somebody's own playlists requires their permission.
+- Permission requires OAuth.
+- Google issues OAuth credentials only to a registered application.
+- **A client secret in a public repository is not a secret**, and Google revokes
+  the ones it finds — so there is no key that could be shipped instead.
+
+So the instance owner registers one client, once. Until they do, the Import page
+shows the five steps and the exact redirect URI rather than an error.
+
+Other facts about that integration:
+
+- **Saved albums are not exposed by Google's API.** YouTube Music albums saved
+  to a library are not playlists and there is no endpoint that lists them. The
+  card says so; an album is still importable by its playlist link, which YouTube
+  Music offers from the album's share menu.
+- **Liked songs are the `LL` playlist**, reached through
+  `channels.list(mine=true).contentDetails.relatedPlaylists.likes`.
+- **`access_type=offline` plus `prompt=consent` are both required.** Google
+  issues a refresh token only on the *first* consent for a client and account,
+  so a user reconnecting after a disconnect would get an access token, appear to
+  connect fine, and stop working an hour later.
+- **`snippet.channelTitle` on a playlist item is the playlist's owner**, not the
+  uploader. The uploader is `videoOwnerChannelTitle`.
+- Deleted and private videos stay in a playlist as rows titled exactly
+  `Deleted video` and `Private video`, with no other metadata.
+- Refresh tokens are encrypted at rest (AES-256-GCM, key derived from
+  `SESSION_SECRET`). Rotating the session secret invalidates stored grants,
+  which is correct — rotating it is what you do after a compromise.
+
 ### What packaging found
 
 Freezing the application surfaced two bugs that source runs had hidden, which is
 the argument for packaging before furnishing rather than after.
 
 **A Malayalam track title crashed the sync.** Windows consoles default to a
-legacy code page, and rich's Windows renderer encodes to it - so printing the
+legacy code page, and rich's Windows renderer encodes to it — so printing the
 progress line for a track whose name is outside cp1252 raised
-UnicodeEncodeError, which propagated out and killed the run. The library is full
-of such titles, so this would have been the first thing hit. Fixed by switching
-the console to UTF-8 and reconfiguring the streams with `errors="replace"`, at
-import rather than in `main()`, because rich reads a stream's encoding when the
-Console is constructed.
+`UnicodeEncodeError`, which propagated out and killed the run. Fixed by
+switching the console to UTF-8 at *import* rather than in `main()`, because rich
+reads a stream's encoding when the Console is constructed.
 
-**The workspace prefix was too broad.** `purge_abandoned()` deletes anything in
-the temp directory matching `syncmypod-*` that is a few hours old - which
+**The workspace prefix was too broad.** `purge_abandoned()` deleted anything in
+the temp directory matching `syncmypod-*` that was a few hours old — which
 included `syncmypod-build`, PyInstaller's working directory. A sync running
 during a build would have deleted it. The prefix is now `syncmypod-run-`.
 
@@ -365,10 +475,8 @@ Other things worth knowing about the build:
 - **Submodules are collected wholesale**, not listed. pypodlib defers nearly
   every internal import into the function that needs it, and reaches the artwork
   writer through a module-level `__getattr__`; PyInstaller's static analysis
-  sees none of it. Listing them by hand would produce a build that works now and
-  fails on the next pypodlib release.
-- **PyInstaller hits Windows' 260-character path limit easily.** The first build
-  failed copying a `.dist-info` file into a deep scratch directory. The build
+  sees none of it.
+- **PyInstaller hits Windows' 260-character path limit easily.** The build
   script defaults to a short temporary path for that reason.
 - **A folder, not one file.** One-file mode unpacks the bundle on every launch,
   which with 148MB of ffmpeg is a ten-second startup. The zip keeps the download
@@ -376,28 +484,53 @@ Other things worth knowing about the build:
 - **ffmpeg is the shared LGPL build on Windows**: 148MB against 255MB for the
   static one, because the two executables share DLLs instead of each embedding
   every codec. Linux stays static, where a shared build would need an rpath fix.
+- **A double-clicked executable owns its console**, which is how the GUI is
+  launched without a subcommand: `GetConsoleProcessList` returning 1 means
+  nothing else is attached, so the window was not opened from a shell.
+
+### CI was red for four commits, for two reasons, neither in the code under test
+
+Worth recording because both were misdiagnosed at first.
+
+**The runner had no ffmpeg.** The sync tests genuinely convert audio rather than
+mocking the transcoder — the conversion is the part most likely to break, so
+faking it would prove nothing — and neither runner image carries ffmpeg. Every
+sync test failed with "ffmpeg could not be found", which reads like a product
+bug and is not one: the shipped application bundles its own copy. Linux now
+`apt-get`s it; Windows fetches the bundled copy *before* the tests rather than
+only before packaging.
+
+**`shutil.rmtree(onexc=...)` is Python 3.12 and later.** The matrix floor is
+3.11, and that failure had been hidden behind the missing ffmpeg. The keyword is
+now chosen by version; the two forms differ only in the third argument they hand
+the handler, and the handler ignores it.
+
+A third thing, about diagnosis rather than code: **the PAT on the server cannot
+read the Actions API** (403) or create releases, so CI logs were unobtainable
+from there for days. The token in Git Credential Manager on Mohamed's Windows
+machine has `repo` + `workflow` scope and can do both. Use that one.
 
 ### Infrastructure traps
 
 - **OCI drops inbound ports before they reach the host.** A firewalld rule is
   not enough. The security list that matters is the one attached to the
-  *instance's subnet* — reach it via Compute → Instances → Oralux → Primary VNIC
-  → Subnet → Security Lists. Mohamed initially edited a list that had no rule
-  for port 22 or 8443 even though both worked, which proved it was not the one
-  in force.
+  *instance's subnet* — Compute → Instances → Oralux → Primary VNIC → Subnet →
+  Security Lists. Mohamed initially edited a list that had no rule for port 22
+  or 8443 even though both worked, which proved it was not the one in force.
 - **Ports 80 and 443 belong to the Mango dashboard's Caddy**, which must not be
   touched. That is why SyncMyPod is on 8444 and why its certificate uses the
   **DNS-01** challenge — HTTP-01 needs port 80, TLS-ALPN-01 needs 443, and
-  neither is available. DNS-01 needs no inbound port at all.
+  neither is available.
 - **`curl https://127.0.0.1:8444` returning 000 is not a fault.** curl sends no
-  SNI to a bare IP, so Caddy cannot select a certificate. Test with
-  `curl --resolve syncmypod.duckdns.org:8444:127.0.0.1 https://syncmypod.duckdns.org:8444/...`.
+  SNI to a bare IP, so Caddy cannot select a certificate. Test the app directly
+  on `http://127.0.0.1:3010`, or use
+  `curl --resolve syncmypod.duckdns.org:8444:127.0.0.1 ...`.
 - **`/root/syncmypod` on the server is an rsync target, not a clone.** The web
   files sit at its root. Deploy by syncing `web/*` there — do not `git pull` into
   it expecting the repository layout.
-- The GitHub PAT stored on the server is fine-grained and **cannot create
-  repositories**, and was not scoped to this one. Pushing works from Mohamed's
-  Windows machine, where Git Credential Manager now holds a credential.
+- **Creating a release through the API also creates the tag**, which triggers
+  `release.yml`. That run was cancelled on 12 September to stop it overwriting a
+  hand-verified asset with its own build.
 
 ### Resolution bugs already found and fixed
 
@@ -411,48 +544,56 @@ Worth knowing so they are not reintroduced:
   popularity. A song and its remix tie on title and artist, so the winner came
   down to iteration order. A capped 0.02 position bonus decides ties.
 - Deezer's `album:` query qualifier turns a good match into zero results,
-  because album titles diverge between services — searching Kesariya with
-  `album:"Brahmastra"` returns nothing, since Deezer files that album as
-  "Kesariya". The album is a scoring signal only, never a filter.
+  because album titles diverge between services. The album is a scoring signal
+  only, never a filter.
 - MusicBrainz models every live performance as its own recording, so a
   well-known song returns the studio take buried among identically-titled
   bootlegs. Release quality is scored and subtracted.
+- A track row numbered from `.map(trackRow)` starts at zero, which is falsy —
+  so the first row of every "Popular" list fell through to showing artwork while
+  every row below it was numbered.
 
 ---
 
-## 5. What is next
+## 6. What is next
 
 ### Immediately: furnishing
 
 Mohamed's word for visual polish, and the last thing on the list by his own
-sequencing - polish before the features settle means polishing twice.
-`web/public/css/theme.css` is all tokens and the local app's GUI carries a copy,
-so re-theming is two files that must be kept in step.
+sequencing. `web/public/css/theme.css` is all tokens and the local app's GUI
+carries a copy, so re-theming is two files that must be kept in step.
 
-### Packaging, as it now stands
+### Before the connected YouTube account can be used
 
-- `python scripts/build.py` fetches ffmpeg, runs PyInstaller and writes
-  `local/dist/SyncMyPod-<version>-windows-x64.zip` — 174MB, 395MB unpacked.
-- `.github/workflows/release.yml` does the same on a `local-v*` tag and attaches
-  the zip to a draft GitHub release. Not committed to the repository, because a
-  few hundred megabytes per version would live in the history forever.
-- **Windows only.** PyInstaller does not cross-compile — it bundles the
-  interpreter and native libraries of the machine it runs on. Linux means adding
-  a runner; macOS means that *and* resolving the ffmpeg licensing question,
-  since every readily available static macOS build is GPL and this project is
-  MIT. `fetch_ffmpeg.py` refuses macOS rather than quietly bundling one.
-- Expect Windows Defender false positives on an unsigned build. Code signing is
-  the real fix and costs money.
+It is built and tested, but needs one thing only Mohamed can do:
+
+1. Google Cloud console → new project → enable **YouTube Data API v3**.
+2. Credentials → OAuth client ID → **Web application**.
+3. Authorised redirect URI:
+   `https://syncmypod.duckdns.org:8444/api/youtube-account/callback`
+4. OAuth consent screen → add himself under **Test users**. Publishing and
+   verification are not needed for his own account.
+5. Paste the client ID and secret into Settings.
+
+The Import page shows these same steps with the redirect URI ready to copy, so
+this is a reminder rather than the only record.
 
 ### Then
 
-1. **Pairing from the GUI.** CLI-only, which is defensible for a once-per-computer
-   job but is the one thing that still forces a terminal.
-2. **A local-files source.** The highest-quality option available and the only
+1. **A local-files source.** The highest-quality option available and the only
    one with no downside: point the app at a folder of music already owned, match
    manifest tracks against it, and skip downloading entirely. The iPod Classic
-   plays Apple Lossless, so a CD rip can go on untouched. Discussed with Mohamed
-   on 11 September and deferred; the engine already has every piece it needs.
+   plays Apple Lossless, so a CD rip can go on untouched. Discussed on
+   11 September and deferred; the engine already has every piece it needs.
+2. **A web-side test suite.** There is none. `web / check` runs a JS syntax
+   check and a Docker build, which catches a typo and nothing else. The local
+   app has 176 tests; the web app's resolver deserves the same and does not have
+   it. This is the largest gap in the project.
+3. **macOS and Linux builds of the local app.** PyInstaller does not
+   cross-compile. Linux means adding a runner; macOS means that *and* resolving
+   the ffmpeg licensing question, since every readily available static macOS
+   build is GPL and this project is MIT — `fetch_ffmpeg.py` refuses macOS rather
+   than quietly bundling one.
 
 ### Open questions not yet decided
 
@@ -463,13 +604,16 @@ so re-theming is two files that must be kept in step.
   the source; may not be what he wants on the device.
 - HSTS is still `max-age=0`. Ready to enable, deliberately not done — it is a
   one-year browser commitment with no quick undo.
-- The GUI polls for progress every 600ms. Server-sent events would be tidier but
-  polling a localhost server costs nothing and cannot get stuck half-open.
-- Removal is offered but never automatic, and the GUI shows exactly what would
-  go before doing it. Worth checking that is still the right default once the
-  library is real rather than 18 test tracks.
+- The unresolved tracks from a YouTube import need a comfortable way to be
+  fixed. They land correctly and are visible, but filling in an artist is
+  currently a per-track edit; a "needs attention" view would be the obvious next
+  step.
+- Code signing for the Windows build. Defender flags every unsigned PyInstaller
+  executable, and the release notes say so, but saying so is not a fix.
 
-## 6. Working conventions
+---
+
+## 7. Working conventions
 
 - **Commits** explain *why*, not what. The diff shows what changed; the message
   should say what problem it solves and what was traded away.
@@ -479,63 +623,89 @@ so re-theming is two files that must be kept in step.
   checked against the real library or a real request. Run the thing.
 - **Report failures plainly.** If a test fails, say so with the output.
 - **No secrets in the repository.** `.env` and `config.json` are gitignored.
-- **Tests.** The Windows machine does have Python now (3.13), so the quickest
-  loop is a virtualenv rather than a container. It is kept outside the project
-  directory because that directory is synced to OneDrive and a venv is thousands
-  of files:
-  ```bash
-  python -m venv "$USERPROFILE/.venvs/syncmypod"
-  "$USERPROFILE/.venvs/syncmypod/Scripts/python" -m pip install -e "local[dev]"
-  cd local && "$USERPROFILE/.venvs/syncmypod/Scripts/python" -m pytest
-  ```
-  The container still works and is what CI uses:
-  ```bash
-  cd local
-  docker build -f Dockerfile.dev -t syncmypod-local-dev .
-  docker run --rm -v "$PWD:/app" syncmypod-local-dev pytest
-  ```
-  The full suite takes about three minutes; most of it is writing and signing
-  simulated iTunesDB files, which is the part worth not mocking.
+
+### Tests
+
+The Windows machine has Python 3.13. The venv is kept outside the project
+directory because that directory is synced to OneDrive and a venv is thousands
+of files:
+
+```bash
+python -m venv "$USERPROFILE/.venvs/syncmypod"
+"$USERPROFILE/.venvs/syncmypod/Scripts/python" -m pip install -e "local[dev]"
+cd local && "$USERPROFILE/.venvs/syncmypod/Scripts/python" -m pytest
+```
+
+Run **all three** checks before pushing, not just the tests — CI runs
+`ruff format --check` too, and a formatting-only failure has already cost a red
+build:
+
+```bash
+cd local
+"$USERPROFILE/.venvs/syncmypod/Scripts/python" -m ruff check src tests
+"$USERPROFILE/.venvs/syncmypod/Scripts/python" -m ruff format --check src tests
+"$USERPROFILE/.venvs/syncmypod/Scripts/python" -m pytest -m "not hardware"
+```
+
+The full suite takes about three minutes; most of it is writing and signing
+simulated iTunesDB files, which is the part worth not mocking. The tests need
+ffmpeg on `PATH` or in `_bin` — they convert audio for real.
 
 ### Deploying a change to the web tool
 
 ```bash
-# From the repository root — note web/* , not the repo root
 tar -czf - -C web --exclude=node_modules --exclude=.env . \
   | ssh root@100.96.249.123 'tar -xzf - -C /root/syncmypod'
-ssh root@100.96.249.123 'cd /root/syncmypod && docker compose --profile public up -d --build'
+ssh root@100.96.249.123 'cd /root/syncmypod && docker compose up -d --build app'
 ```
 
-Migrations apply automatically at startup.
+Migrations apply automatically at startup. `--build` is not optional.
+
+### Building and publishing the local app
+
+```bash
+cd local
+python scripts/build.py            # fetches ffmpeg, then PyInstaller
+python scripts/build.py --skip-ffmpeg   # when _bin is already populated
+```
+
+Writes `local/dist/SyncMyPod-<version>-windows-x64.zip`. Pushing a `local-v*`
+tag makes CI do the same and publish a release with the zip attached.
+
+**Check the zip is actually current before handing it over.** On 11 September a
+build predating the pairing commit was described as up to date; Mohamed caught
+it. A quick check:
+
+```bash
+cd local/dist && unzip -p SyncMyPod-*.zip '*/_internal/**/app.js' | grep -c renderPairingForm
+```
 
 ---
 
-## 7. Loose ends
+## 8. Loose ends
 
 - A test device named **"Dev container"** is paired against the live server from
-  CLI testing, and **"Mo Desktop"** is the Windows machine used for the hardware
+  CLI testing, and **"Mo Desktop"** is the Windows machine used for hardware
   testing. Revoke either from the web interface when convenient.
+- **The live library contains test data.** 18 tracks from resolver verification,
+  plus a 50-track playlist named "Chroma: Today's Dance Hits" imported on
+  12 September to prove the YouTube playlist path end to end. Both are real,
+  correctly resolved data; neither is a curated library. Delete the playlist
+  from the Playlists page when it stops being useful as a demonstration.
 - **The attached iPod is not Mohamed's.** It is "Nihal's ipod", and the 18
   library tracks were written onto it alongside 184 that were already there. It
   has a full backup in `%LOCALAPPDATA%\SyncMyPod\backups` taken before the first
   write, so putting it back exactly as it was is `IPod.restore(snapshot_id)`.
-- **`local/src/syncmypod_local/_bin` holds ~254MB of ffmpeg binaries** fetched
-  for testing the bundled path. Gitignored, but inside a OneDrive-synced folder,
-  so it will sync. Delete it if that is a nuisance; `fetch_ffmpeg.py` gets it
-  back.
+- **`local/src/syncmypod_local/_bin` holds ~149MB of ffmpeg binaries** and
+  `local/dist` holds a 174MB zip. Both are gitignored but inside a
+  OneDrive-synced folder, so they sync. Moving the project out of OneDrive was
+  offered on 11 September and not answered; deleting `_bin` is safe and
+  `fetch_ffmpeg.py` gets it back.
 - **`Desktop/Claude/syncmypod-local`** on Mohamed's machine is the now-redundant
   original local-app repository. Its commit is preserved in the monorepo under
   `local/`. Safe to delete.
-- CI workflows have been pushed but have not yet run — the first push touching
-  `web/` or `local/` will trigger them. `local.yml` should pass; `web.yml`
-  compiles Caddy from source and will be slow.
-- The live instance still holds 18 test tracks from resolver verification.
-  Real data, correctly resolved, but not a curated library — and now all 18 are
-  on the iPod, so the next real test is adding something to the library and
-  watching it appear.
-- A pairing code was minted directly in the `pairing_codes` table over SSH
-  rather than generated in the web interface, because the interface needs a
-  browser session. Equivalent, but worth knowing that is possible:
+- A pairing code can be minted directly in the database if a browser session is
+  not available:
   ```sql
   INSERT INTO pairing_codes (code, user_id, expires_at)
   SELECT 'ABCD1234', id, now() + interval '20 minutes' FROM users LIMIT 1;
