@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>SyncMyPod</title>
+    <link rel="stylesheet" href="/static/theme.css" />
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">SyncMyPod</span>
+      </div>
+      <span class="topbar-meta" id="server-label"></span>
+    </header>
+
+    <main class="page">
+      <!--
+        Every card is written here empty and filled from app.js. The markup is
+        the layout; nothing in it is content, so there is no template string
+        anywhere that could put a track title into the DOM as HTML.
+      -->
+      <section class="cards">
+        <article class="card" id="card-ipod">
+          <h2 class="card-title">iPod</h2>
+          <div class="card-body" id="ipod-body">
+            <p class="muted">Looking for a device…</p>
+          </div>
+        </article>
+
+        <article class="card" id="card-library">
+          <h2 class="card-title">Library</h2>
+          <div class="card-body" id="library-body">
+            <p class="muted">Checking…</p>
+          </div>
+        </article>
+      </section>
+
+      <section class="actions">
+        <button class="button button-primary" id="btn-sync" disabled>Sync now</button>
+        <button class="button" id="btn-check" disabled>Check what is needed</button>
+        <button class="button button-danger" id="btn-cancel" hidden>Cancel</button>
+        <label class="toggle">
+          <input type="checkbox" id="opt-remove" />
+          <span>Also remove tracks that left the library</span>
+        </label>
+      </section>
+
+      <section class="panel" id="plan-panel" hidden>
+        <h2 class="panel-title">Plan</h2>
+        <div class="stats" id="plan-stats"></div>
+        <div id="plan-removals"></div>
+      </section>
+
+      <section class="panel" id="run-panel" hidden>
+        <div class="panel-head">
+          <h2 class="panel-title">Progress</h2>
+          <span class="progress-count" id="progress-count"></span>
+        </div>
+        <div class="progress-track" id="progress-track" hidden>
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <ol class="tracks" id="track-list"></ol>
+      </section>
+
+      <section class="panel" id="summary-panel" hidden>
+        <h2 class="panel-title">Result</h2>
+        <div id="summary-body"></div>
+      </section>
+    </main>
+
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>

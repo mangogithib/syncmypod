@@ -82,8 +82,9 @@ syncmypod pair https://your-server:8444 ABCD1234
 | Device pairing and the sync API | Working |
 | Public HTTPS with an automatic certificate | Working |
 | Local app: pairing, device detection | Working |
-| **Local app: the sync engine** | **Not built yet** |
-| Local app: GUI | Not built yet |
+| Local app: the sync engine | Working, verified on a real iPod Classic |
+| Local app: GUI | First version — device status, sync, live progress |
+| **Packaging to a single executable** | **Not built yet** |
 
 ---
 

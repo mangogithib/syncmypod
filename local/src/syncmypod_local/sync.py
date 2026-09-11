@@ -248,6 +248,7 @@ def run(
     batch_size: int = DEFAULT_BATCH_SIZE,
     keep_downloads: bool = False,
     progress: Progress | None = None,
+    cancel: Callable[[], bool] | None = None,
 ) -> Report:
     """Sync the library to the attached iPod.
 
@@ -255,8 +256,14 @@ def run(
     would do before letting it. ``limit`` caps how many tracks are downloaded,
     which is how a first run against a large library is kept short enough to
     watch.
+
+    ``cancel`` is polled between tracks. Stopping there rather than immediately
+    means the database is never interrupted part-written and everything already
+    copied stays usable, which is the difference between cancelling a sync and
+    damaging one.
     """
     say = progress or (lambda event, data: None)
+    stop = cancel or (lambda: False)
 
     if not stored.is_paired:
         raise SyncError(
@@ -310,7 +317,9 @@ def run(
         )
 
         try:
-            _execute(api, ipod, plan, record, report, say, batch_size, remove, keep_downloads)
+            _execute(
+                api, ipod, plan, record, report, say, batch_size, remove, keep_downloads, stop
+            )
         except KeyboardInterrupt:
             report.status = "cancelled"
             report.message = "Interrupted. What had already been written is on the iPod."
@@ -337,6 +346,7 @@ def _execute(
     batch_size: int,
     remove: bool,
     keep_downloads: bool,
+    stop: Callable[[], bool],
 ) -> None:
     """Download, tag, write and report, a batch at a time."""
     with workspace.Workspace(keep=keep_downloads) as work, httpx.Client(
@@ -346,6 +356,16 @@ def _execute(
         staged: list[tuple[TrackPlan, Path, Result]] = []
 
         for index, item in enumerate(plan.to_download, start=1):
+            # Checked before starting a track rather than during one, so what is
+            # already staged still gets written and recorded below.
+            if stop():
+                report.status = "cancelled"
+                report.message = (
+                    f"Cancelled with {len(plan.to_download) - index + 1} track(s) left. "
+                    "What had already been written is on the iPod."
+                )
+                break
+
             say("track", {"index": index, "total": len(plan.to_download), "item": item})
 
             if _free_bytes(ipod) < FREE_SPACE_FLOOR_BYTES:

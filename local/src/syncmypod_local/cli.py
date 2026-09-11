@@ -164,6 +164,30 @@ def _build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--verbose", action="store_true", help="Log what each step is doing")
     sync.set_defaults(handler=_cmd_sync)
 
+    gui = subparsers.add_parser(
+        "gui",
+        help="Open the window",
+        description=(
+            "Serves a small page to your browser and opens it. The server binds "
+            "to this computer only, needs a token generated at startup, and "
+            "stops when this command does."
+        ),
+    )
+    gui.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Print the address instead of opening a browser",
+    )
+    gui.add_argument(
+        "--port",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Listen on a specific port instead of one the system picks",
+    )
+    gui.add_argument("--verbose", action="store_true", help="Log what each step is doing")
+    gui.set_defaults(handler=_cmd_gui)
+
     return parser
 
 
@@ -332,6 +356,28 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     # completed, because nothing the user asked for actually happened.
     if report.failed and not report.synced:
         return EXIT_FAILURE
+    return EXIT_OK
+
+
+def _cmd_gui(args: argparse.Namespace) -> int:
+    from . import gui as gui_module
+
+    _configure_logging(args.verbose)
+
+    server = gui_module.serve(open_browser=not args.no_browser, port=args.port)
+    console.print(f"[bold]SyncMyPod[/bold] is running at [link]{server.url}[/link]")
+    console.print(
+        "\n[dim]Reachable from this computer only. The link contains a one-time "
+        "token, so opening the address without it will not work.[/dim]"
+    )
+    console.print("[dim]Press Ctrl+C to stop.[/dim]")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        console.print("\nStopped.")
+    finally:
+        server.shutdown()
     return EXIT_OK
 
 

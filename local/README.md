@@ -17,31 +17,27 @@ that needs to be near the hardware.
 
 ## Status
 
-Early. What works today:
+Working, and verified against real hardware — an iPod Classic 6.5th gen already
+holding 184 tracks from another tool. Both the CLI and a first GUI are here.
 
-- **Pairing** — exchange a code from the web interface for a device token
-- **Device detection** — identify a connected iPod, its model, generation, and
-  which database signature it requires
-- **Server connection** — authenticate, and refuse to run against a manifest
-  version this build does not understand
-
-Not built yet: the sync engine itself (download, tag, transcode, write, clean
-up) and the GUI. The CLI comes first so the engine is testable; the GUI is a
-layer on top of it.
+Not built yet: packaging into a single executable. Until then this runs from a
+source checkout.
 
 ---
 
 ## Install
 
-Requires Python 3.11 or newer. A single-file executable will be published once
-the sync engine lands; until then:
+Requires Python 3.11 or newer.
 
 ```bash
 pip install -e .
+python scripts/fetch_ffmpeg.py
 ```
 
-`ffmpeg` must be on your PATH for transcoding — an iPod cannot play the Opus
-audio most sources hand back.
+The second command downloads the ffmpeg build that ships inside the application.
+It is needed rather than optional: without it nothing can be fetched and nothing
+can be converted. If you would rather use your own, skip it — anything on your
+PATH is used as a fallback, and `SYNCMYPOD_FFMPEG` overrides both.
 
 ## Use
 
@@ -53,15 +49,38 @@ syncmypod pair https://your-server:8444 ABCD1234
 # What is paired, whether the server answers, and what is plugged in
 syncmypod status
 
-# Just the attached devices
-syncmypod devices
+# See what a sync would do. Writes nothing.
+syncmypod sync --dry-run
 
-# Forget the local pairing (does not revoke it on the server)
-syncmypod unpair
+# Do it
+syncmypod sync
+
+# The window, if you would rather not use a terminal
+syncmypod gui
 ```
+
+Useful flags on `sync`:
+
+| | |
+|---|---|
+| `--dry-run` | Work out the plan and stop |
+| `--limit N` | Download at most N tracks, to keep a first run short |
+| `--remove` | Also delete tracks this tool added that have left the library |
+| `--mount D:\` | Point at a device instead of scanning for one |
+| `--verbose` | Log what each step is doing |
 
 Exit codes are meaningful, so this can be driven from a scheduled task: `0`
 success, `1` a problem you can fix, `2` bad usage, `130` interrupted.
+
+## The window
+
+`syncmypod gui` serves a page to your browser and opens it: what is plugged in,
+what is missing, a button, and live progress.
+
+It is not a web application. It listens on this computer only, on a port the
+system picks, and needs a token generated at startup — the link printed in the
+terminal carries it. It stops when the command does. Pairing stays in the CLI,
+since it is a once-per-computer job.
 
 ---
 
@@ -71,12 +90,24 @@ The pairing lives in one small file, in the location your platform expects:
 
 | | |
 |---|---|
-| Windows | `%APPDATA%\SyncMyPod\config.json` |
+| Windows | `%LOCALAPPDATA%\SyncMyPod\config.json` |
 | macOS | `~/Library/Application Support/SyncMyPod/config.json` |
 | Linux | `~/.config/SyncMyPod/config.json` |
 
 It holds the server address and a bearer token, and is written `600` on
 POSIX. Set `SYNCMYPOD_CONFIG_DIR` to put it elsewhere.
+
+Two other things live beside it. **Backups** go in a `backups` folder next to
+the config — full snapshots of the iPod, taken before every run, so the folder
+grows to roughly the size of the music on the device. They are content-addressed,
+so a second snapshot of an unchanged iPod costs almost nothing. Set
+`SYNCMYPOD_BACKUP_DIR` to move them.
+
+And the **record of what was synced** is kept on the iPod itself, at
+`iPod_Control/Device/SyncMyPod.json`. It lives there rather than here so that
+syncing the same device from a second computer continues one history instead of
+starting another. Deleting it is safe; the next run falls back to matching on
+title, artist and album.
 
 **Your account password is never stored on this machine.** Pairing trades a
 short-lived code for a long-lived token, and the token can be revoked from the
@@ -85,9 +116,7 @@ is a revoked token, not a password reset.
 
 ---
 
-## How it will sync
-
-Once the engine lands, a run is:
+## How a sync runs
 
 1. Confirm the token and the manifest version
 2. Detect the iPod and tell the server what it is

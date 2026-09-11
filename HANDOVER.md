@@ -8,7 +8,7 @@ For what the tool *is*, read [README.md](README.md). For how it works
 internally, read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). This file is the
 project's state and its reasoning.
 
-**Last updated:** 11 September 2026
+**Last updated:** 11 September 2026 (sync engine and first GUI)
 
 ---
 
@@ -22,12 +22,13 @@ project's state and its reasoning.
 | Followed artists | Working — auto-adds new releases, via Deezer |
 | Device pairing + sync API | Working, verified end to end |
 | Local app: pair / status / devices | Working, verified against the live server |
-| **Local app: the sync engine** | **Not started — this is next** |
-| Local app: GUI | Not started (deliberately after the engine) |
-| Packaging to a single executable | Not started |
+| Local app: the sync engine | Working, verified on real hardware |
+| Local app: GUI | First version — status, sync, live progress, cancel |
+| Bundled ffmpeg | Fetch script written; binaries are gitignored |
+| **Packaging to a single executable** | **Not started — this is next** |
 
-Roughly 14,700 lines across 45 JavaScript files, 6 Python modules, 4 SQL
-migrations. 25 Python tests, all passing.
+Roughly 14,700 lines across 45 JavaScript files, 13 Python modules, 4 SQL
+migrations. 135 Python tests, all passing.
 
 ### Live instance
 
@@ -39,7 +40,7 @@ migrations. 25 Python tests, all passing.
 | Deploy directory | `/root/syncmypod` |
 | Containers | `syncmypod-app-1`, `syncmypod-db-1`, `syncmypod-caddy-1` |
 | Certificate | Let's Encrypt, expires 10 Dec 2026, auto-renews |
-| Contents | 1 user, 18 tracks, 43 artists, 2 playlists, 2 paired devices |
+| Contents | 1 user, 18 tracks, 43 artists, 2 playlists, 3 paired devices |
 
 **Credentials are deliberately not recorded here.** This file is in a git
 repository, and repositories get cloned, shared and occasionally made public.
@@ -85,7 +86,21 @@ fine, but start from the reasoning rather than from scratch.
 - **`web/` not `server/`** — the Node app already contains its own `server/`
   directory, and `web/` matches the concept document's vocabulary.
 - **CLI before GUI** for the local app. The engine is identical either way, and
-  a CLI is testable.
+  a CLI is testable. Both now exist over the same engine.
+- **The GUI is a page served to the local browser**, not a desktop toolkit.
+  Mohamed chose this over Tkinter and PySide6. It adds no dependency, keeps the
+  packaged executable small, and can use the web tool's own design tokens so the
+  two halves look like one product. The cost is that it is a browser tab rather
+  than a window, and that `theme.css` now exists in two places that must be kept
+  in step.
+- **The record of what was synced lives on the iPod**, in
+  `iPod_Control/Device/SyncMyPod.json`, not in the computer's config directory.
+  An iPod moved between two computers then continues one history rather than
+  starting a second, which is the same reasoning as the pairing design. It is
+  keyed by server and user, so two accounts can share a device.
+- **A track this tool did not add is never removed by it.** This is the property
+  the ledger exists to guarantee. An iPod may hold years of music from iTunes or
+  another tool, and the cost of being wrong here is somebody's music.
 - **Neutral theme, not Mango branding.** This is a personal project and must
   stay independent of the Mango tools sharing the same server — no `mango-net`,
   no shared Caddy, no shared auth. Mohamed was explicit about this.
@@ -128,9 +143,35 @@ Mohamed's credentials were valid. Do not go looking for a bug. Migration
 Re-adding it means a new provider module plus a migration — contained work,
 since the provider layer is pluggable, but only worth doing if he gets Premium.
 
+### pyPodLib is much larger than it looks
+
+The first read of this library badly underestimated it. It is ~74,000 lines
+across a device layer, an iTunesDB parser and writer, an artwork writer, and a
+whole `sync` subsystem — including a device-aware transcoder, a content-addressed
+backup manager, and a fingerprint diff engine. The high-level `api.py` is a thin
+friendly face over all of it, and the low-level modules are importable.
+
+Two consequences already taken:
+
+- **The transcoder is used rather than reimplemented.** `pypodlib.sync.transcoder`
+  knows that a clickwheel iPod refuses HE-AAC (it plays as silence), refuses
+  sample rates above 48kHz and 24-bit depth, and that the limits differ by model
+  — keyed to whichever device is currently open. Writing "if Opus then AAC" by
+  hand would have been wrong in three ways that only show up on the device.
+- **`IPod.add_tracks()` reads metadata back out of the file with mutagen.** So
+  the order is download → convert → tag → hand over, and the tags written from
+  the manifest are what reaches the database. Tagging after conversion, because
+  ffmpeg does not carry every tag across.
+
+`IPod.backup()` is a full content-addressed snapshot of the device, not just the
+database. The first one costs the size of the music on the iPod; later ones are
+nearly free. Its default location is a directory named after the project
+pyPodLib was extracted from, so the destination is now passed explicitly.
+
 ### pyPodLib's actual API
 
-The README overstates what is exported. Established by inspection:
+The README overstates what is exported at the top level. Established by
+inspection:
 
 - Top level is only `scan_ipods()`, `connect(path)`, `library_from_path()`, and
   the `IPod` / `Library` / `Playlist` / `Track` types.
@@ -153,6 +194,49 @@ pyPodLib is pinned to `==0.1.0` — alpha, one release, published 30 Aug 2026 �
 and quarantined in `local/src/syncmypod_local/device.py`, the only module that
 imports it. Everything else uses the local `IpodDevice` type, so replacing or
 forking it changes one file.
+
+### Windows has no timezone database
+
+`zoneinfo` reads the operating system's tz database, and Windows does not have
+one. pyPodLib reads the timezone the iPod itself is set to, so on Windows
+**every** iTunesDB parse failed outright — `ZoneInfoNotFoundError` for
+`Europe/Dublin`, which is what the attached device happened to be set to. The
+`tzdata` package is now a Windows-only dependency. Nothing else on any platform
+is affected, and it is invisible until you try a real device on a real Windows
+machine.
+
+### Writing the database back is lossless
+
+Verified before touching real hardware, by copying the attached iPod's real
+`iTunesDB` into a *virtual* device of the same model and round-tripping it: 184
+tracks in, 184 out, every location, artist and playlist identical. The single
+difference was a trailing non-breaking space being trimmed from one title —
+a normalisation, not a loss.
+
+This is the test to repeat before trusting a new pyPodLib version. It costs
+nothing and it is the only thing standing between an alpha dependency and
+someone's music library.
+
+### What the real sync proved
+
+Against an iPod Classic 6.5th gen (MB562, `HASH58`) already holding 184 tracks
+put there by MediaHuman:
+
+- All 18 library tracks and both playlists landed; the 184 existing tracks and
+  their playlist were untouched; a second run did nothing.
+- Multi-artist credits survive: "Aksomaniac, M.H.R, Bhumi, Circle Tone" reached
+  the database intact, which is exactly what raw source metadata destroys.
+- Malayalam script survives the whole pipeline into the iTunesDB.
+- Every track came down as native AAC-LC at ~128kbps and needed no conversion.
+- pyPodLib preserved the existing database's Mac platform flag despite the
+  volume being FAT32, and verified its own write afterwards.
+
+Two things went wrong in ways worth knowing. A YouTube result was age-restricted
+and aborted the *entire* search, because `ytsearch` extracts every result and one
+failure took the other five with it — `ignoreerrors` is now set on the search
+only, never on a download. And one track got `403 Forbidden` after eighteen
+downloads in quick succession, which succeeded on the next run; the engine
+handled it correctly by failing that track alone.
 
 ### Infrastructure traps
 
@@ -199,66 +283,51 @@ Worth knowing so they are not reintroduced:
 
 ## 5. What is next
 
-### Immediately: the sync engine
+### Immediately: packaging
 
-This is the remaining substantial piece. It lives in `local/` and turns the
-existing pairing and device detection into an actual sync.
+The engine and a GUI both work from a source checkout. What is missing is the
+thing that makes it usable by anyone who does not have Python.
 
-A run, in order:
+- PyInstaller, one executable per platform. The GUI's static files and the
+  bundled ffmpeg both need to be declared as data; `ffmpeg.find()` already looks
+  in `sys._MEIPASS` and beside the executable, so the lookup side is done.
+- `local/scripts/fetch_ffmpeg.py` fetches LGPL builds into
+  `src/syncmypod_local/_bin` (gitignored, ~254MB for the pair on Windows). LGPL
+  rather than the more commonly linked GPL builds, because this project is MIT
+  and there is no reason to lean on the separate-process argument when an LGPL
+  build does everything needed.
+- **macOS is unresolved.** Every readily available static macOS ffmpeg build is
+  GPL. The script refuses rather than quietly bundling one, because that is a
+  licensing decision and not a download.
+- Expect Windows antivirus false positives on a PyInstaller binary. Code signing
+  is the real fix and costs money.
 
-1. `hello` — confirm the token and that the manifest version is understood
-2. Detect the iPod, report it to the server
-3. **Back up the iPod database** (`IPod.backup()`) before touching anything
-4. Fetch the manifest and the server's view of device state
-5. Diff against what is actually on the device
-6. Open a sync run
-7. For each missing track: download, **re-tag from the manifest**, transcode if
-   the iPod cannot play the format, write it, report the result
-8. Write playlists in manifest order
-9. Prompt before removing anything no longer in the library
-10. Finish the run, then **delete every downloaded file**
+### Then
 
-Modules to add: `sync.py` (orchestration), `downloader.py` (yt-dlp),
-`tagging.py` (mutagen), `transcode.py` (ffmpeg), `cleanup.py`.
-
-Points that need care:
-
-- **Re-tagging is the whole point.** Whatever metadata a download source
-  embedded is discarded and replaced with the manifest's. Never trust the
-  source's own title.
-- **An iPod cannot play Opus**, which is what YouTube usually returns.
-  Transcode to AAC; pass through untouched when the source is already M4A or
-  MP3, since re-encoding a lossy source twice is pure loss.
-- **Build against a virtual iPod first.** `device.create_virtual(path, "MC297")`
-  gives a real Classic 7g including its HASH58 requirement.
-- **Report results incrementally**, not just at the end, so an interrupted sync
-  does not re-download what already landed.
-- Mohamed has the iPod and can test on real hardware. Give him a validation
-  checklist before anything writes to it.
-
-### After that
-
-1. **Packaging** — PyInstaller single executable, per platform. Expect Windows
-   antivirus false positives; code signing is the real fix but costs money.
-2. **GUI** — one window over the CLI engine: device status, Sync now, progress.
-3. **Artwork** — pyPodLib has an `artwork` extra; the manifest already carries
-   `artworkUrl`.
-4. **Furnishing** — Mohamed said "we will do furnishing on this later", meaning
-   visual polish and theming. `web/public/css/theme.css` is all tokens, so
-   re-theming is one file.
+1. **Artwork on the device.** The manifest carries `artworkUrl` and it is already
+   embedded in the file's tags, but the iPod's own artwork database
+   (`Artwork/ArtworkDB`) is not written, so the album art does not show on the
+   device. pyPodLib has an `artworkdb_writer` and an `artwork` extra.
+2. **Pairing from the GUI.** It is CLI-only, which is defensible for a
+   once-per-computer job but is the one thing that still forces a terminal.
+3. **Furnishing** — Mohamed's word for visual polish. `web/public/css/theme.css`
+   is all tokens and the GUI has a copy, so re-theming is two files that must be
+   kept in step.
 
 ### Open questions not yet decided
 
-- Whether to strip `(From "...")` suffixes from titles before writing tags.
-  They currently reach the iPod verbatim. It is editable per track, but a global
-  convention may be wanted.
+- Whether to strip `(From "...")` suffixes from titles before writing tags. They
+  currently reach the iPod verbatim.
 - Deezer's contributor order puts the composer first, so Kesariya reads
-  "Pritam, Arijit Singh, …" rather than leading with the singer. Faithful to the
-  source; may not be what he wants on the device.
+  "Pritam, Arijit Singh, ..." rather than leading with the singer. Faithful to
+  the source; may not be what he wants on the device.
 - HSTS is still `max-age=0`. Ready to enable, deliberately not done — it is a
   one-year browser commitment with no quick undo.
-
----
+- The GUI polls for progress every 600ms. Server-sent events would be tidier but
+  polling a localhost server costs nothing and cannot get stuck half-open.
+- Removal is offered but never automatic, and the GUI shows exactly what would
+  go before doing it. Worth checking that is still the right default once the
+  library is real rather than 18 test tracks.
 
 ## 6. Working conventions
 
@@ -270,13 +339,23 @@ Points that need care:
   checked against the real library or a real request. Run the thing.
 - **Report failures plainly.** If a test fails, say so with the output.
 - **No secrets in the repository.** `.env` and `config.json` are gitignored.
-- **Tests run in Docker**, because the Windows machine has no Python and the
-  server has only 3.9:
+- **Tests.** The Windows machine does have Python now (3.13), so the quickest
+  loop is a virtualenv rather than a container. It is kept outside the project
+  directory because that directory is synced to OneDrive and a venv is thousands
+  of files:
+  ```bash
+  python -m venv "$USERPROFILE/.venvs/syncmypod"
+  "$USERPROFILE/.venvs/syncmypod/Scripts/python" -m pip install -e "local[dev]"
+  cd local && "$USERPROFILE/.venvs/syncmypod/Scripts/python" -m pytest
+  ```
+  The container still works and is what CI uses:
   ```bash
   cd local
   docker build -f Dockerfile.dev -t syncmypod-local-dev .
   docker run --rm -v "$PWD:/app" syncmypod-local-dev pytest
   ```
+  The full suite takes about three minutes; most of it is writing and signing
+  simulated iTunesDB files, which is the part worth not mocking.
 
 ### Deploying a change to the web tool
 
@@ -294,7 +373,16 @@ Migrations apply automatically at startup.
 ## 7. Loose ends
 
 - A test device named **"Dev container"** is paired against the live server from
-  CLI testing. Harmless; revoke it from the web interface when convenient.
+  CLI testing, and **"Mo Desktop"** is the Windows machine used for the hardware
+  testing. Revoke either from the web interface when convenient.
+- **The attached iPod is not Mohamed's.** It is "Nihal's ipod", and the 18
+  library tracks were written onto it alongside 184 that were already there. It
+  has a full backup in `%LOCALAPPDATA%\SyncMyPod\backups` taken before the first
+  write, so putting it back exactly as it was is `IPod.restore(snapshot_id)`.
+- **`local/src/syncmypod_local/_bin` holds ~254MB of ffmpeg binaries** fetched
+  for testing the bundled path. Gitignored, but inside a OneDrive-synced folder,
+  so it will sync. Delete it if that is a nuisance; `fetch_ffmpeg.py` gets it
+  back.
 - **`Desktop/Claude/syncmypod-local`** on Mohamed's machine is the now-redundant
   original local-app repository. Its commit is preserved in the monorepo under
   `local/`. Safe to delete.
@@ -302,4 +390,13 @@ Migrations apply automatically at startup.
   `web/` or `local/` will trigger them. `local.yml` should pass; `web.yml`
   compiles Caddy from source and will be slow.
 - The live instance still holds 18 test tracks from resolver verification.
-  Real data, correctly resolved, but not a curated library.
+  Real data, correctly resolved, but not a curated library — and now all 18 are
+  on the iPod, so the next real test is adding something to the library and
+  watching it appear.
+- A pairing code was minted directly in the `pairing_codes` table over SSH
+  rather than generated in the web interface, because the interface needs a
+  browser session. Equivalent, but worth knowing that is possible:
+  ```sql
+  INSERT INTO pairing_codes (code, user_id, expires_at)
+  SELECT 'ABCD1234', id, now() + interval '20 minutes' FROM users LIMIT 1;
+  ```

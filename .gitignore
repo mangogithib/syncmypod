@@ -27,6 +27,12 @@ venv/
 .coverage
 htmlcov/
 
+# The bundled ffmpeg binaries. Fetched by local/scripts/fetch_ffmpeg.py rather
+# than committed: they are ~150MB per platform, they are not this project's
+# code, and a git history carrying several versions of them would be far larger
+# than everything else here put together.
+_bin/
+
 # --- Everywhere -------------------------------------------------------------
 *.log
 .DS_Store

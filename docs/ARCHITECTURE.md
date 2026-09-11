@@ -311,20 +311,59 @@ physically on the device.
 
 ## Part 3 — The local app
 
-Python 3.11+. CLI first; a GUI will sit on top of the same engine.
+Python 3.11+. The CLI and the GUI are two front ends over one engine — the GUI
+serves a page to the local browser and renders the same progress events the
+terminal prints, so neither can drift from the other.
 
 ### Module layout
 
 | Module | Responsibility |
 |---|---|
 | `cli.py` | Subcommands, exit codes, human-readable errors |
-| `config.py` | Where the token and server address live on disk |
+| `config.py` | Where the token, server address and backups live on disk |
 | `api.py` | The server's device API |
-| `device.py` | iPod detection and iTunesDB access — **the only module importing pyPodLib** |
-| *`sync.py`* | *Orchestration — not yet built* |
-| *`downloader.py`* | *yt-dlp — not yet built* |
-| *`tagging.py`* | *mutagen — not yet built* |
-| *`transcode.py`* | *ffmpeg — not yet built* |
+| `device.py` | iPod detection and iTunesDB access — **imports pyPodLib** |
+| `sync.py` | Orchestration: plan, run, report, clean up |
+| `downloader.py` | Finding and fetching audio with yt-dlp |
+| `tagging.py` | Writing the manifest's metadata onto the file, with mutagen |
+| `transcode.py` | Making a file the device can play — **imports pyPodLib** |
+| `ledger.py` | The record, kept on the iPod, of what this tool put there |
+| `workspace.py` | The scratch directory, and its guaranteed removal |
+| `ffmpeg.py` | Finding ffmpeg — bundled copy first, then PATH |
+| `gui/` | A localhost server and one page, over the same engine |
+
+### The diff
+
+The manifest reports what the server *believes* is on the device, as
+`deviceState`. It is a starting point, not evidence: the server cannot see the
+iPod, and the user may have used iTunes, deleted tracks, or restored the device
+between two syncs.
+
+So the real diff is made against the iPod's own database, and the link between a
+library track and a database row is written down in
+`iPod_Control/Device/SyncMyPod.json` — on the iPod rather than on the computer,
+so syncing from a second machine continues one history instead of starting a
+second. Where that record has nothing to say, a track is matched on title,
+artist and album, which is what lets a first sync to an iPod that already holds
+the library adopt its contents rather than duplicate them.
+
+The consequence that matters most: **a track this tool did not add can never be
+removed by it.** An iPod may hold years of music put there by something else.
+
+### Conversion
+
+Delegated to pyPodLib rather than driven directly, which is why `transcode.py`
+is the second module importing it.
+
+"An iPod cannot play Opus, so convert Opus to AAC" is about a third of the rule.
+A clickwheel iPod also refuses AAC that is not Low Complexity — the HE-AAC a
+source may return plays as silence — and refuses sample rates above 48kHz and
+24-bit depth, and the limits differ by model. pyPodLib already encodes all of
+that, keyed to the device currently open.
+
+The common case does no conversion at all: the downloader asks YouTube for the
+AAC stream before the Opus one, so the file usually arrives already playable.
+Re-encoding a lossy source into another lossy format is pure loss.
 
 ### Why pyPodLib is quarantined
 
@@ -333,11 +372,11 @@ implementation covering the database signatures a post-2007 iPod requires. It is
 also `0.1.0`, alpha, with a single release — and it is what rewrites the database
 the iPod boots from.
 
-So it is pinned to an exact version, and everything outside `device.py` talks to
-this project's own `IpodDevice` type. Replacing or forking it changes one file.
-The import is deferred into the functions that need it, so a broken install
-produces a clear message from `syncmypod status` rather than a traceback at
-startup.
+So it is pinned to an exact version, and everything outside `device.py` and
+`transcode.py` talks to this project's own `IpodDevice` type. Replacing or
+forking it changes two files, both small. The import is deferred into the
+functions that need it, so a broken install produces a clear message from
+`syncmypod status` rather than a traceback at startup.
 
 ### Database signatures
 
@@ -372,9 +411,25 @@ default.
 
 ### Safety
 
-Every run takes a backup (`IPod.backup()`) before writing. Writing a database is
-the one operation that can leave a device unusable, and the library is alpha, so
-a restore point costs a moment and removes the worst outcome.
+Four properties, in the order they matter.
+
+**Every run takes a backup before writing.** Writing a database is the one
+operation that can leave a device unusable, and the library is alpha, so a
+restore point costs a moment and removes the worst outcome. A backup that cannot
+be taken stops the sync rather than being skipped.
+
+**Nothing this tool did not add is ever removed.** See the diff, above.
+
+**An interrupted run leaves a device that still works.** Results are reported to
+the server as they happen rather than at the end, and the database is committed
+every few tracks rather than once — so a sync that loses its network, or is
+cancelled, keeps what it had already written and the next run resumes. Cancelling
+takes effect between tracks, never part-way through a database write.
+
+**Nothing downloaded outlives the sync.** Each track's files are deleted as soon
+as it is on the device, the workspace goes when the run ends however it ends, and
+a workspace orphaned by a process that was killed outright is removed by the next
+run.
 
 ---
 
