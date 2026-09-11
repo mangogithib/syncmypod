@@ -49,7 +49,7 @@ sitting at the computer with the iPod attached. So the two jobs are separate:
   long-lived token. Your password is never stored on that machine, and any token
   can be revoked independently.
 - **Sync API** — the manifest, run tracking and per-track result reporting that
-  the local app talks to. See [docs/LOCAL_APP_API.md](docs/LOCAL_APP_API.md).
+  the local app talks to. See [docs/LOCAL_APP_API.md](../docs/LOCAL_APP_API.md).
 
 ### Not built yet
 

@@ -1,5 +1,32 @@
-node_modules/
+# Both halves of the project, in one place. Patterns are path-agnostic, so a
+# single file is less to keep in step than one per directory.
+
+# --- Secrets. Never commit either of these. ---------------------------------
+# The web tool's environment file holds the database password, session secret
+# and DNS token; the local app's config holds a device bearer token.
 .env
 .env.local
+config.json
+*.token
+
+# --- Node (web/) ------------------------------------------------------------
+node_modules/
+npm-debug.log*
+
+# --- Python (local/) --------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Everywhere -------------------------------------------------------------
 *.log
 .DS_Store

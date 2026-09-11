@@ -1,14 +1,15 @@
 # SyncMyPod — local sync app
 
-The component of [SyncMyPod](https://github.com/mangogithib/syncmypod) that runs
+The component of [SyncMyPod](../README.md) that runs
 on the computer your iPod is plugged into.
 
-The web tool holds your library and **never touches audio**. This does: it reads
+The web tool in [`web/`](../web/) holds your library and **never touches audio**.
+This does: it reads
 what should be on the iPod, downloads whatever is missing, re-tags it from the
 server's resolved metadata, writes it to the device, and deletes every
 downloaded file once the transfer is confirmed.
 
-Two separate projects on purpose. The server runs continuously and holds only
+Two halves of one project. The server runs continuously and holds only
 data; this runs occasionally, holds nothing permanently, and is the only part
 that needs to be near the hardware.
 
@@ -105,7 +106,7 @@ version. Raw source metadata routinely collapses several artists into one field
 or amounts to little more than a video title.
 
 The contract is specified in the server repository's
-[docs/LOCAL_APP_API.md](https://github.com/mangogithib/syncmypod/blob/main/docs/LOCAL_APP_API.md).
+[docs/LOCAL_APP_API.md](../docs/LOCAL_APP_API.md).
 
 ---
 

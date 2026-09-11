@@ -50,7 +50,7 @@ dev = [
 syncmypod = "syncmypod_local.cli:main"
 
 [project.urls]
-Repository = "https://github.com/mangogithib/syncmypod-local"
+Repository = "https://github.com/mangogithib/syncmypod"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/syncmypod_local"]

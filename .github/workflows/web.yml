@@ -1,0 +1,132 @@
+# The web library manager.
+#
+# Path-filtered, so a change confined to local/ does not rebuild the server.
+#
+# There is no unit suite here yet, and this deliberately does not pretend
+# otherwise. What it does check is the set of mistakes that have actually been
+# made on this project: a syntax error shipped because nothing parsed the file,
+# a compose file that no longer interpolates, and an image that stopped
+# building. Each of those broke a deploy at least once.
+name: web
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - ".github/workflows/web.yml"
+  pull_request:
+    paths:
+      - "web/**"
+      - ".github/workflows/web.yml"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      # Every file, server and browser alike. The frontend has no build step, so
+      # nothing else would catch a syntax error in it before a user loaded the
+      # page.
+      - name: Parse every JavaScript file
+        run: |
+          failed=0
+          while IFS= read -r file; do
+            if ! node --check "$file"; then
+              echo "::error file=web/$file::failed to parse"
+              failed=1
+            fi
+          done < <(find server public -name '*.js')
+          exit $failed
+
+      # Catches an unparseable file or a variable that no longer interpolates.
+      # The dummy values stand in for the two required secrets; a real .env is
+      # never in the repository.
+      - name: Validate the compose file
+        env:
+          DB_PASSWORD: ci-placeholder
+          SESSION_SECRET: ci-placeholder
+        run: |
+          docker compose config --quiet
+          echo "base stack valid"
+          docker compose --profile public config --quiet
+          echo "public profile valid"
+
+      - name: Build the application image
+        run: docker build -t syncmypod-web:ci .
+
+      # The proxy is a separate image with its own build, and it compiles Caddy
+      # from source with a DNS plugin - the slowest and most breakable part of
+      # the stack, so it is worth proving it still builds.
+      - name: Build the proxy image
+        run: docker build -t syncmypod-caddy:ci ./caddy
+
+      # Proves the Caddyfile still parses and that the DNS provider needed for
+      # certificate issuance is present in the compiled binary.
+      - name: Validate the proxy configuration
+        run: |
+          docker run --rm \
+            -e PUBLIC_HOSTNAME=example.org \
+            -e PUBLIC_PORT=8444 \
+            -e DUCKDNS_TOKEN=ci-placeholder \
+            -e ACME_EMAIL=ci@example.org \
+            syncmypod-caddy:ci validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+  # The migrations are the part that cannot be rolled back, so they get their
+  # own job: applied in order against a real Postgres, exactly as they will be
+  # on a deploy.
+  migrations:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: syncmypod
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: syncmypod
+        options: >-
+          --health-cmd "pg_isready -U syncmypod"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Apply every migration from empty
+        env:
+          DATABASE_URL: postgres://syncmypod:ci@localhost:5432/syncmypod
+          SESSION_SECRET: ci-placeholder
+        run: npm run migrate
+
+      # Re-running must be a no-op. A migration that applies twice would fail
+      # on every restart of an existing deployment.
+      - name: Re-run to prove they are idempotent
+        env:
+          DATABASE_URL: postgres://syncmypod:ci@localhost:5432/syncmypod
+          SESSION_SECRET: ci-placeholder
+        run: npm run migrate
