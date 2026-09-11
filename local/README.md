@@ -41,6 +41,17 @@ PATH is used as a fallback, and `SYNCMYPOD_FFMPEG` overrides both.
 
 ## Use
 
+On Windows, `syncmypod.cmd` in this directory finds the virtualenv for you.
+Double-click it to open the window, or pass it any command:
+
+```
+syncmypod.cmd
+syncmypod.cmd sync --dry-run
+```
+
+Everything below works the same way through `syncmypod` itself once the package
+is installed.
+
 ```bash
 # Link this computer to your library. Generate the code in the web
 # interface under Devices. Your password is never needed or stored here.
