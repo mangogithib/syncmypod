@@ -335,6 +335,25 @@ class IpodDevice:
         self._commit()
         return linked
 
+    def eject(self) -> tuple[bool, str]:
+        """Flush and unmount the device, so it is safe to unplug.
+
+        The moment after a sync is exactly when an iPod gets pulled out of the
+        socket, and it is the worst moment to do it: a freshly written database
+        can still be sitting in the operating system's write cache. The library
+        recognises a simulated device and declines to hand one to the operating
+        system, which would otherwise unmount whatever real volume the folder
+        happens to live on.
+
+        Returns whether it worked and a message written to be shown as-is.
+        """
+        from pypodlib.device.eject import eject_ipod
+
+        try:
+            return eject_ipod(str(self.mount_path))
+        except Exception as err:
+            return False, f"Could not eject the iPod: {err}"
+
     def refresh_free_space(self) -> int | None:
         """Re-read free space after writing, for reporting to the server."""
         with contextlib.suppress(OSError):

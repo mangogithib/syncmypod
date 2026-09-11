@@ -7,6 +7,7 @@ Subcommands, each doing one thing:
     syncmypod devices                just the attached iPods
     syncmypod sync                   do the work
     syncmypod gui                    the same thing, in a browser
+    syncmypod eject                  make it safe to unplug
     syncmypod unpair                 forget the local pairing
 
 This is one of two front ends over the engine in ``sync.py``; the GUI is the
@@ -122,6 +123,18 @@ def _build_parser() -> argparse.ArgumentParser:
     devices = subparsers.add_parser("devices", help="List attached iPods")
     devices.set_defaults(handler=_cmd_devices)
 
+    eject = subparsers.add_parser(
+        "eject",
+        help="Flush and unmount the iPod so it is safe to unplug",
+        description=(
+            "A freshly written database can still be sitting in the operating "
+            "system's write cache. Pulling the cable then is how an iPod ends up "
+            "with a library it cannot read."
+        ),
+    )
+    eject.add_argument("--mount", default=None, help="Eject a specific mount point")
+    eject.set_defaults(handler=_cmd_eject)
+
     sync = subparsers.add_parser(
         "sync",
         help="Sync the library to the attached iPod",
@@ -164,6 +177,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sync.add_argument(
         "--yes", action="store_true", help="Do not ask before removing tracks"
+    )
+    sync.add_argument(
+        "--eject",
+        action="store_true",
+        help="Unmount the iPod when the sync finishes, so it is safe to unplug",
     )
     sync.add_argument("--verbose", action="store_true", help="Log what each step is doing")
     sync.set_defaults(handler=_cmd_sync)
@@ -356,11 +374,39 @@ def _cmd_sync(args: argparse.Namespace) -> int:
 
     _print_summary(report, dry_run=args.dry_run)
 
+    # After the summary, so the result of the sync is the last thing that was
+    # read before the device goes away.
+    if args.eject and not args.dry_run:
+        ok, message = report.plan.device.eject()
+        console.print()
+        console.print(
+            f"[green]Safe to unplug.[/green] {message}"
+            if ok
+            else f"[yellow]Could not eject:[/yellow] {message}"
+        )
+
     # A run where every track failed is a failure even though the sync itself
     # completed, because nothing the user asked for actually happened.
     if report.failed and not report.synced:
         return EXIT_FAILURE
     return EXIT_OK
+
+
+def _cmd_eject(args: argparse.Namespace) -> int:
+    found = [device.open_at(args.mount)] if args.mount else device.scan()
+    if not found:
+        console.print("[yellow]No iPod detected.[/yellow]")
+        return EXIT_OK
+
+    failures = 0
+    for ipod in found:
+        ok, message = ipod.eject()
+        if ok:
+            console.print(f"[green]Safe to unplug.[/green] {message}")
+        else:
+            console.print(f"[red]Not ejected.[/red] {message}")
+            failures += 1
+    return EXIT_FAILURE if failures else EXIT_OK
 
 
 def _cmd_gui(args: argparse.Namespace) -> int:

@@ -57,7 +57,15 @@ syncmypod sync
 
 # The window, if you would rather not use a terminal
 syncmypod gui
+
+# Flush and unmount before you pull the cable
+syncmypod eject
 ```
+
+`sync --eject` does the last one for you when the run finishes. Worth using: a
+freshly written database can still be sitting in the operating system's write
+cache, and unplugging then is how an iPod ends up with a library it cannot
+read.
 
 Useful flags on `sync`:
 
@@ -67,6 +75,7 @@ Useful flags on `sync`:
 | `--limit N` | Download at most N tracks, to keep a first run short |
 | `--remove` | Also delete tracks this tool added that have left the library |
 | `--mount D:\` | Point at a device instead of scanning for one |
+| `--eject` | Unmount the iPod when the run finishes |
 | `--verbose` | Log what each step is doing |
 
 Exit codes are meaningful, so this can be driven from a scheduled task: `0`

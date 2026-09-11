@@ -145,3 +145,41 @@ class TestChecksumNaming:
             checksum_type="UNKNOWN",
         )
         assert probe.needs_signature is True
+
+
+class TestEject:
+    """Making it safe to unplug.
+
+    The moment after a sync is when an iPod gets pulled out of the socket, and
+    it is the worst moment to do it: a freshly written database can still be in
+    the operating system's write cache.
+    """
+
+    def test_a_simulated_device_is_never_handed_to_the_operating_system(self, classic):
+        """A virtual iPod is an ordinary folder on a real disk.
+
+        Passing one to an OS eject call could unmount whatever volume that
+        folder happens to live on - which during a test run is the machine's
+        own drive. pyPodLib recognises the simulation and declines; this asserts
+        the behaviour rather than trusting it, because getting it wrong is not a
+        failed test, it is a lost filesystem.
+        """
+        ok, message = classic.eject()
+        assert ok
+        assert "no operating-system eject" in message.lower()
+
+    def test_it_reports_rather_than_raises(self, tmp_path):
+        probe = device.IpodDevice(
+            mount_path=tmp_path / "nowhere",
+            name=None,
+            model=None,
+            model_number=None,
+            generation=None,
+            serial=None,
+            capacity_bytes=None,
+            free_bytes=None,
+            checksum_type="NONE",
+        )
+        ok, message = probe.eject()
+        assert isinstance(ok, bool)
+        assert message
