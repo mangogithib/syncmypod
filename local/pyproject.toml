@@ -36,6 +36,11 @@ dependencies = [
   "httpx>=0.27.0",
   "platformdirs>=4.2.0",
   "rich>=13.7.0",
+  # Windows ships no system timezone database, so zoneinfo has nothing to read
+  # and pypodlib cannot parse an iTunesDB at all - it looks up the timezone the
+  # iPod itself is set to. Found on a real Classic set to Europe/Dublin, where
+  # the library read failed outright. Every other platform has one already.
+  "tzdata>=2024.1; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]

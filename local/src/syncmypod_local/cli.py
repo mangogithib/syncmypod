@@ -16,14 +16,18 @@ task: 0 success, 1 a problem the user can fix, 2 bad usage, 130 interrupted.
 from __future__ import annotations
 
 import argparse
+import logging
 import platform
 import sys
 from typing import NoReturn
 
 from rich.console import Console
+from rich.logging import RichHandler
 from rich.table import Table
 
 from . import __version__, config, device
+from . import ffmpeg as ffmpeg_finder
+from . import sync as sync_engine
 from .api import ApiError, DeviceApi, NotPairedError, claim_pairing_code
 
 EXIT_OK = 0
@@ -48,7 +52,13 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         err_console.print("\n[yellow]Interrupted.[/yellow] Nothing was left half-written.")
         return EXIT_INTERRUPTED
-    except (ApiError, device.DeviceError, config.ConfigError) as failure:
+    except (
+        ApiError,
+        device.DeviceError,
+        config.ConfigError,
+        sync_engine.SyncError,
+        ffmpeg_finder.FfmpegMissing,
+    ) as failure:
         # These carry messages written to be read by a person, so they are shown
         # as-is. A traceback here would be noise, not information.
         err_console.print(f"[red]Error:[/red] {failure}")
@@ -108,6 +118,52 @@ def _build_parser() -> argparse.ArgumentParser:
     devices = subparsers.add_parser("devices", help="List attached iPods")
     devices.set_defaults(handler=_cmd_devices)
 
+    sync = subparsers.add_parser(
+        "sync",
+        help="Sync the library to the attached iPod",
+        description=(
+            "Downloads whatever the library says should be on the iPod but is not, "
+            "tags it from the server's resolved metadata, writes it to the device, "
+            "and deletes every downloaded file afterwards. Start with --dry-run to "
+            "see what it would do."
+        ),
+    )
+    sync.add_argument("--mount", default=None, help="Sync a specific mount point")
+    sync.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Work out what would be done and stop. Writes nothing.",
+    )
+    sync.add_argument(
+        "--remove",
+        action="store_true",
+        help="Also delete tracks this tool added that have left the library",
+    )
+    sync.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Download at most N tracks, for a short first run",
+    )
+    sync.add_argument(
+        "--batch",
+        type=int,
+        default=sync_engine.DEFAULT_BATCH_SIZE,
+        metavar="N",
+        help=f"Tracks per database commit (default {sync_engine.DEFAULT_BATCH_SIZE})",
+    )
+    sync.add_argument(
+        "--keep-downloads",
+        action="store_true",
+        help="Leave downloaded files on disk for debugging. Prints where they are.",
+    )
+    sync.add_argument(
+        "--yes", action="store_true", help="Do not ask before removing tracks"
+    )
+    sync.add_argument("--verbose", action="store_true", help="Log what each step is doing")
+    sync.set_defaults(handler=_cmd_sync)
+
     return parser
 
 
@@ -154,6 +210,13 @@ def _cmd_status(args: argparse.Namespace) -> int:
     table.add_row("Server", stored.server_url)
     table.add_row("This device", stored.device_name or "(unnamed)")
     table.add_row("Token", f"{stored.token[:10]}...")
+    # Worth surfacing before a sync rather than at the first track that needs
+    # converting: without ffmpeg nothing can be downloaded at all.
+    found = ffmpeg_finder.find()
+    table.add_row(
+        "ffmpeg",
+        ffmpeg_finder.describe() if found else "[red]not found[/red] - audio cannot be fetched",
+    )
     console.print(table)
 
     # Reaching the server is a separate question from being paired, and worth
@@ -221,6 +284,174 @@ def _report_devices(mount: str | None) -> int:
         console.print()
 
     return EXIT_OK
+
+
+def _cmd_sync(args: argparse.Namespace) -> int:
+    _configure_logging(args.verbose)
+
+    stored = config.load()
+    if not stored.is_paired:
+        console.print("[yellow]Not paired.[/yellow]  Run:  syncmypod pair <server> <code>")
+        return EXIT_FAILURE
+
+    remove = args.remove
+    reporter = _SyncReporter(console)
+
+    # The plan is shown before anything is written, and removals are confirmed
+    # against that plan. Deleting music is the one thing here that cannot be
+    # undone from the web interface, so it is never the default and never silent.
+    if remove and not args.yes and sys.stdin.isatty():
+        preview = sync_engine.run(stored, mount=args.mount, dry_run=True, progress=reporter)
+        if preview.plan.removals:
+            console.print()
+            for removal in preview.plan.removals:
+                console.print(f"  [red]-[/red] {removal.label}")
+            console.print()
+            answer = console.input(
+                f"Delete {len(preview.plan.removals)} track(s) from the iPod? [y/N] "
+            )
+            if answer.strip().lower() not in {"y", "yes"}:
+                console.print("Leaving them in place.")
+                remove = False
+        reporter.reset()
+
+    report = sync_engine.run(
+        stored,
+        mount=args.mount,
+        dry_run=args.dry_run,
+        remove=remove,
+        limit=args.limit,
+        batch_size=max(1, args.batch),
+        keep_downloads=args.keep_downloads,
+        progress=reporter,
+    )
+
+    _print_summary(report, dry_run=args.dry_run)
+
+    # A run where every track failed is a failure even though the sync itself
+    # completed, because nothing the user asked for actually happened.
+    if report.failed and not report.synced:
+        return EXIT_FAILURE
+    return EXIT_OK
+
+
+class _SyncReporter:
+    """Turns the engine's progress events into something worth watching.
+
+    The engine reports events rather than printing, so the same run can drive a
+    terminal, a GUI, or a log file without any of them knowing about the others.
+    """
+
+    def __init__(self, output: Console):
+        self._console = output
+        self._planned = False
+
+    def reset(self) -> None:
+        self._planned = False
+
+    def __call__(self, event: str, data: dict) -> None:
+        if event == "device":
+            ipod = data["device"]
+            self._console.print(
+                f"[bold]{ipod.describe()}[/bold] at {ipod.mount_path}"
+                + (f"  ({_bytes(ipod.free_bytes)} free)" if ipod.free_bytes else "")
+            )
+        elif event == "plan" and not self._planned:
+            self._planned = True
+            self._print_plan(data["plan"])
+        elif event == "backup":
+            self._console.print("Backing up the iPod database...")
+        elif event == "track":
+            index, total = data["index"], data["total"]
+            self._console.print(f"[dim]{index}/{total}[/dim] {data['item'].label}")
+        elif event == "track-failed":
+            self._console.print(f"      [red]failed[/red]  {data['error']}")
+        elif event == "track-ready":
+            result = data["result"]
+            self._console.print(
+                f"      [green]ready[/green]  {result.format}"
+                + (f", {result.bitrate}kbps" if result.bitrate else "")
+                + f", {_bytes(result.file_size or 0)}"
+            )
+        elif event == "writing":
+            self._console.print(f"[dim]Writing {data['count']} track(s) to the iPod...[/dim]")
+        elif event == "playlists":
+            self._console.print(f"[dim]Writing {data['count']} playlist(s)...[/dim]")
+        elif event == "removing":
+            self._console.print(f"[dim]Removing {data['count']} track(s)...[/dim]")
+
+    def _print_plan(self, plan: sync_engine.Plan) -> None:
+        table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+        table.add_column(style="dim")
+        table.add_column(justify="right")
+        table.add_row("Already on the iPod", str(len(plan.already_present)))
+        if plan.adopted:
+            table.add_row("Matched by tags", str(len(plan.adopted)))
+        table.add_row("To download", str(len(plan.to_download)))
+        if plan.removals:
+            table.add_row("No longer in the library", str(len(plan.removals)))
+        if plan.playlists:
+            table.add_row("Playlists", str(len(plan.playlists)))
+        if plan.excluded:
+            table.add_row("Excluded (unresolved metadata)", str(len(plan.excluded)))
+        self._console.print()
+        self._console.print(table)
+        self._console.print()
+
+
+def _print_summary(report: sync_engine.Report, *, dry_run: bool) -> None:
+    console.print()
+    if dry_run:
+        console.print("[yellow]Dry run.[/yellow] Nothing was written to the iPod.")
+        if report.plan.to_download:
+            console.print(f"Run without --dry-run to sync {len(report.plan.to_download)} track(s).")
+        return
+
+    if report.message and not report.results:
+        console.print(report.message)
+        return
+
+    parts = [f"[green]{report.synced} synced[/green]"]
+    if report.failed:
+        parts.append(f"[red]{len(report.failed)} failed[/red]")
+    if report.removed:
+        parts.append(f"{report.removed} removed")
+    if report.playlists_written:
+        parts.append(f"{report.playlists_written} playlist(s) written")
+    console.print("  ".join(parts))
+
+    if report.failed:
+        console.print()
+        console.print("[red]Failed:[/red]")
+        for result in report.failed:
+            console.print(f"  {result.label}")
+            console.print(f"    [dim]{result.error}[/dim]")
+
+    if report.plan.excluded:
+        console.print()
+        console.print(
+            f"[yellow]{len(report.plan.excluded)} track(s) were skipped[/yellow] because their "
+            "metadata is not confirmed. Resolve them in the web interface."
+        )
+
+    if report.message:
+        console.print()
+        console.print(report.message)
+
+
+def _configure_logging(verbose: bool) -> None:
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.WARNING,
+        format="%(message)s",
+        datefmt="%H:%M:%S",
+        handlers=[RichHandler(console=err_console, show_path=False, rich_tracebacks=False)],
+    )
+    if not verbose:
+        # pypodlib narrates its own internal decisions at WARNING - which
+        # platform flag it preserved, that the play-count table is shorter than
+        # the track list. All expected on an iPod that has seen another tool,
+        # and none of it actionable, so it drowns out the run without --verbose.
+        logging.getLogger("pypodlib").setLevel(logging.ERROR)
 
 
 def _cmd_unpair(_args: argparse.Namespace) -> int:

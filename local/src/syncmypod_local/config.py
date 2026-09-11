@@ -37,6 +37,24 @@ def config_path() -> Path:
     return config_dir() / CONFIG_FILENAME
 
 
+def backups_dir() -> Path:
+    """Where iPod snapshots are kept before a sync writes anything.
+
+    Set explicitly rather than left to pypodlib, which otherwise files them
+    under a directory named after the project it was extracted from. A user
+    looking for "where are my iPod backups" should find them under this
+    application's own name, next to its configuration.
+
+    These are full snapshots of the device, so the directory grows to roughly
+    the size of the music on the iPod. It is content-addressed, so a second
+    snapshot of an unchanged device costs almost nothing.
+    """
+    override = os.environ.get("SYNCMYPOD_BACKUP_DIR")
+    if override:
+        return Path(override)
+    return config_dir() / "backups"
+
+
 @dataclass(slots=True)
 class Config:
     """A paired server: where it is, and the token proving we may talk to it."""

@@ -12,3 +12,8 @@
 *.ico binary
 *.woff binary
 *.woff2 binary
+
+# Audio test fixtures: real encoded files, never text.
+*.mp3 binary
+*.m4a binary
+*.opus binary
