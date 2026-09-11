@@ -31,7 +31,7 @@ def test_the_next_candidate_is_tried_when_the_first_is_blocked(monkeypatch, tmp_
     monkeypatch.setattr(downloader, "search", lambda _t: candidates("first", "second"))
     attempted = []
 
-    def flaky(url, destination, *, source, quality=None):
+    def flaky(url, destination, *, source):
         attempted.append(url)
         if url == "first":
             raise downloader.DownloadError("Sign in to confirm your age")
@@ -49,7 +49,7 @@ def test_it_gives_up_rather_than_working_through_every_result(monkeypatch, tmp_p
     monkeypatch.setattr(downloader, "search", lambda _t: candidates("a", "b", "c", "d", "e"))
     attempted = []
 
-    def always_fails(url, destination, *, source, quality=None):
+    def always_fails(url, destination, *, source):
         attempted.append(url)
         raise downloader.DownloadError("blocked")
 
@@ -68,7 +68,7 @@ def test_a_source_hint_is_not_second_guessed(monkeypatch, tmp_path):
     monkeypatch.setattr(
         downloader,
         "_download",
-        lambda url, destination, *, source, quality=None: downloader.Download(
+        lambda url, destination, *, source: downloader.Download(
             tmp_path / "ok.m4a", source, url, 268.0, 128
         ),
     )

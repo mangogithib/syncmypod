@@ -60,7 +60,7 @@ def paired():
 def audio_with_art(monkeypatch):
     """A download that lands a fixture file, and a CDN that serves a cover."""
 
-    def fake_fetch(track_dict, destination, quality=None):
+    def fake_fetch(track_dict, destination):
         destination.mkdir(parents=True, exist_ok=True)
         landed = destination / "source.m4a"
         shutil.copy(FIXTURES / "tagged.m4a", landed)

@@ -37,44 +37,13 @@
             <p class="muted">Checking…</p>
           </div>
         </article>
-      </section>
 
-      <section class="card" id="card-quality">
-        <div class="card-head">
-          <h2 class="card-title">Audio quality</h2>
-          <button class="link-button" id="quality-toggle" aria-expanded="false">Change</button>
-        </div>
-        <p class="quality-summary" id="quality-summary"></p>
-        <div class="quality-form" id="quality-form" hidden>
-          <div class="presets" id="quality-presets"></div>
-          <div class="field-row">
-            <label class="field">
-              <span class="field-label">Convert to</span>
-              <select id="quality-codec"></select>
-            </label>
-            <label class="field">
-              <span class="field-label">Ceiling</span>
-              <select id="quality-bitrate"></select>
-            </label>
-            <label class="field">
-              <span class="field-label">Minimum source</span>
-              <select id="quality-floor"></select>
-            </label>
+        <article class="card" id="card-youtube">
+          <h2 class="card-title">Audio source</h2>
+          <div class="card-body" id="youtube-body">
+            <p class="muted">Checking…</p>
           </div>
-          <label class="toggle">
-            <input type="checkbox" id="quality-best-source" />
-            <span>Chase the best source, even when it needs converting</span>
-          </label>
-          <label class="toggle">
-            <input type="checkbox" id="quality-shrink" />
-            <span>Shrink files that are already playable but above the ceiling</span>
-          </label>
-          <p class="subtle">
-            The ceiling is never exceeded, and never reached when the source is
-            worse: a 128kbps download stays 128kbps rather than being inflated
-            into a larger file holding the same sound.
-          </p>
-        </div>
+        </article>
       </section>
 
       <section class="actions">

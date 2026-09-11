@@ -70,10 +70,9 @@ async function refreshState() {
   }
 
   el("server-label").textContent = data.paired ? data.server : "Not paired";
-  lastChoices = data.qualityChoices || lastChoices;
   renderIpod(data);
   renderLibrary(data);
-  renderQuality(data);
+  renderYouTube(data);
 
   // Both halves have to be present before a sync can do anything: an iPod to
   // write to, and a pairing to know what belongs on it.
@@ -163,81 +162,114 @@ function renderLibrary(data) {
   }
 }
 
-/* -- audio quality ------------------------------------------------------- */
+/* -- audio source -------------------------------------------------------- */
 
 /*
-  The settings are written back the moment a control changes, with no Save
-  button. There are five of them and they are all cheap to reverse, so a save
-  step would be ceremony - and a form you can leave half-applied is worse than
-  one that just keeps up.
+  Signed out, YouTube hands over one AAC stream at about 128kbps; a Premium
+  account is offered the same recording at 256. That difference is the only
+  thing this card exists to communicate, so the bitrate is the headline and
+  everything else is support for it.
+
+  The bitrate is not fetched on page load. Asking YouTube costs a request and a
+  couple of seconds, and the page should open immediately - so it shows whether
+  a session is saved, and checks only when asked.
 */
 
-function renderQuality(data) {
-  const quality = data.quality;
-  const choices = data.qualityChoices;
-  if (!quality || !choices) return;
+let youtubeState = { signedIn: false, browsers: [], detail: null, premium: false };
 
-  el("quality-summary").textContent = summariseQuality(quality);
-
-  const presets = el("quality-presets");
-  clear(presets);
-  for (const name of choices.presets) {
-    const button = node("button", "preset", name);
-    button.type = "button";
-    button.setAttribute("aria-pressed", String(quality.name === name));
-    button.addEventListener("click", () => saveQuality({ preset: name }));
-    presets.append(button);
+function renderYouTube(data) {
+  if (data && data.youtube) {
+    youtubeState = { ...youtubeState, ...data.youtube };
   }
 
-  fillSelect(el("quality-codec"), choices.codecs.map((c) => [c, c.toUpperCase()]), quality.codec);
-  fillSelect(
-    el("quality-bitrate"),
-    choices.bitrates.map((b) => [b, `${b} kbps`]),
-    quality.maxBitrateKbps
+  const body = el("youtube-body");
+  clear(body);
+
+  const headline = youtubeState.detail
+    ? youtubeState.detail
+    : youtubeState.signedIn
+      ? "Signed in"
+      : "128kbps AAC";
+  body.append(node("p", "headline", headline));
+
+  body.append(
+    node(
+      "p",
+      "subtle",
+      youtubeState.signedIn
+        ? "Using your saved YouTube session."
+        : "Sign in with YouTube Music Premium for 256kbps."
+    )
   );
-  fillSelect(
-    el("quality-floor"),
-    choices.sourceFloors.map((b) => [b, b ? `${b} kbps` : "accept anything"]),
-    quality.minSourceKbps
-  );
 
-  // Phrased as what the user wants rather than as the internal flag, which is
-  // the negative of it.
-  el("quality-best-source").checked = !quality.preferNoReencode;
-  el("quality-shrink").checked = Boolean(quality.shrinkToCeiling);
-}
+  const actions = node("div", "card-actions");
 
-function summariseQuality(quality) {
-  const parts = [`${quality.name} · ${quality.codec.toUpperCase()} up to ${quality.maxBitrateKbps}kbps`];
-  if (quality.minSourceKbps) parts.push(`refusing below ${quality.minSourceKbps}kbps`);
-  if (!quality.preferNoReencode) parts.push("best source");
-  if (quality.shrinkToCeiling) parts.push("shrinking larger files");
-  return parts.join(" · ");
-}
+  if (youtubeState.signedIn) {
+    const check = node("button", "button button-small", "Check quality");
+    check.type = "button";
+    check.addEventListener("click", () => youtubeCall(check, "/api/youtube/check"));
+    actions.append(check);
 
-function fillSelect(select, options, selected) {
-  clear(select);
-  for (const [value, label] of options) {
-    const option = node("option", null, label);
-    option.value = String(value);
-    if (String(value) === String(selected)) option.selected = true;
-    select.append(option);
-  }
-}
-
-async function saveQuality(changes) {
-  try {
-    const result = await api("/api/quality", {
-      method: "POST",
-      body: JSON.stringify(changes),
+    const out = node("button", "button button-small", "Sign out");
+    out.type = "button";
+    out.addEventListener("click", async () => {
+      out.disabled = true;
+      await api("/api/youtube/sign-out", { method: "POST", body: "{}" }).catch(() => {});
+      youtubeState = { ...youtubeState, signedIn: false, detail: null, premium: false };
+      renderYouTube(null);
     });
-    if (result.saved) renderQuality({ quality: result.quality, qualityChoices: lastChoices });
-  } catch (error) {
-    el("quality-summary").textContent = `Could not save: ${error.message}`;
+    actions.append(out);
+  } else {
+    const picker = node("select", "select-small");
+    for (const browser of youtubeState.browsers || []) {
+      const option = node("option", null, browser);
+      option.value = browser;
+      picker.append(option);
+    }
+    actions.append(picker);
+
+    const signIn = node("button", "button button-small button-primary", "Sign in");
+    signIn.type = "button";
+    signIn.addEventListener("click", () =>
+      youtubeCall(signIn, "/api/youtube/sign-in", { browser: picker.value })
+    );
+    actions.append(signIn);
+  }
+
+  body.append(actions);
+
+  if (youtubeState.error) {
+    body.append(node("p", "notice notice-warn", youtubeState.error));
+  }
+  if (youtubeState.signedIn && youtubeState.detail && !youtubeState.premium) {
+    body.append(
+      node(
+        "p",
+        "subtle",
+        "256kbps needs an active YouTube Music Premium subscription on that account."
+      )
+    );
   }
 }
 
-let lastChoices = null;
+async function youtubeCall(button, path, payload = {}) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Working…";
+  try {
+    const result = await api(path, { method: "POST", body: JSON.stringify(payload) });
+    youtubeState = { ...youtubeState, ...result };
+    // A refused sign-in returns saved:false with a reason, and must not leave
+    // the card claiming a session exists.
+    if (result.saved === false) youtubeState.signedIn = false;
+  } catch (error) {
+    youtubeState = { ...youtubeState, error: error.message };
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+    renderYouTube(null);
+  }
+}
 
 function renderProblem(body, message) {
   clear(body);
@@ -508,27 +540,6 @@ function showSummary(summary) {
 }
 
 /* -- wiring -------------------------------------------------------------- */
-
-el("quality-toggle").addEventListener("click", () => {
-  const form = el("quality-form");
-  form.hidden = !form.hidden;
-  el("quality-toggle").setAttribute("aria-expanded", String(!form.hidden));
-  el("quality-toggle").textContent = form.hidden ? "Change" : "Done";
-});
-
-el("quality-codec").addEventListener("change", (e) => saveQuality({ codec: e.target.value }));
-el("quality-bitrate").addEventListener("change", (e) =>
-  saveQuality({ maxBitrateKbps: Number(e.target.value) })
-);
-el("quality-floor").addEventListener("change", (e) =>
-  saveQuality({ minSourceKbps: Number(e.target.value) })
-);
-el("quality-best-source").addEventListener("change", (e) =>
-  saveQuality({ preferNoReencode: !e.target.checked })
-);
-el("quality-shrink").addEventListener("change", (e) =>
-  saveQuality({ shrinkToCeiling: e.target.checked })
-);
 
 el("btn-sync").addEventListener("click", () => start({ dryRun: false }));
 el("btn-check").addEventListener("click", () => start({ dryRun: true }));

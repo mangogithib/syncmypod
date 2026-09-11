@@ -24,13 +24,13 @@ project's state and its reasoning.
 | Local app: pair / status / devices | Working, verified against the live server |
 | Local app: the sync engine | Working, verified on real hardware |
 | Album art on the device | Working — verified by decoding it back off the iPod |
-| Audio quality settings | Working, per computer rather than per library |
+| YouTube Premium sign-in | Working — 256kbps where the account allows it |
 | Local app: GUI | First version — status, sync, live progress, cancel |
 | Bundled ffmpeg | Fetch script written; binaries are gitignored |
 | **Packaging to a single executable** | **Not started — this is next** |
 
 Roughly 14,700 lines across 45 JavaScript files, 13 Python modules, 4 SQL
-migrations. 184 Python tests, all passing.
+migrations. 144 Python tests, all passing.
 
 ### Live instance
 
@@ -100,18 +100,18 @@ fine, but start from the reasoning rather than from scratch.
   An iPod moved between two computers then continues one history rather than
   starting a second, which is the same reasoning as the pairing design. It is
   keyed by server and user, so two accounts can share a device.
-- **Quality settings live in the local config, not on the server.** Mohamed
-  asked for quality selection "from the local app", and it is genuinely a
-  per-computer decision: what will fit on this iPod and what this connection
-  will download. Putting it server-side would have meant a migration, an API
-  change and web UI work for a setting that is not about the library.
-- **There is deliberately no way to ask for more quality than the source has.**
-  Almost everything comes from YouTube at roughly 128kbps AAC, and encoding
-  that at 320 produces a file two and a half times the size holding identical
-  sound. The ceiling is capped at the source's own bitrate, and "compact" only
-  re-encodes files genuinely above it - converting 128 to 128 costs quality and
-  saves nothing. If a bitrate menu is ever demanded, this is the argument
-  against it.
+- **No audio quality setting, deliberately.** One was built on 11 September and
+  removed the same day at Mohamed's request, and he was right: signed out,
+  YouTube offers exactly one AAC stream at ~128kbps, and a Premium account is
+  offered one at 256. There is nothing to choose between, so the policy is a
+  single format expression that takes the best AAC the account is entitled to.
+  A bitrate menu would offer numbers no source can supply. If one is ever
+  demanded again, this is the argument against it.
+- **Signing in to YouTube stores only youtube.com cookies.** yt-dlp's extractor
+  calls `_get_cookies('https://www.youtube.com')` and nothing else, so a whole
+  browser jar would put every other signed-in session on disk for no benefit.
+  `google.com` is dropped with the rest, which is the difference between a file
+  granting YouTube access and one granting a Google account.
 - **A track this tool did not add is never removed by it.** This is the property
   the ledger exists to guarantee. An iPod may hold years of music from iTunes or
   another tool, and the cost of being wrong here is somebody's music.
@@ -288,18 +288,33 @@ plain `pypodlib`. Not optional: without them the feature silently does nothing.
 ### Store Python hides the config and the backups
 
 Python installed from the Microsoft Store runs in an app container that
-redirects writes under `%LOCALAPPDATA%` into
-`AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_.../LocalCache`.
-The redirect is invisible to the writing process - it reads the file back from
-the path it asked for - so `syncmypod status` reported a config path that File
-Explorer insisted did not exist. The 1.2GB of iPod backups are in there too.
+redirects writes under `%LOCALAPPDATA%` into a per-package
+`AppData/Local/Packages/PythonSoftwareFoundation.Python.3.13_.../LocalCache`
+tree. The redirect is invisible to the writing process - it reads the file back
+from the path it asked for - so `syncmypod status` reported a config path that
+File Explorer insisted did not exist. The 1.2GB of iPod backups are in there too.
 
 Not a bug, and it disappears once the app is packaged, because a PyInstaller
-executable is an ordinary Win32 process. But two consequences: the pairing and
-quality settings made during development will **not** carry over to the
-packaged build, and anything stored now is lost if that Python is reset. The
-CLI now prints `os.path.realpath` of the config path, which resolves the
-redirect and shows somewhere a person can actually navigate to.
+executable is an ordinary Win32 process. But two consequences: the pairing made
+during development will **not** carry over to the packaged build, and anything
+stored now is lost if that Python is reset. The CLI prints
+`os.path.realpath` of the config path, which resolves the redirect.
+
+### YouTube's 256kbps stream needs an authenticated Premium session
+
+Verified by listing formats on a real track. Signed out, the best available is
+itag 140 (AAC, 129kbps) or itag 251 (Opus, 133kbps). Itag 141, the 256kbps AAC,
+simply does not appear in the format list - it is offered only to a signed-in
+YouTube Music Premium account.
+
+So Opus is never the better choice despite the higher number: an iPod cannot
+play it, so taking it means a re-encode that ends up worse than the AAC it beat.
+
+Cookie extraction has two failure modes worth knowing. Chromium locks its cookie
+database while running, and since Chrome 127 seals it with App-Bound Encryption
+that another process cannot unwrap on Windows at all. **Firefox is the one that
+works there**, which is why it is listed first and is the default. Safari is
+only offered on macOS because yt-dlp refuses it elsewhere.
 
 ### Infrastructure traps
 

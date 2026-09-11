@@ -69,12 +69,37 @@ syncmypod sync
 # The window, if you would rather not use a terminal
 syncmypod gui
 
-# How good the audio should be
-syncmypod quality
+# Sign in to YouTube for 256kbps instead of 128
+syncmypod youtube sign-in firefox
 
 # Flush and unmount before you pull the cable
 syncmypod eject
 ```
+
+## Audio quality
+
+Signed out, YouTube offers one AAC stream at about 128kbps. A **YouTube Music
+Premium** account is offered the same recording at **256kbps** — which matters,
+because the iTunes Store sold music at 256 and an iPod Classic plays up to 320.
+
+```bash
+syncmypod youtube             # what YouTube is currently offering
+syncmypod youtube sign-in     # borrow the session from Firefox
+syncmypod youtube sign-out    # delete it again
+```
+
+There is no password to type. The session is borrowed from a browser already
+signed in to YouTube, and **only youtube.com cookies are kept** — nothing from
+any other site, and nothing from your Google account, because yt-dlp's YouTube
+extractor never asks for anything else.
+
+Two practical notes. Use **Firefox** on Windows: Chromium locks its cookie
+database while running, and since Chrome 127 seals it so another program cannot
+read it at all. And the saved file is a login session, so it is written 0600
+where the platform supports it and `sign-out` deletes it.
+
+There is deliberately no bitrate setting. The right answer is always "the best
+AAC this account is offered", which needs no choosing.
 
 `sync --eject` does the last one for you when the run finishes. Worth using: a
 freshly written database can still be sitting in the operating system's write
@@ -94,37 +119,6 @@ Useful flags on `sync`:
 
 Exit codes are meaningful, so this can be driven from a scheduled task: `0`
 success, `1` a problem you can fix, `2` bad usage, `130` interrupted.
-
-## Audio quality
-
-Three presets, and the fields behind them:
-
-| | |
-|---|---|
-| `high` | Chase the best-sounding source, and accept a conversion to get it |
-| `balanced` | Take whatever the iPod can already play, untouched (default) |
-| `compact` | The same, and shrink anything above the ceiling |
-
-```bash
-syncmypod quality high
-syncmypod quality --min-source 128      # refuse anything worse
-syncmypod quality --bitrate 160         # ceiling for a conversion
-syncmypod quality --codec mp3           # instead of AAC
-syncmypod sync --quality compact        # one run only, setting unchanged
-```
-
-**There is no option to raise quality above what the source holds, and that is
-deliberate.** Most tracks come from YouTube at roughly 128kbps AAC. Encoding
-that at 256 produces a file twice the size containing exactly the same sound, so
-the ceiling is a maximum and never a target: a 128kbps download stays 128kbps.
-
-The same reasoning is why `compact` only re-encodes files genuinely above its
-ceiling. Converting a 128kbps file to a 128kbps target costs quality and saves
-nothing.
-
-`--min-source` is the one that can make a track fail. It is applied before
-anything is downloaded, and a track with no good enough source is reported to
-the server as failed with the reason, rather than quietly arriving at 64kbps.
 
 ## The window
 

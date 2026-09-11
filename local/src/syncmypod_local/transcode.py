@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import ffmpeg as ffmpeg_finder
-from .quality import Quality, preset
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +41,6 @@ class Converted:
     path: Path
     was_transcoded: bool
     target: str
-    bitrate_kbps: int | None = None
 
     @property
     def format(self) -> str:
@@ -50,7 +48,7 @@ class Converted:
         return self.path.suffix.lstrip(".").lower()
 
 
-def prepare(source: Path, destination: Path, quality: Quality | None = None) -> Converted:
+def prepare(source: Path, destination: Path) -> Converted:
     """Return a version of *source* the open device can play.
 
     Call this only after the iPod has been opened: pypodlib decides the target
@@ -60,28 +58,11 @@ def prepare(source: Path, destination: Path, quality: Quality | None = None) -> 
     from pypodlib.sync.transcoder import (
         TranscodeOptions,
         TranscodeTarget,
-        probe_audio,
         resolve_transcode_plan,
         transcode,
     )
 
-    wanted = quality or preset("balanced")
-    source_kbps = _source_bitrate(probe_audio, source)
-    target_kbps = wanted.bitrate_for(source_kbps)
-
-    options = TranscodeOptions(
-        ffmpeg_path=_ffmpeg_path(),
-        # "auto" resolves to the best available AAC encoder, which is what every
-        # clickwheel iPod wants. MP3 is offered because it is the one format
-        # that plays on absolutely anything.
-        lossy_encoder="libmp3lame" if wanted.codec == "mp3" else "auto",
-        bitrate_mode="cbr",
-        music_lossy_cbr_bitrate=target_kbps,
-        # Only ever set when the source is genuinely larger than the ceiling.
-        # Turning this on unconditionally would re-encode a 128kbps file to a
-        # 128kbps ceiling: a loss of quality in exchange for nothing.
-        always_encode_lossy=wanted.needs_shrinking(source_kbps),
-    )
+    options = TranscodeOptions(ffmpeg_path=_ffmpeg_path())
 
     try:
         plan = resolve_transcode_plan(source, options=options)
@@ -89,27 +70,19 @@ def prepare(source: Path, destination: Path, quality: Quality | None = None) -> 
         raise TranscodeError(f"Could not inspect {source.name}: {err}") from err
 
     if plan.target == TranscodeTarget.COPY:
-        # Already playable and within the ceiling. Tag it and hand it over where
-        # it is - copying it somewhere else first would only mean deleting two
-        # files instead of one.
-        logger.info("%s needs no conversion (%s kbps)", source.name, source_kbps or "?")
-        return Converted(
-            path=source, was_transcoded=False, target="copy", bitrate_kbps=source_kbps
-        )
+        # Already playable. Tag it and hand it over where it is - copying it
+        # somewhere else first would only mean deleting two files instead of one.
+        logger.info("%s needs no conversion", source.name)
+        return Converted(path=source, was_transcoded=False, target="copy")
 
     # Anything else means ffmpeg, so find out now rather than after the encode
     # has been set up.
     ffmpeg_finder.require()
-    logger.info(
-        "Converting %s to %s at %dkbps (source %s kbps)",
-        source.name, plan.target.value, target_kbps, source_kbps or "?",
-    )
+    logger.info("Converting %s to %s", source.name, plan.target.value)
 
     destination.mkdir(parents=True, exist_ok=True)
     try:
-        result = transcode(
-            source, destination, output_filename="converted", plan=plan, options=options
-        )
+        result = transcode(source, destination, output_filename="converted", plan=plan, options=options)
     except Exception as err:
         raise TranscodeError(f"Converting {source.name} failed: {err}") from err
 
@@ -122,29 +95,12 @@ def prepare(source: Path, destination: Path, quality: Quality | None = None) -> 
         path=Path(result.output_path),
         was_transcoded=bool(result.was_transcoded),
         target=plan.target.value,
-        bitrate_kbps=target_kbps,
     )
 
 
 def available() -> bool:
     """Whether a conversion could run if one turned out to be needed."""
     return ffmpeg_finder.find() is not None
-
-
-def _source_bitrate(probe, source: Path) -> int | None:
-    """What the source actually holds, or None if it cannot be read.
-
-    None matters: it means the ceiling cannot be capped to the source, so the
-    requested bitrate is used as-is. Better than guessing a low number and
-    quietly degrading something that was fine.
-    """
-    try:
-        properties = probe(source)
-    except Exception as err:
-        logger.debug("Could not probe %s: %s", source.name, err)
-        return None
-    value = getattr(properties, "bitrate_kbps", None)
-    return int(value) if value else None
 
 
 def _ffmpeg_path() -> str:

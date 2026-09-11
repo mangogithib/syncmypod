@@ -7,7 +7,7 @@ Subcommands, each doing one thing:
     syncmypod devices                just the attached iPods
     syncmypod sync                   do the work
     syncmypod gui                    the same thing, in a browser
-    syncmypod quality                how good the audio should be
+    syncmypod youtube                sign in for higher quality audio
     syncmypod eject                  make it safe to unplug
     syncmypod unpair                 forget the local pairing
 
@@ -33,8 +33,8 @@ from rich.table import Table
 
 from . import __version__, config, device
 from . import ffmpeg as ffmpeg_finder
-from . import quality as quality_module
 from . import sync as sync_engine
+from . import youtube as youtube_module
 from .api import ApiError, DeviceApi, NotPairedError, claim_pairing_code
 
 EXIT_OK = 0
@@ -65,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         config.ConfigError,
         sync_engine.SyncError,
         ffmpeg_finder.FfmpegMissing,
+        youtube_module.YouTubeError,
     ) as failure:
         # These carry messages written to be read by a person, so they are shown
         # as-is. A traceback here would be noise, not information.
@@ -125,53 +126,43 @@ def _build_parser() -> argparse.ArgumentParser:
     devices = subparsers.add_parser("devices", help="List attached iPods")
     devices.set_defaults(handler=_cmd_devices)
 
-    quality = subparsers.add_parser(
-        "quality",
-        help="Show or change how good the audio should be",
+    youtube = subparsers.add_parser(
+        "youtube",
+        help="Sign in to YouTube for higher quality audio",
         description=(
-            "With no arguments, shows the current settings. There is deliberately "
-            "no option to raise quality above what a source actually holds: "
-            "re-encoding a 128kbps download at 256 produces a file twice the size "
-            "containing the same sound."
+            "Signed out, YouTube offers one AAC stream at about 128kbps. A "
+            "YouTube Music Premium account is offered the same recording at "
+            "256kbps. There is no password to type: the session is borrowed "
+            "from a browser already signed in, and only youtube.com cookies "
+            "are kept."
         ),
     )
-    quality.add_argument(
-        "preset",
+    youtube_action = youtube.add_subparsers(dest="action", metavar="<action>")
+
+    youtube_status = youtube_action.add_parser(
+        "status", help="What YouTube is currently offering (default)"
+    )
+    youtube_status.set_defaults(handler=_cmd_youtube_status)
+
+    youtube_login = youtube_action.add_parser(
+        "sign-in", help="Borrow the YouTube session from a browser"
+    )
+    youtube_login.add_argument(
+        "browser",
         nargs="?",
-        choices=quality_module.PRESETS,
-        help="high chases the best source and converts; balanced takes what the "
-        "iPod can already play; compact does that and shrinks anything oversized",
+        default="firefox",
+        choices=youtube_module.BROWSERS,
+        help="Which browser to read the session from (default firefox, which is "
+        "the one that reliably works on Windows)",
     )
-    quality.add_argument(
-        "--codec",
-        choices=quality_module.CODECS,
-        help="What a conversion produces (default aac)",
+    youtube_login.set_defaults(handler=_cmd_youtube_sign_in)
+
+    youtube_out = youtube_action.add_parser(
+        "sign-out", help="Delete the saved session from this computer"
     )
-    quality.add_argument(
-        "--bitrate",
-        type=int,
-        metavar="KBPS",
-        help="The most to spend on a conversion. Never exceeds the source's own.",
-    )
-    quality.add_argument(
-        "--min-source",
-        type=int,
-        metavar="KBPS",
-        help="Refuse a track whose best source is below this. 0 accepts anything.",
-    )
-    quality.add_argument(
-        "--best-source",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Chase the highest-bitrate stream even when it needs converting",
-    )
-    quality.add_argument(
-        "--shrink",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Re-encode files that are already playable but above the ceiling",
-    )
-    quality.set_defaults(handler=_cmd_quality)
+    youtube_out.set_defaults(handler=_cmd_youtube_sign_out)
+
+    youtube.set_defaults(handler=_cmd_youtube_status)
 
     eject = subparsers.add_parser(
         "eject",
@@ -232,12 +223,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--eject",
         action="store_true",
         help="Unmount the iPod when the sync finishes, so it is safe to unplug",
-    )
-    sync.add_argument(
-        "--quality",
-        choices=quality_module.PRESETS,
-        default=None,
-        help="Use this preset for one run, without changing the stored setting",
     )
     sync.add_argument("--verbose", action="store_true", help="Log what each step is doing")
     sync.set_defaults(handler=_cmd_sync)
@@ -319,7 +304,12 @@ def _cmd_status(args: argparse.Namespace) -> int:
         "ffmpeg",
         ffmpeg_finder.describe() if found else "[red]not found[/red] - audio cannot be fetched",
     )
-    table.add_row("Quality", stored.quality.describe())
+    # Not probed here: checking costs a request to YouTube, and `status` is the
+    # command people run when something is wrong and they want an answer now.
+    table.add_row(
+        "YouTube",
+        "signed in" if youtube_module.is_signed_in() else "not signed in (128kbps)",
+    )
     console.print(table)
 
     # Reaching the server is a separate question from being paired, and worth
@@ -418,10 +408,6 @@ def _cmd_sync(args: argparse.Namespace) -> int:
                 remove = False
         reporter.reset()
 
-    chosen = quality_module.preset(args.quality) if args.quality else stored.quality
-    if args.quality:
-        console.print(f"[dim]Using the {chosen.name} quality setting for this run.[/dim]")
-
     report = sync_engine.run(
         stored,
         mount=args.mount,
@@ -431,7 +417,6 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         batch_size=max(1, args.batch),
         keep_downloads=args.keep_downloads,
         progress=reporter,
-        quality=chosen,
     )
 
     _print_summary(report, dry_run=args.dry_run)
@@ -454,70 +439,66 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _cmd_quality(args: argparse.Namespace) -> int:
-    stored = config.load()
-    current = stored.quality
+def _cmd_youtube_status(_args: argparse.Namespace) -> int:
+    console.print("Asking YouTube what it will offer...")
+    available = youtube_module.check()
 
-    # A preset resets everything; the individual flags then adjust it. So
-    # `quality compact --bitrate 160` means "compact, but at 160", and a flag on
-    # its own changes one thing and leaves the rest alone.
-    updated = quality_module.preset(args.preset) if args.preset else current
-
-    changes: dict[str, object] = {}
-    if args.codec:
-        changes["codec"] = args.codec
-    if args.bitrate is not None:
-        changes["max_bitrate_kbps"] = max(32, min(320, args.bitrate))
-    if args.min_source is not None:
-        changes["min_source_kbps"] = max(0, min(320, args.min_source))
-    if args.best_source is not None:
-        changes["prefer_no_reencode"] = not args.best_source
-    if args.shrink is not None:
-        changes["shrink_to_ceiling"] = args.shrink
-    if changes:
-        updated = updated.with_changes(**changes)
-
-    if updated != current:
-        config.save(config.Config(**{**_as_kwargs(stored), "quality": updated}))
-        console.print(f"[green]Saved.[/green]  {_where(config.config_path())}")
-
-    _print_quality(updated)
-    return EXIT_OK
-
-
-def _print_quality(current) -> None:
     table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
     table.add_column(style="dim")
     table.add_column()
-    table.add_row("Setting", current.name)
-    table.add_row("Convert to", current.codec.upper())
-    table.add_row("Ceiling", f"{current.max_bitrate_kbps} kbps")
-    table.add_row(
-        "Minimum source",
-        f"{current.min_source_kbps} kbps" if current.min_source_kbps else "accept anything",
-    )
-    table.add_row(
-        "Source preference",
-        "whatever the iPod plays as-is" if current.prefer_no_reencode else "the best available",
-    )
-    table.add_row("Shrink oversized files", "yes" if current.shrink_to_ceiling else "no")
+    table.add_row("Session", "saved" if available.signed_in else "none")
+    table.add_row("Best AAC offered", available.describe())
     console.print(table)
-    console.print()
+
+    if not available.signed_in:
+        console.print()
+        console.print(
+            "[dim]Sign in with a YouTube Music Premium account to get 256kbps "
+            "instead of 128:[/dim]"
+        )
+        console.print("  syncmypod youtube sign-in firefox")
+    elif not available.premium:
+        console.print()
+        console.print(
+            "[yellow]The session works, but this account is not being offered "
+            "the Premium stream.[/yellow] 256kbps needs an active YouTube Music "
+            "Premium subscription."
+        )
+    return EXIT_OK
+
+
+def _cmd_youtube_sign_in(args: argparse.Namespace) -> int:
+    console.print(f"Reading the YouTube session from [bold]{args.browser}[/bold]...")
+    available = youtube_module.sign_in(args.browser)
+
+    console.print(f"[green]Saved.[/green] {_where(youtube_module.cookies_path())}")
     console.print(
-        "[dim]The ceiling is never exceeded, and never reached when the source is "
-        "worse - a 128kbps download stays 128kbps rather than being inflated.[/dim]"
+        "[dim]Only youtube.com cookies were kept - nothing from any other site, "
+        "and nothing from your Google account.[/dim]"
     )
+    console.print()
+
+    if available.premium:
+        console.print(f"[green]Premium confirmed.[/green] {available.describe()}")
+    elif available.error:
+        console.print(f"[yellow]Saved, but the check failed:[/yellow] {available.error}")
+    else:
+        console.print(
+            f"[yellow]Signed in, but still only {available.describe()}.[/yellow]"
+        )
+        console.print(
+            "256kbps needs an active YouTube Music Premium subscription on the "
+            "account that browser is signed in with."
+        )
+    return EXIT_OK
 
 
-def _as_kwargs(stored: config.Config) -> dict[str, object]:
-    """The stored pairing as constructor arguments, so one field can change."""
-    return {
-        "server_url": stored.server_url,
-        "token": stored.token,
-        "device_name": stored.device_name,
-        "last_ipod_name": stored.last_ipod_name,
-        "last_ipod_model": stored.last_ipod_model,
-    }
+def _cmd_youtube_sign_out(_args: argparse.Namespace) -> int:
+    if youtube_module.forget():
+        console.print("[green]Session deleted.[/green] Downloads will be 128kbps again.")
+    else:
+        console.print("There was no saved session.")
+    return EXIT_OK
 
 
 def _cmd_eject(args: argparse.Namespace) -> int:

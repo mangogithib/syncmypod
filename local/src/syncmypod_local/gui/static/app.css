@@ -246,12 +246,6 @@ body {
   font-size: var(--text-sm);
   color: var(--text-muted);
   cursor: pointer;
-}
-
-/* Only the one in the button row is pushed to the far side, away from the
-   buttons. Applying it to every toggle right-aligned the quality checkboxes,
-   which belong under the fields they qualify. */
-.actions .toggle {
   margin-left: auto;
 }
 
@@ -423,104 +417,42 @@ body {
     padding: var(--space-4) var(--space-3);
   }
 
-  .actions .toggle {
+  .toggle {
     margin-left: 0;
     flex-basis: 100%;
   }
 }
 
-/* --- Audio quality ------------------------------------------------------ */
+/* --- Audio source (YouTube sign-in) -------------------------------------- */
 
-.card-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.link-button {
-  appearance: none;
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  font-size: var(--text-sm);
-  color: var(--accent-text);
-  cursor: pointer;
-}
-
-.link-button:hover {
-  text-decoration: underline;
-}
-
-.quality-summary {
-  margin: 0;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
-
-.quality-form {
-  margin-top: var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.presets {
+.card-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
-/* A segmented control rather than a dropdown: three options the user is meant
-   to compare, and a dropdown hides two of them behind a click. */
-.preset {
-  appearance: none;
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--text-sm);
+.button-small {
   padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-pill);
-  cursor: pointer;
-  text-transform: capitalize;
+  font-size: var(--text-sm);
 }
 
-.preset:hover {
-  background: var(--surface-3);
-}
-
-.preset[aria-pressed="true"] {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent-text);
-  font-weight: 600;
-}
-
-.field-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: var(--space-3);
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.field-label {
-  font-size: var(--text-xs);
-  color: var(--text-subtle);
-}
-
-.field select {
+.select-small {
   font: inherit;
   font-size: var(--text-sm);
-  padding: var(--space-2);
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
+}
+
+/* The bitrate is the number the whole feature is about, so it gets to be the
+   one thing on this card the eye lands on first. */
+.headline {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }

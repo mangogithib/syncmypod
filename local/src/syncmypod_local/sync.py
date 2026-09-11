@@ -36,7 +36,6 @@ from . import config as config_module
 from . import device as device_module
 from . import downloader, ledger, tagging, transcode, workspace
 from .api import ApiError, DeviceApi
-from .quality import Quality
 
 logger = logging.getLogger(__name__)
 
@@ -269,7 +268,6 @@ def run(
     keep_downloads: bool = False,
     progress: Progress | None = None,
     cancel: Callable[[], bool] | None = None,
-    quality: Quality | None = None,
 ) -> Report:
     """Sync the library to the attached iPod.
 
@@ -285,10 +283,6 @@ def run(
     """
     say = progress or (lambda event, data: None)
     stop = cancel or (lambda: False)
-    # An explicit override beats the stored setting, so a one-off run at a
-    # different quality does not have to change the configuration and change it
-    # back afterwards.
-    wanted = quality or stored.quality
 
     if not stored.is_paired:
         raise SyncError(
@@ -343,8 +337,7 @@ def run(
 
         try:
             _execute(
-                api, ipod, plan, record, report, say, batch_size, remove,
-                keep_downloads, stop, wanted,
+                api, ipod, plan, record, report, say, batch_size, remove, keep_downloads, stop
             )
         except KeyboardInterrupt:
             report.status = "cancelled"
@@ -373,7 +366,6 @@ def _execute(
     remove: bool,
     keep_downloads: bool,
     stop: Callable[[], bool],
-    quality: Quality,
 ) -> None:
     """Download, tag, write and report, a batch at a time."""
     with workspace.Workspace(keep=keep_downloads) as work, httpx.Client(
@@ -404,7 +396,7 @@ def _execute(
                 break
 
             try:
-                prepared, result = _prepare_one(item, work, artwork_client, quality)
+                prepared, result = _prepare_one(item, work, artwork_client)
             except Exception as err:  # a failed track must not end the run
                 logger.warning("%s failed: %s", item.label, err)
                 pending.append(
@@ -475,10 +467,7 @@ def _execute(
 
 
 def _prepare_one(
-    item: TrackPlan,
-    work: workspace.Workspace,
-    artwork_client: httpx.Client,
-    quality: Quality,
+    item: TrackPlan, work: workspace.Workspace, artwork_client: httpx.Client
 ) -> tuple[Path, Result]:
     """Download one track, convert it if needed, and tag it from the manifest.
 
@@ -489,8 +478,8 @@ def _prepare_one(
     """
     directory = work.track_dir(item.id)
 
-    download = downloader.fetch(item.track, directory, quality)
-    converted = transcode.prepare(download.path, directory, quality)
+    download = downloader.fetch(item.track, directory)
+    converted = transcode.prepare(download.path, directory)
 
     artwork = tagging.fetch_artwork(item.track.get("artworkUrl"), client=artwork_client)
     tagging.apply(converted.path, item.track, artwork)
@@ -500,10 +489,7 @@ def _prepare_one(
         state="synced",
         label=item.label,
         format=converted.format,
-        # What the file on the device actually is, not what was downloaded. A
-        # conversion changes it, and the server records this as the track's
-        # bitrate - so reporting the source's would be wrong.
-        bitrate=converted.bitrate_kbps or download.bitrate_kbps,
+        bitrate=download.bitrate_kbps,
         file_size=converted.path.stat().st_size,
         source_used=download.source,
     )

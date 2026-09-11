@@ -40,7 +40,7 @@ def audio_source(monkeypatch):
     """Replaces the download with a fixture, and records what was asked for."""
     asked: list[dict] = []
 
-    def fake_fetch(track_dict, destination, quality=None):
+    def fake_fetch(track_dict, destination):
         asked.append(track_dict)
         destination.mkdir(parents=True, exist_ok=True)
         landed = destination / "source.m4a"
@@ -211,7 +211,7 @@ class TestPlaylists:
     def test_a_track_that_failed_is_dropped_rather_than_leaving_a_gap(
         self, ipod, paired, audio_source, monkeypatch
     ):
-        def fail_for_two(track_dict, destination, quality=None):
+        def fail_for_two(track_dict, destination):
             if track_dict["id"] == 2:
                 raise downloader.DownloadError("nothing found")
             destination.mkdir(parents=True, exist_ok=True)
@@ -310,7 +310,7 @@ class TestFailures:
     def test_one_track_failing_does_not_stop_the_others(
         self, ipod, paired, monkeypatch
     ):
-        def fail_for_two(track_dict, destination, quality=None):
+        def fail_for_two(track_dict, destination):
             if track_dict["id"] == 2:
                 raise downloader.DownloadError("No source found")
             destination.mkdir(parents=True, exist_ok=True)
@@ -406,7 +406,7 @@ class TestTranscoding:
     ):
         """The one format conversion that is not optional."""
 
-        def opus_source(track_dict, destination, quality=None):
+        def opus_source(track_dict, destination):
             destination.mkdir(parents=True, exist_ok=True)
             landed = destination / "source.opus"
             shutil.copy(FIXTURES / "source.opus", landed)
