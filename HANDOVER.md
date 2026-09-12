@@ -8,7 +8,7 @@ For what the tool *is*, read [README.md](README.md). For how it works
 internally, read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). This file is the
 project's state and its reasoning.
 
-**Last updated:** 12 September 2026 (YouTube Music metadata, Sources, re-matching unresolved songs, artist credit splitting)
+**Last updated:** 12 September 2026 (one playlist box for five services, YouTube Music as a resolver tier, unresolved songs sync, phone layout)
 
 ---
 
@@ -17,28 +17,28 @@ project's state and its reasoning.
 | Area | State |
 |---|---|
 | Web library manager | Working, deployed, publicly reachable over HTTPS |
-| Metadata resolution | Working — Deezer → iTunes → MusicBrainz, **no API keys needed** |
-| Search | Working — combined by default, **YouTube Music** as a named fallback with real structured metadata |
+| Metadata resolution | Working — Deezer → iTunes → MusicBrainz → **YouTube Music**, no API keys |
+| Search | Working — combined by default, YouTube Music as a named fallback |
 | Artist and album pages | Working — browse a discography before adding anything |
-| Bulk import: pasted list | Working |
-| Bulk import: Deezer playlist | Working |
-| Bulk import: YouTube playlist link | Working — verified on a real 50-track playlist |
-| Sources (followed playlists) | Working — YouTube and Deezer links, re-read when the page is opened |
-| Connected YouTube account | Built and tested against a stubbed Google; **waiting on a Google OAuth client** |
-| Re-matching unresolved songs | Working — asks YouTube Music, merges into existing rows |
-| Splitting combined artist credits | Working — verified against Deezer, so real bands survive |
+| Import: any playlist link | Working — **Spotify, Apple Music, YouTube, YouTube Music, Deezer** in one box |
+| Import: pasted list | Working |
+| Sources (followed playlists) | Working — same five services, re-read when the page is opened |
+| Connected YouTube account | Built; **blocked on the OAuth consent screen's Test users list** |
+| Re-matching songs with no artist | Working — a re-run of the resolver, merged into existing rows |
+| Splitting combined artist credits | Working — verified against Deezer, real bands survive |
+| Metadata autocomplete | Working — library names first, then Deezer |
 | Followed artists | Working — future releases, and optionally the back catalogue |
 | Device pairing + sync API | Working, verified end to end |
 | Local app: the sync engine | Working, verified on real hardware |
 | Album art on the device | Working — verified by decoding it back off the iPod |
-| YouTube Premium sign-in (local) | Working — 256kbps where the account allows it. No browser picker |
-| Local app: GUI | Working — pairing, status, sync, live progress, cancel. No terminal anywhere |
-| Bundled ffmpeg | Working — fetched by the build, shipped in the zip |
-| Downloadable build | **Published** — 0.1.1, see the release link below |
-| CI | Green. Now also checks for undefined references, which shipped twice |
-| Furnishing (visual polish) | First pass done; what remains is taste rather than defect |
+| YouTube Premium sign-in (local) | Working — no browser picker, tries them all |
+| Local app: GUI | Working — no terminal anywhere |
+| Downloadable build | **Published** — 0.1.1 |
+| Phone layout | Working — verified at 375px; the songs table drops to title + artist |
+| CI | Green. Parses every file and checks for undefined references |
+| **A web test suite** | **Still none. The largest gap — see What is next** |
 
-Roughly 17,000 lines across 55 JavaScript files, 16 Python modules, 7 SQL
+Roughly 18,000 lines across 56 JavaScript files, 16 Python modules, 7 SQL
 migrations. 182 Python tests, all passing. The web side still has **no unit
 suite** — see What is next.
 
@@ -52,8 +52,8 @@ suite** — see What is next.
 | Deploy directory | `/root/syncmypod` |
 | Containers | `syncmypod-app-1`, `syncmypod-db-1`, `syncmypod-caddy-1` |
 | Certificate | Let's Encrypt, expires 10 Dec 2026, auto-renews |
-| Contents (12 Sep) | 353 songs, 478 artists, 317 albums, 3 playlists, 5 paired devices |
-| Needing attention | 38 songs with no artist, 4 artist rows naming more than one person |
+| Contents | 388 songs, ~480 artists, 3 playlists, 5 paired devices |
+| Needing attention | 23 songs with no artist — they sync, with blank fields |
 
 ### The download
 
@@ -546,6 +546,96 @@ Other facts about both routes:
   `SESSION_SECRET`). Rotating the session secret invalidates stored grants,
   which is correct — rotating it is what you do after a compromise.
 
+### Reading a playlist from five services without a single key
+
+`providers/playlists.js` detects the service from the address and reads it. One
+box on Import, one on Sources; adding a service is a reader there and nothing
+else.
+
+    Spotify        open.spotify.com/embed/playlist/{id}  ->  __NEXT_DATA__
+    Apple Music    music.apple.com/{cc}/playlist/...     ->  serialized-server-data
+    YouTube        as documented above
+    YouTube Music  same playlist ids, different host
+    Deezer         its public API
+
+**Spotify's Web API is still unavailable** and this is not a substitute for
+trying it: it refuses every call unless the account owning the registered app
+holds Premium. The embed page is the same data an `<iframe>` on any blog
+already loads, and carries title, credited artists and duration.
+
+Four things that cost time:
+
+- **Apple Music wraps its tracks in shelves**, and a shelf holding the single
+  card for the playlist itself matches the same shape. Taking the first match
+  returned one "track" called "Today's Hits" by "Apple Music Hits". The
+  *largest* list of items wins instead.
+- **Apple Music's node titles are useless** - a shelf is called "Tracks" or
+  nothing - so the playlist name comes from the page's `<title>`.
+- **`spotify:playlist:ID` parses as a URL with an empty hostname**, so it has to
+  be matched before the host checks, not after.
+- **SoundCloud is not supported, deliberately.** Its pages are a JavaScript
+  application with nothing server-rendered to read, so it needs a `client_id`
+  scraped out of a JS bundle and then API calls. That is the one genuinely
+  fragile option, and shipping it beside four stable readers would misrepresent
+  how reliable it is.
+
+**What a reader is trusted with is the important part.** Each declares a
+`quality`, and that decides what survives a failed match:
+
+    catalogue   Spotify, Apple Music, Deezer. The credits are records, so an
+                unmatched track keeps them.
+    upload      YouTube, YouTube Music. The "artist" was split out of a video
+                title, so it is a search and is discarded if nothing confirms
+                it - the metadata rule, unchanged.
+
+### YouTube Music is a resolver tier, not a button
+
+It sits at the end of the ladder, reached only when Deezer, iTunes and
+MusicBrainz have all said no, which for this library means a regional or very
+recent release.
+
+**It is not in the scored provider list.** The scorer asks "does this candidate
+match what you already know", and for a track whose only known field is a title
+there is nothing to check against - every candidate scores about 0.5 and none is
+ever accepted. Correct for a catalogue search, useless here, where YouTube
+Music's answer *is* the metadata. So it is judged on its own terms, and those
+terms took four passes over real data to get right:
+
+- **Title overlap measured against the shorter title** gives a short generic
+  answer a perfect score. "just us" by Gabriela Bee scored 1.00 against
+  "JUST US - AASHIR WAJAHAT | KOMAL MEER" and was written to the library.
+- **So the other direction is checked too:** everything significant in the
+  upload title must be accounted for by the answer (`answerExplains`).
+- **But not too literally.** Upload titles name actors ("Leher (Official Video)
+  Shahid, Kriti, Rashmika") and uncredited duet partners ("Anne-Marie & Ed
+  Sheeran - 2002"). Requiring every name cost every one of those a match.
+- **So duration is ranked first, and checked before the title gate.** Within
+  five seconds identifies a recording about as well as anything short of an
+  ISRC. Checking it after the gate threw away "2002 (Acoustic)", five seconds
+  out, in favour of plain "2002", nineteen seconds out.
+
+**And it searches the ORIGINAL title**, not the decoration-stripped one.
+`stripDecorations` removes "(From 'Brahmastra')" because the licensed catalogues
+file it that way; YouTube Music does the opposite and indexes film music *with*
+the film. Handing it the stripped title meant every search ran, every search
+succeeded, and every one returned the wrong record. That one cost an afternoon.
+
+### Unresolved songs sync, with empty fields
+
+They used to be held back, which meant a song somebody deliberately added never
+reached the device and the only remedy was typing an artist by hand. Mohamed
+asked for the opposite and he was right.
+
+An unresolved row already stores an empty artist and a null album, so the
+manifest writes exactly those and the iPod files it under Unknown Artist -
+honest, visible, and fixable later. `pending` is still held back: that means
+resolution has not been attempted yet rather than attempted and failed.
+
+The source URL travels with the track in `library_tracks.source_hint`, and the
+local app short-circuits its YouTube search when one is present. That matters
+most for exactly these tracks: a title-only search for a song with no artist is
+the weakest search there is.
+
 ### Splitting a combined artist credit, without inventing band members
 
 The Artists page listed people who do not exist: "Pritam & Soham", "Kailash
@@ -751,7 +841,19 @@ Worth knowing so they are not reintroduced:
 
 Roughly in the order it is worth doing.
 
-### 1. The Google OAuth client — waiting on Mohamed, blocks nothing else
+### 1. The Google OAuth client — the live blocker, and it is one checkbox
+
+Mohamed created the client and got **Error 403: access_denied** at sign-in. That
+is not a code fault: the request was well formed, with the right redirect URI
+and scope. `youtube.readonly` is a **sensitive scope**, so an account that is
+not on the OAuth consent screen's **Test users** list is refused.
+
+Google Cloud console → APIs & Services → OAuth consent screen → Audience →
+Test users → add the exact account being signed in with. Keep the app in
+**Testing**; moving it to Production requires Google verification, which is not
+worth it for one person.
+
+The full steps are on the Settings page, with that cause called out.
 
 He is creating it. Once he has:
 
@@ -766,21 +868,29 @@ He is creating it. Once he has:
 Then **Sources → Connect YouTube account**. Everything else on Sources and
 Import works today without it.
 
-### 2. A web-side test suite — the largest gap in the project
+### 2. A web-side test suite, and a route smoke test first
 
-There is none. `web / check` parses every file, checks for undefined references,
-validates the compose file and builds the images. That catches a typo, a missing
-import and a broken Dockerfile, and nothing about whether the code is *right*.
+Still none, and it is now the clearest gap. Three bugs reached the user's screen
+in two days and every one would have been caught by the simplest possible test:
 
-The local app has 182 tests and they have repeatedly caught real bugs. The web
-app has the resolver, the scorer, the artist splitter and the metadata rule —
-all pure logic, all easy to test, and all currently unprotected. Two of the
-three bugs a user saw this week were in the web half.
+- the Import page threw `loadJobs is not defined`;
+- a route used `rateLimit` its file never imported, and the container
+  restart-looped;
+- Settings returned 500 on every load because a handler's parameter is named
+  `_req` and the new line said `req`.
 
-Start with `lib/normalise.js` (`matchKey`, `scoreCandidate`, `stripDecorations`)
-and `services/artist-split.js` (`classify` against a stubbed Deezer, with the
-band list as fixtures). Node has a built-in test runner, so this needs no new
-dependency: `node --test`.
+`scripts/check-references.mjs` now catches the first two. It did **not** catch
+the third, and cannot: it flags identifiers *called* as functions, and `req`
+there is an argument.
+
+**Start with a route smoke test.** CI already runs Postgres for the migrations
+job. Boot the app against it, request every GET route, and assert nothing
+returns 500. That is perhaps forty lines and would have caught all three.
+
+Then unit tests, which need no new dependency - Node has `node --test`. The
+resolver, `lib/normalise.js` (`matchKey`, `scoreCandidate`, `titleOverlap`,
+`answerExplains`) and `services/artist-split.js` are pure logic with real
+regression history; the band list in section 5 is ready-made fixtures.
 
 ### 3. A local-files source
 
@@ -807,12 +917,10 @@ available static macOS build is GPL and this project is MIT —
 
 ### Open questions, not yet decided
 
-- **Whether YouTube Music should be trusted directly.** Its artist and album
-  fields come from Google's music catalogue, not from a video title, so they are
-  genuinely good. They are currently used only as a *search query*, and a track
-  the other catalogues cannot confirm still ends up with a title alone. That
-  honours the metadata rule as written; relaxing it for YouTube Music
-  specifically is a decision for Mohamed, not a refactor.
+- **SoundCloud.** The only one of the six services asked for that is not
+  supported, because its pages are a JavaScript application and reading it needs
+  a `client_id` scraped from a JS bundle. Worth doing only if somebody actually
+  wants it, and worth marking as the fragile one when they do.
 - Whether to strip `(From "...")` suffixes from titles before writing tags. They
   currently reach the iPod verbatim.
 - Deezer's contributor order puts the composer first, so Kesariya reads
@@ -960,26 +1068,39 @@ cd local/dist && unzip -p SyncMyPod-*.zip '*/_internal/**/app.js' | grep -c rend
 
 ---
 
-## 9. What happened in the session ending 12 September
+## 9. What happened, and what was got wrong first
 
-Recorded because the reasoning matters more than the diffs, and two of these
-reversed an earlier decision.
+Recorded because the reasoning matters more than the diffs, and because several
+of these reversed an earlier decision of mine.
 
 | Change | Why |
 |---|---|
-| **YouTube Music metadata** | Ported ytmusicapi's method (InnerTube, `WEB_REMIX` client) to Node. Structured artist/album/song fields instead of a video title. Turned two unresolvable regional tracks into resolved ones with ISRCs |
-| **Removed the local-app library push** | Built it, then Mohamed corrected the premise: the local app's YouTube sign-in is a *borrowed* account kept for downloading. Reading its playlists is reading somebody else's library |
-| **Settings: Google OAuth fields** | They were in the schema and the API but the page renders fields by hand, so the screen the setup instructions point at had no boxes |
-| **Removed the browser picker** | "Which browser are you signed in to YouTube in" is a question most people cannot answer. Every browser is tried; the one viewing the page goes first |
-| **Sources page** | An import happens once; a source is followed. The YouTube account moved here from Import, where it looked like a fourth one-shot importer |
-| **Re-matching unresolved songs** | YouTube Music changed the odds for tracks stored with a title alone |
-| **Artist credit splitting** | The Artists page listed people who do not exist. Solved by verification rather than punctuation |
+| **YouTube Music metadata** | ytmusicapi's method ported to Node. Structured artist/album/song instead of a video title |
+| **YouTube Music as resolver tier 4** | Mohamed: it is a metadata source, so it belongs in the resolver, not behind a button |
+| **Unresolved songs sync with empty fields** | Holding them back meant a song somebody added never reached the device |
+| **One playlist box, five services** | The address says which service it is; asking the user first was a question with an obvious answer |
+| **Artist credits split, unconfirmed parts included** | The Artists page listed people who do not exist |
+| **Metadata autocomplete** | The library already held "Garvit - Priyansh" *and* "Garvit-Priyansh" |
+| **Phone layout** | Mohamed expects a phone to be the main device |
+| **OAuth setup moved to Settings** | Five Google Cloud steps made the Sources page look like work |
 | **Reference checker in CI** | Two undefined-reference bugs shipped in one session |
-| **Dead code and layout fixes** | Two unused exports, three unreachable CSS rules, cards stretching to a common height, illegible disabled buttons |
+| **Sources page** | An import happens once; a source is followed |
 | **Release 0.1.1 published** | The local app changed, so the download had to |
 
-Three things were got wrong first and are worth not repeating: treating "Sign in
-with Google" as an alternative to OAuth rather than the same thing; assuming the
-local app's YouTube session could stand in for the user's own; and splitting
-artist credits on punctuation before checking them. Each is written up in
-section 5.
+Six things were got wrong first. Each is written up in section 5, and each is
+worth not repeating:
+
+1. Treating "Sign in with Google" as an alternative to OAuth rather than the
+   same mechanism.
+2. Assuming the local app's borrowed YouTube session could stand in for the
+   user's own account.
+3. Splitting artist credits on punctuation before checking them — and then
+   over-correcting into refusing a credit over one unknown name.
+4. Handing the YouTube Music tier a decoration-stripped title, so every search
+   succeeded and every one returned the wrong record.
+5. Deleting a combined artist without moving its albums, when the foreign key is
+   `ON DELETE SET NULL` — seventeen albums quietly lost their artist.
+6. Slicing code from one comment marker to another. It has now eaten a function
+   definition (`loadJobs`) and, on a second occasion, six unrelated functions.
+   **Bound a replacement by the exact thing that follows it**, and check the
+   function list afterwards.
