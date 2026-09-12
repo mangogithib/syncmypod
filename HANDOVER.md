@@ -8,8 +8,8 @@ For what the tool *is*, read [README.md](README.md). For how it works
 internally, read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). This file is the
 project's state and its reasoning.
 
-**Last updated:** 12 September 2026 (YouTube playlist import, connected YouTube
-account, first published release)
+**Last updated:** 12 September 2026 (YouTube playlist import, following a
+YouTube library with no setup, first published release)
 
 ---
 
@@ -24,7 +24,7 @@ account, first published release)
 | Bulk import: pasted list | Working |
 | Bulk import: Deezer playlist | Working |
 | Bulk import: YouTube playlist link | Working — verified on a real 50-track playlist |
-| Connected YouTube account | Built and tested against a stubbed Google; **needs a Google OAuth client to use for real** |
+| Follow a YouTube library | Working via the local app, **no setup at all**. OAuth route also built, for refresh-on-open from a phone |
 | Followed artists | Working — future releases, and optionally the back catalogue |
 | Device pairing + sync API | Working, verified end to end |
 | Local app: the sync engine | Working, verified on real hardware |
@@ -36,8 +36,8 @@ account, first published release)
 | CI | Green as of 12 September, after two long-standing failures were fixed |
 | **Furnishing (visual polish)** | **Not started — this is next** |
 
-Roughly 16,000 lines across 48 JavaScript files, 13 Python modules, 5 SQL
-migrations. 176 Python tests, all passing.
+Roughly 16,000 lines across 48 JavaScript files, 13 Python modules, 6 SQL
+migrations. 206 Python tests, all passing.
 
 ### Live instance
 
@@ -419,26 +419,61 @@ Do not "simplify" these walkers back into direct property access. They are
 defensive on purpose, and the page has already changed once during this
 project's lifetime.
 
-### Reading someone's own YouTube playlists needs OAuth, and that cannot be avoided
+### A website cannot get a YouTube session, but the local app already has one
 
-Everything else in this app works with no account and no key. The connected
-YouTube account is the one exception, and it is not an oversight:
+This was got wrong first time round, and the correction is worth keeping.
 
-- Reading somebody's own playlists requires their permission.
-- Permission requires OAuth.
-- Google issues OAuth credentials only to a registered application.
-- **A client secret in a public repository is not a secret**, and Google revokes
-  the ones it finds — so there is no key that could be shipped instead.
+**"Sign in with Google" IS OAuth.** They are one mechanism, not two. The login
+button a service like TuneMyMusic shows is its own registered OAuth client's
+consent screen; the developer-console step is not an alternative to that button,
+it is what makes the button exist. Mohamed reasonably read them as two separate
+things, and the first version of this feature sent him to the Google console to
+get one.
 
-So the instance owner registers one client, once. Until they do, the Import page
-shows the five steps and the exact redirect URI rather than an error.
+Everything else a website could try is genuinely closed:
 
-Other facts about that integration:
+- Asking for the Google password directly is credential phishing. 2FA defeats
+  it, Google blocks it, and this project will not build it.
+- Framing `accounts.google.com` is blocked by `X-Frame-Options: DENY`.
+- Opening youtube.com in a popup and reading its cookies is exactly what the
+  same-origin policy exists to prevent.
+- A client secret in a public repository is not a secret; Google revokes the
+  ones it finds.
 
-- **Saved albums are not exposed by Google's API.** YouTube Music albums saved
-  to a library are not playlists and there is no endpoint that lists them. The
-  card says so; an album is still importable by its playlist link, which YouTube
-  Music offers from the album's share menu.
+**But the local app is already signed in.** It borrows the browser's cookies to
+fetch the 256kbps stream, and that same session lists the account's own
+playlists and liked songs. So the local app reads the library and pushes it to
+the server, and that is now the primary route: nothing to register, and no
+YouTube credential on the server at all.
+
+Three steps, and the middle one is the point:
+
+    POST /api/sync/youtube/library    the local app sends the playlist list
+    (the user ticks what to follow, in the web UI)
+    POST /api/sync/youtube/playlist   the local app sends only those contents
+
+Sending everything up front would mean walking a whole account to import two
+playlists; a liked list runs to thousands. The server refuses a playlist that is
+not currently ticked, so a stale client cannot override a choice made since.
+
+**What it trades away:** the server holds no credential, so it cannot refresh
+the library itself. A pushed library is as current as the last local app run,
+which is when the iPod is plugged in anyway. The OAuth route stays for
+refresh-on-open from a phone, behind a collapsed "or connect an account
+instead".
+
+Other facts about both routes:
+
+- **Saved albums are not exposed at all.** YouTube Music albums saved to a
+  library are not playlists, and neither Google's API nor the pages list them.
+  The card says so; an album is still importable by its playlist link, which
+  YouTube Music offers from the album's share menu.
+- **Watch Later and History are filtered out** of the local-app route. The first
+  is a queue of videos rather than a music collection; the second is not a
+  playlist at all.
+- **Flat extraction is essential** there too. Without `extract_flat`, yt-dlp
+  opens every video in a playlist in turn - thousands of requests for one liked
+  list, and the surest way to be rate limited.
 - **Liked songs are the `LL` playlist**, reached through
   `channels.list(mine=true).contentDetails.relatedPlaylists.likes`.
 - **`access_type=offline` plus `prompt=consent` are both required.** Google
@@ -563,20 +598,15 @@ Mohamed's word for visual polish, and the last thing on the list by his own
 sequencing. `web/public/css/theme.css` is all tokens and the local app's GUI
 carries a copy, so re-theming is two files that must be kept in step.
 
-### Before the connected YouTube account can be used
+### Using the YouTube library follower
 
-It is built and tested, but needs one thing only Mohamed can do:
+Nothing to set up. In the local app: sign in to YouTube on the Audio source
+card, then press **Send playlists to server**. The playlists appear on the web
+Import page; tick which to follow, then press it again and those are imported.
 
-1. Google Cloud console → new project → enable **YouTube Data API v3**.
-2. Credentials → OAuth client ID → **Web application**.
-3. Authorised redirect URI:
-   `https://syncmypod.duckdns.org:8444/api/youtube-account/callback`
-4. OAuth consent screen → add himself under **Test users**. Publishing and
-   verification are not needed for his own account.
-5. Paste the client ID and secret into Settings.
-
-The Import page shows these same steps with the redirect URI ready to copy, so
-this is a reminder rather than the only record.
+The OAuth route needs a Google client registering and is only worth it for
+refresh-on-open from a phone. Its steps are on the Import page behind "Or
+connect an account to this server instead", with the redirect URI ready to copy.
 
 ### Then
 
