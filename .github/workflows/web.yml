@@ -5,8 +5,9 @@
 # There is no unit suite here yet, and this deliberately does not pretend
 # otherwise. What it does check is the set of mistakes that have actually been
 # made on this project: a syntax error shipped because nothing parsed the file,
-# a compose file that no longer interpolates, and an image that stopped
-# building. Each of those broke a deploy at least once.
+# a function called after its definition was deleted, a route using an import
+# its file did not have, a compose file that no longer interpolates, and an
+# image that stopped building. Each of those broke something at least once.
 name: web
 
 on:
@@ -52,6 +53,22 @@ jobs:
             fi
           done < <(find server public -name '*.js')
           exit $failed
+
+      # Parsing is not enough, and this project has the scars to prove it.
+      #
+      # `node --check` has no idea whether `loadJobs()` refers to anything, so
+      # two separate bugs reached the browser: a function called after its
+      # definition was deleted, and a route using `rateLimit` that its file
+      # never imported. Each took down a whole page and each parsed perfectly.
+      #
+      # This imports every server module for real and scans every file for
+      # identifiers that are called but never defined. It is the part of a
+      # linter that has actually caught something here, with no new dependency.
+      - name: Check for undefined references
+        env:
+          DATABASE_URL: postgres://unused@localhost:5432/unused
+          SESSION_SECRET: ci-placeholder
+        run: node scripts/check-references.mjs .
 
       # Catches an unparseable file or a variable that no longer interpolates.
       # The dummy values stand in for the two required secrets; a real .env is

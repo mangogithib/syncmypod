@@ -1,9 +1,10 @@
 import { Router } from 'express';
-import { requireUser } from '../auth/middleware.js';
+import { rateLimit, requireUser } from '../auth/middleware.js';
 import { one, query, transaction } from '../db/pool.js';
 import { badRequest, handler, id, notFound, pagination, str } from '../lib/api.js';
 import * as library from '../services/library.js';
 import { appendToPlaylist } from '../services/playlist-writes.js';
+import { countUnresolved, startRematch } from '../services/rematch.js';
 import {
   resolveAndSave,
   resolveTrack,
@@ -337,3 +338,34 @@ libraryRoutes.get(
   })
 );
 
+// ---------------------------------------------------------------------------
+// Another go at the songs nothing could identify
+// ---------------------------------------------------------------------------
+//
+// These exist because the odds changed. A track stored with a title and no
+// artist was, until YouTube Music was added, close to unmatchable - a title on
+// its own is not enough to identify a recording. YouTube Music answers with
+// structured fields, so those tracks are worth asking about again.
+
+libraryRoutes.get(
+  '/unresolved/count',
+  handler(async (req, res) => {
+    res.json({ count: await countUnresolved(req.user.id) });
+  })
+);
+
+libraryRoutes.post(
+  '/unresolved/rematch',
+  // A pass over a whole library is a burst of outbound provider requests, and
+  // running two at once would double them for no gain.
+  rateLimit({ windowMs: 300_000, max: 3, key: (req) => `rematch:${req.user?.id}` }),
+  handler(async (req, res) => {
+    try {
+      const { jobId, total } = await startRematch(req.user.id);
+      // 202: accepted and running, not finished. The client polls the job.
+      res.status(202).json({ jobId, total });
+    } catch (err) {
+      throw badRequest(err.message);
+    }
+  })
+);

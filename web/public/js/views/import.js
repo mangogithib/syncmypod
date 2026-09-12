@@ -54,6 +54,17 @@ export async function renderImport(view, context) {
 
   await loadJobs();
 
+  async function loadJobs() {
+    if (!context.isCurrent()) return;
+    try {
+      const { jobs } = await api.importJobs();
+      if (!context.isCurrent()) return;
+      mount(jobsSlot, jobs.length > 0 ? jobHistory(jobs) : null);
+    } catch {
+      // History is informational; a failure here should not break the page.
+    }
+  }
+
   // --- pasted list ---------------------------------------------------------
 
   function trackListCard() {

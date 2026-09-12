@@ -138,6 +138,9 @@ export const api = {
     request('POST', '/api/import/youtube-playlist', payload),
   importJobs: () => request('GET', '/api/import/jobs'),
 
+  unresolvedCount: () => request('GET', '/api/library/unresolved/count'),
+  rematchUnresolved: () => request('POST', '/api/library/unresolved/rematch'),
+
   // --- standing sources ---------------------------------------------------
   sources: () => request('GET', '/api/sources'),
   addSource: (url) => request('POST', '/api/sources', { url }),
