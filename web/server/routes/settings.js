@@ -5,7 +5,6 @@ import * as deezer from '../providers/deezer.js';
 import * as itunes from '../providers/itunes.js';
 import * as musicbrainz from '../providers/musicbrainz.js';
 import * as youtube from '../providers/youtube.js';
-import { redirectUri } from '../services/youtube-account.js';
 import { describe, SETTING_KEYS, setMany } from '../services/app-settings.js';
 
 export const settingsRoutes = Router();
@@ -64,15 +63,8 @@ function providerStatus() {
 
 settingsRoutes.get(
   '/',
-  handler(async (req, res) => {
-    // The redirect address belongs with the fields it is pasted alongside.
-    // It has to match what is registered in the Google console character for
-    // character, so it is shown rather than described.
-    res.json({
-      settings: describe(),
-      providers: providerStatus(),
-      youtubeRedirectUri: redirectUri(req),
-    });
+  handler(async (_req, res) => {
+    res.json({ settings: describe(), providers: providerStatus() });
   })
 );
 

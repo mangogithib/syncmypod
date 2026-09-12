@@ -17,7 +17,27 @@ import { debounce } from './ui.js';
 // phone, but it cannot say *where* a suggestion came from, and here that is the
 // whole point of showing them.
 
-export function suggestInput({ value = '', placeholder = '', fetchSuggestions }) {
+// Where the name being typed starts and ends.
+//
+// The artist field holds a list - "Sadhana Sargam, Gulzar, A.R. Rahman" - and
+// somebody editing it is almost always adding to or correcting ONE of those,
+// not retyping the lot. Looking up the whole field found nothing, so the
+// dropdown never appeared for any track that already had an artist, which is
+// most of them.
+//
+// So the segment around the caret is what gets looked up, and what a chosen
+// name replaces. Separator is a comma; "&" is left alone because it belongs
+// inside names like Earth, Wind & Fire.
+export function currentSegment(value, caret) {
+  const before = value.slice(0, caret);
+  const after = value.slice(caret);
+  const start = before.lastIndexOf(',') + 1;
+  const relativeEnd = after.indexOf(',');
+  const end = relativeEnd === -1 ? value.length : caret + relativeEnd;
+  return { start, end, text: value.slice(start, end).trim() };
+}
+
+export function suggestInput({ value = '', placeholder = '', multi = false, fetchSuggestions }) {
   const input = h('input.input', {
     type: 'text',
     value,
@@ -44,10 +64,24 @@ export function suggestInput({ value = '', placeholder = '', fetchSuggestions })
   };
 
   const choose = (name) => {
-    input.value = name;
-    close();
+    if (multi) {
+      // Replace only the name being typed, keeping the rest of the list and
+      // its spacing, and leave the caret after what was just inserted.
+      const { start, end } = currentSegment(input.value, input.selectionStart ?? input.value.length);
+      const head = input.value.slice(0, start);
+      const tail = input.value.slice(end);
+      const spaced = head && !head.endsWith(' ') ? `${head} ` : head;
+      input.value = `${spaced}${name}${tail}`;
+      const caret = spaced.length + name.length;
+      close();
+      input.focus();
+      input.setSelectionRange(caret, caret);
+    } else {
+      input.value = name;
+      close();
+      input.focus();
+    }
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.focus();
   };
 
   const render = (groups) => {
@@ -85,7 +119,9 @@ export function suggestInput({ value = '', placeholder = '', fetchSuggestions })
   };
 
   const look = debounce(async () => {
-    const query = input.value.trim();
+    const query = multi
+      ? currentSegment(input.value, input.selectionStart ?? input.value.length).text
+      : input.value.trim();
     if (query.length < 2) {
       close();
       return;
@@ -98,6 +134,14 @@ export function suggestInput({ value = '', placeholder = '', fetchSuggestions })
   }, 220);
 
   input.addEventListener('input', look);
+  // Clicking or arrowing into a different name in the list changes what should
+  // be suggested, and neither fires an input event.
+  if (multi) {
+    input.addEventListener('click', look);
+    input.addEventListener('keyup', (event) => {
+      if (event.key.startsWith('Arrow') || event.key === 'Home' || event.key === 'End') look();
+    });
+  }
   input.addEventListener('focus', () => {
     if (items.length > 0) list.hidden = false;
   });

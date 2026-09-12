@@ -159,27 +159,41 @@ export async function renderAlbums(view, context) {
             )
           )
         ),
+        // A list rather than a table.
+        //
+        // A five-column table inside a dialog inside a 375px screen leaves
+        // about forty pixels a column, which is where "Mazhayil Nananju" became
+        // "M..." and every artist became "Da...". A track listing is a number,
+        // a name and a length - it does not need columns to say that, and as a
+        // list it reads the same at any width.
         h(
-          'div.table-wrap',
+          'div.card.card-inset',
           h(
-            'table',
-            h('thead', h('tr',
-              h('th', '#'),
-              h('th', 'Title'),
-              h('th', 'Artist'),
-              h('th.right', 'Time'),
-              h('th', 'Metadata'))),
-            h(
-              'tbody',
-              data.tracks.map((track) =>
+            'div.list',
+            data.tracks.map((track) =>
+              h(
+                'div.list-row',
                 h(
-                  'tr',
-                  h('td.num', track.trackNo || '--'),
-                  h('td', h('div.cell-truncate', track.title)),
-                  h('td', h('div.cell-truncate.muted', track.artistCredit)),
-                  h('td.num', formatDuration(track.durationMs)),
-                  h('td.shrink', metadataBadge(track.metadataState))
-                )
+                  'span.track-number',
+                  { style: { minWidth: '22px' } },
+                  track.trackNo ? String(track.trackNo) : '-'
+                ),
+                h(
+                  'div.list-main',
+                  h('div.list-title', track.title),
+                  h(
+                    'div.list-sub',
+                    track.artistCredit ||
+                      h('span.subtle', 'No artist yet')
+                  )
+                ),
+                // Only the states worth acting on. Almost everything resolves,
+                // so a green "Resolved" beside every row is a column of noise
+                // that makes the one row needing attention harder to find.
+                track.metadataState !== 'resolved'
+                  ? h('div.list-actions', metadataBadge(track.metadataState))
+                  : null,
+                h('span.small.subtle.nowrap', formatDuration(track.durationMs))
               )
             )
           )

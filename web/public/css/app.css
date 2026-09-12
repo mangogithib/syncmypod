@@ -866,64 +866,6 @@ code {
 
 /* --- Setup instructions (the Google OAuth client) ------------------------- */
 
-/*
-  Numbered steps someone follows in another browser tab while reading them, so
-  they get more room between them than a normal list would - the reader's place
-  has to survive a round trip to the Google console and back.
-*/
-.steps {
-  margin: var(--space-3) 0;
-  padding-left: var(--space-5);
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
-
-.steps li {
-  margin-bottom: var(--space-3);
-}
-
-.steps li:last-child {
-  margin-bottom: 0;
-}
-
-/* An exact string that has to be copied character for character. Shown as a
-   block so a long URL is not wrapped mid-path, and clickable because retyping
-   it is how the redirect_uri_mismatch error happens. */
-.copyable {
-  display: block;
-  margin-top: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--text);
-  word-break: break-all;
-  cursor: pointer;
-}
-
-.copyable:hover {
-  border-color: var(--accent);
-}
-
-/* The OAuth route, offered without being pushed. Collapsed because it is the
-   alternative to the easy path, not a step on it. */
-.setup-details {
-  margin-top: var(--space-4);
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-3);
-}
-
-.setup-details summary {
-  cursor: pointer;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
-
-.setup-details summary:hover {
-  color: var(--text);
-}
 
 /* --- Sources -------------------------------------------------------------- */
 
@@ -1164,4 +1106,12 @@ code {
   /* Taller on a phone, where the keyboard eats the bottom half of the screen. */
   .suggest-list { max-height: 40vh; }
   .suggest-item { padding: var(--space-3) var(--space-2); }
+}
+
+@media (max-width: 720px) {
+  /* An album's header inside a dialog: the cover beside the name eats the width
+     the name needs, so it goes above it. */
+  .modal .row > div:first-child {
+    width: 84px !important;
+  }
 }

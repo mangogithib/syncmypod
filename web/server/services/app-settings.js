@@ -40,24 +40,6 @@ const SCHEMA = {
     label: 'Use YouTube',
     boolean: true,
   },
-  // The one place in this app that needs credentials from outside.
-  //
-  // Not for searching YouTube - that needs nothing. These are for connecting a
-  // user's own YouTube account so their playlists can be followed, which needs
-  // their permission, which needs OAuth, which Google grants only to a
-  // registered client. There is no key that could be shipped instead: a client
-  // secret in a public repository is not a secret, and Google revokes the ones
-  // it finds. So each instance registers its own, once.
-  'google.client_id': {
-    env: 'GOOGLE_CLIENT_ID',
-    secret: false,
-    label: 'Google OAuth client ID',
-  },
-  'google.client_secret': {
-    env: 'GOOGLE_CLIENT_SECRET',
-    secret: true,
-    label: 'Google OAuth client secret',
-  },
 };
 
 export const SETTING_KEYS = Object.keys(SCHEMA);
@@ -179,9 +161,7 @@ export function describe() {
 //
 // Deezer, iTunes and YouTube search need no account or key at all, so for them
 // the only question is on or off - see providerToggle. MusicBrainz needs a
-// contact address. The Google OAuth pair is not a provider credential at all:
-// it belongs to connecting a user's own YouTube account, and search works
-// without it.
+// contact address, and is the only thing here with anything to configure.
 
 // Whether a credential-free provider is switched on. Absent means on: there is
 // nothing to configure, so requiring an explicit opt-in would only leave a

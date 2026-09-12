@@ -377,7 +377,13 @@ export async function renderLibrary(view, context) {
       ),
       h('td.num.col-year', track.releaseYear || '--'),
       h('td.num.col-time', formatDuration(track.durationMs)),
-      h('td.shrink.col-meta', metadataBadge(track.metadataState)),
+      // Blank when there is nothing to say. Almost every track resolves, so a
+      // green badge on every row is a column of noise that hides the few rows
+      // that actually need attention - which is what the column is for.
+      h(
+        'td.shrink.col-meta',
+        track.metadataState === 'resolved' ? null : metadataBadge(track.metadataState)
+      ),
       h(
         'td.actions.shrink',
         h('div.row', { style: { justifyContent: 'flex-end' } },
@@ -536,6 +542,9 @@ export function editTrackDialog(track, onSaved) {
   const artistField = suggestInput({
     value: track.artistCredit || '',
     placeholder: 'Start typing an artist...',
+    // A list of names, so suggestions complete the one under the caret rather
+    // than replacing the whole field.
+    multi: true,
     fetchSuggestions: (q) => api.suggestArtists(q),
   });
   const albumField = suggestInput({

@@ -296,95 +296,14 @@ function providerCard(data, reload) {
           h(
             'p.small.muted',
             { style: { marginBottom: '14px' } },
-            'Searching YouTube and importing a public playlist link need no account and no key. The two fields below are for something else: connecting your own YouTube account so its playlists can be followed. Everything else here keeps working without them.'
+            'Searching YouTube and importing a public playlist link need no account and no key. YouTube Music is also the last step of the resolver, for regional and very recent releases the licensed catalogues have not got.'
           ),
           toggle('youtube.enabled'),
-          h(
-            'div',
-            { style: { marginTop: '16px' } },
-            h(
-              'p.small.muted',
-              { style: { marginBottom: '10px' } },
-              h('strong', 'Connecting your own YouTube account needs a Google client. '),
-              'Google only lets an application read your playlists with credentials issued to that application, and a shipped one would not stay secret - so this instance needs its own, created once. Nothing else on this page depends on it.'
-            ),
-            h(
-              'ol.steps',
-              h(
-                'li',
-                'In the ',
-                h(
-                  'a',
-                  {
-                    href: 'https://console.cloud.google.com/apis/library/youtube.googleapis.com',
-                    target: '_blank',
-                    rel: 'noreferrer',
-                  },
-                  'Google Cloud console'
-                ),
-                ', create a project and enable the ',
-                h('strong', 'YouTube Data API v3'),
-                '.'
-              ),
-              h(
-                'li',
-                'Under ',
-                h('strong', 'Credentials'),
-                ', create an ',
-                h('strong', 'OAuth client ID'),
-                ' of type ',
-                h('strong', 'Web application'),
-                '.'
-              ),
-              h(
-                'li',
-                'Add this as an authorised redirect URI. It must match character for character:',
-                h(
-                  'code.copyable',
-                  { title: 'Click to copy', onclick: copySelf },
-                  data.youtubeRedirectUri || '(set PUBLIC_URL to see this)'
-                )
-              ),
-              h(
-                'li',
-                'On the ',
-                h('strong', 'OAuth consent screen'),
-                ', add your own Google account under ',
-                h('strong', 'Test users'),
-                '. ',
-                h(
-                  'em',
-                  'This step is the one people miss: youtube.readonly is a sensitive scope, so an account that is not on that list gets "Error 403: access_denied" at sign-in.'
-                ),
-                ' Leave the app in Testing - publishing it would require Google verification.'
-              ),
-              h('li', 'Paste the two values below, then connect the account under Sources.')
-            ),
-            field('google.client_id', {
-              placeholder: '000000000000-xxxxxxxx.apps.googleusercontent.com',
-              hint: 'The Client ID from your OAuth client. Not secret.',
-            }),
-            field('google.client_secret', {
-              placeholder: 'GOCSPX-...',
-              type: 'password',
-              hint: 'The Client secret from the same OAuth client. Stored encrypted and never shown again.',
-            })
-          )
         ),
 
         h('div', { style: { marginTop: '4px' } }, save)
       )
     )
-  );
-}
-
-// An exact string somebody has to paste into another website. Clickable because
-// retyping it is how the redirect_uri_mismatch error happens.
-function copySelf(event) {
-  const text = event.currentTarget.textContent;
-  navigator.clipboard?.writeText(text).then(
-    () => toast('Copied.', 'ok'),
-    () => toast(`Copy it by hand: ${text}`, 'info')
   );
 }
 

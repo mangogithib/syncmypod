@@ -24,7 +24,6 @@ import { settingsRoutes } from './routes/settings.js';
 import { sourceRoutes } from './routes/sources.js';
 import { suggestRoutes } from './routes/suggest.js';
 import { syncRoutes } from './routes/sync.js';
-import { youtubeAccountRoutes } from './routes/youtube-account.js';
 import { loadSettings } from './services/app-settings.js';
 import { checkDueFollows } from './services/follows.js';
 import { failOrphanedJobs } from './services/import.js';
@@ -99,7 +98,6 @@ app.use('/api/devices', deviceRoutes);
 app.use('/api/import', importRoutes);
 app.use('/api/sources', sourceRoutes);
 app.use('/api/suggest', suggestRoutes);
-app.use('/api/youtube-account', youtubeAccountRoutes);
 app.use('/api/settings', settingsRoutes);
 // The device API. Token-authenticated only - see requireDevice.
 app.use('/api/sync', syncRoutes);
