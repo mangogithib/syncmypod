@@ -79,6 +79,9 @@ async function refreshState() {
   const ready = Boolean(data.paired && data.ipod && !data.running);
   el("btn-sync").disabled = !ready;
   el("btn-check").disabled = !ready;
+  // Ejecting needs an iPod but not a pairing: getting the device back safely is
+  // not something that should depend on the server being reachable.
+  el("btn-eject").disabled = Boolean(!data.ipod || data.running);
   return data;
 }
 
@@ -306,8 +309,21 @@ function renderYouTube(data) {
     // question most people cannot answer and should not be asked.
     const signIn = node("button", "button button-small button-primary", "Sign in to YouTube");
     signIn.type = "button";
-    signIn.addEventListener("click", () => youtubeCall(signIn, "/api/youtube/sign-in", {}));
+    // This can take minutes: if no installed browser can be read, the server
+    // opens a browser window and waits for the sign-in to finish in it. The
+    // label has to say that, or a window appearing looks like something broke.
+    signIn.addEventListener("click", () =>
+      youtubeCall(signIn, "/api/youtube/sign-in", {}, "Waiting for sign-in…")
+    );
     actions.append(signIn);
+
+    body.append(
+      node(
+        "p",
+        "subtle",
+        "If this computer's browser cannot hand over its session, a browser window opens - sign in to YouTube there and leave it to close itself."
+      )
+    );
 
     // The way out when reading the browser cannot work. On Windows, Chromium
     // seals its cookies and Firefox may not be installed, which leaves nothing
@@ -378,10 +394,10 @@ function cookieFilePanel() {
   return panel;
 }
 
-async function youtubeCall(button, path, payload = {}) {
+async function youtubeCall(button, path, payload = {}, busyLabel = "Working…") {
   const original = button.textContent;
   button.disabled = true;
-  button.textContent = "Working…";
+  button.textContent = busyLabel;
   try {
     const result = await api(path, { method: "POST", body: JSON.stringify(payload) });
     youtubeState = { ...youtubeState, ...result };
@@ -441,6 +457,8 @@ function setRunning(running) {
   el("btn-sync").disabled = running;
   el("btn-check").disabled = running;
   el("btn-cancel").hidden = !running;
+  // Never while a run is writing to it.
+  el("btn-eject").disabled = running;
 }
 
 function poll() {
@@ -675,6 +693,30 @@ el("btn-check").addEventListener("click", () => start({ dryRun: true }));
 el("btn-cancel").addEventListener("click", async () => {
   el("btn-cancel").disabled = true;
   await api("/api/cancel", { method: "POST" }).catch(() => {});
+});
+
+// The other half of Cancel. Stopping a sync leaves the database tidy but a
+// freshly written one can still be in the operating system's write cache, and
+// the moment after a sync is exactly when somebody in a hurry pulls the cable.
+el("btn-eject").addEventListener("click", async () => {
+  const button = el("btn-eject");
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Ejecting…";
+  try {
+    const result = await api("/api/eject", { method: "POST", body: "{}" });
+    if (result.ejected) {
+      note(result.message || "Safe to unplug the iPod now.");
+      button.textContent = "Safe to unplug";
+      return;
+    }
+    note(result.error || "Could not eject the iPod.");
+  } catch (error) {
+    note(error.message);
+  } finally {
+    if (button.textContent === "Ejecting…") button.textContent = original;
+    button.disabled = false;
+  }
 });
 
 refreshState().then((data) => {

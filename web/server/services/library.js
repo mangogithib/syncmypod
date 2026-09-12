@@ -30,8 +30,34 @@ const TRACK_COLUMNS = `
   lt.added_at              AS "addedAt",
   lt.added_via             AS "addedVia",
   lt.rating,
-  lt.source_hint           AS "sourceHint"
+  lt.source_hint           AS "sourceHint",
+  fail.error               AS "syncError",
+  fail.device_name         AS "syncFailedOn"
 `;
+
+// Whether the local app could not put this track on a paired computer's iPod.
+//
+// The local app has always reported a failure per track and the server has
+// always stored it; nothing showed it, so the only way to find out a song never
+// reached the device was to go looking in the database. A track can be on
+// several devices and fail on one, so this reports the most recent failure on
+// any device still paired - which is the question being asked ("did my last
+// sync get everything?") rather than a per-device matrix nobody wants.
+//
+// A LATERAL rather than a join: it must not multiply rows when a track is on
+// two devices, and the failure that matters is the newest one.
+const SYNC_FAILURE_JOIN = `
+  LEFT JOIN LATERAL (
+    SELECT dt.error, d.name AS device_name
+      FROM device_tracks dt
+      JOIN devices d ON d.id = dt.device_id
+     WHERE dt.track_id = t.id
+       AND d.user_id = lt.user_id
+       AND d.revoked_at IS NULL
+       AND dt.state = 'failed'
+  ORDER BY dt.synced_at DESC NULLS LAST
+     LIMIT 1
+  ) fail ON TRUE`;
 
 const SORTS = {
   added: 'lt.added_at DESC NULLS LAST, t.id DESC',
@@ -84,7 +110,11 @@ export async function listLibraryTracks(userId, options = {}) {
                 WHERE ta.track_id = t.id AND ta.artist_id = $${params.length})`
     );
   }
-  if (metadataState) {
+  if (metadataState === 'sync-failed') {
+    // Not a metadata state at all, but it shares the one filter control on the
+    // Songs page because both answer "which songs need looking at".
+    where.push('fail.error IS NOT NULL');
+  } else if (metadataState) {
     params.push(metadataState);
     where.push(`t.metadata_state = $${params.length}`);
   }
@@ -104,6 +134,7 @@ export async function listLibraryTracks(userId, options = {}) {
        FROM library_tracks lt
        JOIN tracks t  ON t.id = lt.track_id
   LEFT JOIN albums al ON al.id = t.album_id
+       ${SYNC_FAILURE_JOIN}
       WHERE ${where.join(' AND ')}
    ORDER BY ${orderBy}
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -118,6 +149,7 @@ export async function listLibraryTracks(userId, options = {}) {
        FROM library_tracks lt
        JOIN tracks t  ON t.id = lt.track_id
   LEFT JOIN albums al ON al.id = t.album_id
+       ${SYNC_FAILURE_JOIN}
       WHERE ${where.join(' AND ')}`,
     countParams
   );

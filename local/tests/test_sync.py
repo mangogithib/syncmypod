@@ -24,6 +24,21 @@ from syncmypod_local import config, device, downloader, ledger, sync, transcode,
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+def workspaces_now() -> set:
+    """Download folders in the system temp directory, right now.
+
+    Compared before and after rather than asserted to be empty. The workspace
+    lives in the shared system temp, so "there are none at all" is a claim about
+    every process on the machine - a second test run, or the installed
+    application doing a real sync - and it fails for reasons that have nothing
+    to do with the code under test. What matters is that *this* run left nothing
+    of its own.
+    """
+    import tempfile
+
+    return set(Path(tempfile.gettempdir()).glob(f"{workspace._PREFIX}*"))
+
+
 @pytest.fixture
 def ipod(tmp_path):
     """A simulated Classic 6.5g - the model the project was tested against."""
@@ -98,12 +113,11 @@ class TestAFullRun:
     @respx.mock
     def test_nothing_downloaded_is_left_behind(self, ipod, paired, audio_source, tmp_path):
         mock_server(manifest())
+
+        before = workspaces_now()
         sync.run(paired, mount=str(ipod.mount_path))
 
-        import tempfile
-
-        leftovers = list(Path(tempfile.gettempdir()).glob(f"{workspace._PREFIX}*"))
-        assert not leftovers, f"downloads left behind: {leftovers}"
+        assert not (workspaces_now() - before), "this run left its downloads behind"
 
     @respx.mock
     def test_a_backup_is_taken_before_anything_is_written(self, ipod, paired, audio_source):
@@ -428,3 +442,161 @@ class TestTranscoding:
         mock_server(manifest(tracks=[track(1)]))
         sync.run(paired, mount=str(ipod.mount_path))
         assert device.open_at(ipod.mount_path).tracks()[0].location.lower().endswith(".m4a")
+
+
+class TestFetchingSeveralAtOnce:
+    """Downloads run in parallel; writes to the device do not.
+
+    The slow part of a sync is the network, and a track's download, conversion
+    and tagging touch nothing another track touches. Writing the iTunesDB does,
+    so it stays on one thread in batches - the property worth protecting is that
+    parallelism never reaches the device.
+    """
+
+    @pytest.fixture
+    def slow_source(self, monkeypatch):
+        """A download that takes long enough for overlap to be observable."""
+        import threading
+        import time
+
+        active = 0
+        peak = 0
+        guard = threading.Lock()
+
+        def fake_fetch(track_dict, destination):
+            nonlocal active, peak
+            with guard:
+                active += 1
+                peak = max(peak, active)
+            try:
+                time.sleep(0.15)
+                destination.mkdir(parents=True, exist_ok=True)
+                landed = destination / "source.m4a"
+                shutil.copy(FIXTURES / "tagged.m4a", landed)
+                return downloader.Download(
+                    path=landed,
+                    source="youtube",
+                    source_url="https://example/watch?v=test",
+                    duration_seconds=268.0,
+                    bitrate_kbps=128,
+                )
+            finally:
+                with guard:
+                    active -= 1
+
+        monkeypatch.setattr(downloader, "fetch", fake_fetch)
+        return lambda: peak
+
+    @respx.mock
+    def test_more_than_one_download_is_in_flight(self, ipod, paired, slow_source):
+        mock_server(manifest([track(n) for n in range(1, 9)]))
+
+        report = sync.run(paired, mount=str(ipod.mount_path), concurrency=4)
+
+        assert report.synced == 8
+        assert slow_source() > 1, "downloads ran one at a time"
+        assert slow_source() <= 4, "more were in flight than were asked for"
+
+    @respx.mock
+    def test_one_at_a_time_is_still_possible(self, ipod, paired, slow_source):
+        """The old behaviour, for a connection that cannot take four at once."""
+        mock_server(manifest([track(n) for n in range(1, 5)]))
+
+        report = sync.run(paired, mount=str(ipod.mount_path), concurrency=1)
+
+        assert report.synced == 4
+        assert slow_source() == 1
+
+    @respx.mock
+    def test_every_track_arrives_whatever_order_they_finish_in(self, ipod, paired, monkeypatch):
+        """Completion order is not plan order, and nothing may depend on it."""
+        import time
+
+        def fake_fetch(track_dict, destination):
+            # Later ids finish first, so completion order is reversed.
+            time.sleep(0.4 / max(1, int(track_dict["id"])))
+            destination.mkdir(parents=True, exist_ok=True)
+            landed = destination / "source.m4a"
+            shutil.copy(FIXTURES / "tagged.m4a", landed)
+            return downloader.Download(
+                path=landed,
+                source="youtube",
+                source_url="https://example/watch?v=test",
+                duration_seconds=268.0,
+                bitrate_kbps=128,
+            )
+
+        monkeypatch.setattr(downloader, "fetch", fake_fetch)
+        mock_server(manifest([track(n) for n in range(1, 7)]))
+
+        report = sync.run(paired, mount=str(ipod.mount_path), concurrency=4)
+
+        assert report.synced == 6
+        assert {r.track_id for r in report.results if r.state == "synced"} == set(range(1, 7))
+        assert len(ipod.tracks(reload=True)) == 6
+
+    @respx.mock
+    def test_one_failure_does_not_take_the_others_with_it(self, ipod, paired, monkeypatch):
+        def fake_fetch(track_dict, destination):
+            if int(track_dict["id"]) == 3:
+                raise downloader.DownloadError("nothing playable was found")
+            destination.mkdir(parents=True, exist_ok=True)
+            landed = destination / "source.m4a"
+            shutil.copy(FIXTURES / "tagged.m4a", landed)
+            return downloader.Download(
+                path=landed,
+                source="youtube",
+                source_url="https://example/watch?v=test",
+                duration_seconds=268.0,
+                bitrate_kbps=128,
+            )
+
+        monkeypatch.setattr(downloader, "fetch", fake_fetch)
+        mock_server(manifest([track(n) for n in range(1, 6)]))
+
+        report = sync.run(paired, mount=str(ipod.mount_path), concurrency=4)
+
+        assert report.synced == 4
+        assert [r.track_id for r in report.failed] == [3]
+
+    @respx.mock
+    def test_cancelling_stops_submitting_and_keeps_what_finished(
+        self, ipod, paired, slow_source
+    ):
+        """Stopping between tracks, not during one.
+
+        Anything already fetched is still written and recorded, because the
+        alternative is throwing away work that is already paid for and leaving
+        the device's database part-written.
+        """
+        mock_server(manifest([track(n) for n in range(1, 21)]))
+
+        calls = {"n": 0}
+
+        def cancel_after_a_moment() -> bool:
+            calls["n"] += 1
+            return calls["n"] > 4
+
+        report = sync.run(
+            paired,
+            mount=str(ipod.mount_path),
+            concurrency=4,
+            cancel=cancel_after_a_moment,
+        )
+
+        assert report.status == "cancelled"
+        assert "left" in (report.message or "")
+        assert report.synced < 20
+        # Whatever was written is really on the device, not half-written.
+        assert len(ipod.tracks(reload=True)) == report.synced
+
+    @respx.mock
+    def test_nothing_is_left_on_disk_when_several_ran_at_once(
+        self, ipod, paired, slow_source, tmp_path
+    ):
+        mock_server(manifest([track(n) for n in range(1, 9)]))
+
+        before = workspaces_now()
+        sync.run(paired, mount=str(ipod.mount_path), concurrency=4)
+
+        assert not (workspaces_now() - before), "this run left its downloads behind"

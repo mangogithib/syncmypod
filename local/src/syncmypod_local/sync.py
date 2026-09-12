@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import shutil
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,20 @@ logger = logging.getLogger(__name__)
 # library; one per run would mean an interrupted sync left every track it had
 # already copied invisible to the device.
 DEFAULT_BATCH_SIZE = 5
+
+# How many tracks are fetched at once.
+#
+# Downloading, converting and tagging a track touches nothing another track
+# touches - a directory of its own, its own yt-dlp call - so the slow part of a
+# sync parallelises cleanly. Only the write to the iPod has to stay serialised,
+# and it already happens a batch at a time.
+#
+# Four, not sixteen. The limit here is YouTube rather than this machine: a run
+# on 12 September took a `403 Forbidden` after eighteen downloads in quick
+# succession, and asking for more at once is asking for more of those. Four is
+# roughly a three-fold speed-up on a large library while still looking like
+# somebody using a browser.
+DEFAULT_CONCURRENCY = 4
 
 # Below this, the sync stops rather than filling the device completely. An iPod
 # with no free space cannot rewrite its own database, which is a much worse
@@ -267,6 +282,7 @@ def run(
     remove: bool = False,
     limit: int | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    concurrency: int = DEFAULT_CONCURRENCY,
     keep_downloads: bool = False,
     progress: Progress | None = None,
     cancel: Callable[[], bool] | None = None,
@@ -349,7 +365,17 @@ def run(
 
         try:
             _execute(
-                api, ipod, plan, record, report, say, batch_size, remove, keep_downloads, stop
+                api,
+                ipod,
+                plan,
+                record,
+                report,
+                say,
+                batch_size,
+                remove,
+                keep_downloads,
+                stop,
+                concurrency,
             )
         except KeyboardInterrupt:
             report.status = "cancelled"
@@ -378,56 +404,95 @@ def _execute(
     remove: bool,
     keep_downloads: bool,
     stop: Callable[[], bool],
+    concurrency: int = DEFAULT_CONCURRENCY,
 ) -> None:
-    """Download, tag, write and report, a batch at a time."""
+    """Download in parallel, then write to the device a batch at a time.
+
+    The two halves are deliberately different shapes. Fetching a track is
+    network-bound, touches only its own directory, and is the part that takes
+    the time - so several run at once. Writing to the iPod rewrites the whole
+    database and must happen on one thread, in order, a batch at a time.
+
+    So this keeps ``concurrency`` fetches in flight and drains them as they
+    finish. Completion order is not plan order and does not need to be: every
+    result carries its own track id, and the device write is what imposes an
+    order.
+    """
     with (
         workspace.Workspace(keep=keep_downloads) as work,
         httpx.Client(timeout=20.0, follow_redirects=True) as artwork_client,
+        ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool,
     ):
         pending: list[Result] = []
         staged: list[tuple[TrackPlan, Path, Result]] = []
+        queue = list(plan.to_download)
+        total = len(queue)
+        in_flight: dict[Future, TrackPlan] = {}
+        done_count = 0
+        cancelled = False
+        out_of_space = False
 
-        for index, item in enumerate(plan.to_download, start=1):
-            # Checked before starting a track rather than during one, so what is
-            # already staged still gets written and recorded below.
-            if stop():
-                report.status = "cancelled"
-                report.message = (
-                    f"Cancelled with {len(plan.to_download) - index + 1} track(s) left. "
-                    "What had already been written is on the iPod."
-                )
-                break
+        def submit_until_full() -> None:
+            nonlocal cancelled, out_of_space
+            while queue and len(in_flight) < max(1, concurrency):
+                if stop():
+                    cancelled = True
+                    return
+                # Checked before starting a track rather than during one, so
+                # what is already staged still gets written and recorded below.
+                if _free_bytes(ipod) < FREE_SPACE_FLOOR_BYTES:
+                    out_of_space = True
+                    return
+                item = queue.pop(0)
+                in_flight[pool.submit(_prepare_one, item, work, artwork_client)] = item
 
-            say("track", {"index": index, "total": len(plan.to_download), "item": item})
+        submit_until_full()
 
-            if _free_bytes(ipod) < FREE_SPACE_FLOOR_BYTES:
-                report.message = (
-                    f"Stopped with {len(plan.to_download) - index + 1} tracks left: "
-                    "the iPod is nearly full."
-                )
-                logger.warning(report.message)
-                break
-
-            try:
-                prepared, result = _prepare_one(item, work, artwork_client)
-            except Exception as err:  # a failed track must not end the run
-                logger.warning("%s failed: %s", item.label, err)
-                pending.append(
-                    Result(
-                        track_id=item.id, state="failed", label=item.label, error=str(err)[:500]
+        while in_flight:
+            finished, _ = wait(set(in_flight), return_when=FIRST_COMPLETED)
+            for future in finished:
+                item = in_flight.pop(future)
+                done_count += 1
+                # Reported on completion rather than on start: with several in
+                # flight at once, "starting track 7" while 4, 5 and 6 are still
+                # running is a count of nothing in particular.
+                say("track", {"index": done_count, "total": total, "item": item})
+                try:
+                    prepared, result = future.result()
+                except Exception as err:  # a failed track must not end the run
+                    logger.warning("%s failed: %s", item.label, err)
+                    pending.append(
+                        Result(
+                            track_id=item.id,
+                            state="failed",
+                            label=item.label,
+                            error=str(err)[:500],
+                        )
                     )
-                )
-                work.discard(item.id)
-                say("track-failed", {"item": item, "error": str(err)})
-                continue
+                    work.discard(item.id)
+                    say("track-failed", {"item": item, "error": str(err)})
+                    continue
 
-            staged.append((item, prepared, result))
-            say("track-ready", {"item": item, "result": result})
+                staged.append((item, prepared, result))
+                say("track-ready", {"item": item, "result": result})
 
             if len(staged) >= batch_size:
                 pending.extend(_commit_batch(ipod, record, staged, work, say))
                 staged.clear()
                 pending = _flush(api, report, pending)
+
+            submit_until_full()
+
+        remaining = len(queue)
+        if cancelled:
+            report.status = "cancelled"
+            report.message = (
+                f"Cancelled with {remaining} track(s) left. "
+                "What had already been written is on the iPod."
+            )
+        elif out_of_space:
+            report.message = f"Stopped with {remaining} tracks left: the iPod is nearly full."
+            logger.warning(report.message)
 
         if staged:
             pending.extend(_commit_batch(ipod, record, staged, work, say))

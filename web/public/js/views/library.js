@@ -46,7 +46,7 @@ export async function renderLibrary(view, context) {
     'select.select',
     {
       style: { width: 'auto' },
-      'aria-label': 'Filter by metadata state',
+      'aria-label': 'Filter songs',
       onchange: () => {
         state.state = stateFilter.value;
         state.offset = 0;
@@ -57,7 +57,10 @@ export async function renderLibrary(view, context) {
     h('option', { value: 'resolved' }, 'Resolved only'),
     h('option', { value: 'unresolved' }, 'Unresolved'),
     h('option', { value: 'pending' }, 'Pending'),
-    h('option', { value: 'manual' }, 'Manually edited')
+    h('option', { value: 'manual' }, 'Manually edited'),
+    // Not a metadata state, and deliberately in the same control: both answers
+    // to "which of these songs needs me to do something".
+    h('option', { value: 'sync-failed' }, 'Failed to sync')
   );
   stateFilter.value = state.state;
 
@@ -358,7 +361,20 @@ export async function renderLibrary(view, context) {
             h(
               'div.track-title-line',
               h('span.track-title', track.title),
-              track.metadataState === 'resolved' ? null : metadataBadge(track.metadataState)
+              track.metadataState === 'resolved' ? null : metadataBadge(track.metadataState),
+              // The local app has always reported a track it could not fetch and
+              // the server has always stored it. Until now nothing showed it, so
+              // a song that never reached the iPod looked exactly like one that
+              // did.
+              track.syncError
+                ? h(
+                    'span.badge.badge-danger',
+                    {
+                      title: `Did not sync on ${track.syncFailedOn || 'a paired computer'}: ${track.syncError}`,
+                    },
+                    'Sync failed'
+                  )
+                : null
             ),
             // Shown under the title only on a narrow screen, where the artist
             // column itself is hidden. A song list without an artist is not a

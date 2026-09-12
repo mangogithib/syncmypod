@@ -229,19 +229,46 @@ class GuiServer:
         }
 
     def youtube_sign_in(self, browser: str = "", user_agent: str = "") -> dict[str, Any]:
-        """Find a browser signed in to YouTube and borrow its session.
+        """Get a YouTube session, by whichever of the two routes works.
 
-        No browser is named from the page any more. Whichever one the user is
-        signed in to is found by trying them, which is a question they should
-        not have had to answer.
+        **Reading an installed browser first**, because when it works it is
+        instantaneous and nothing appears on screen. That is the Firefox case,
+        and on a machine with Firefox it is still the right answer.
+
+        **Opening a browser of our own second**, because on Windows the first
+        route is now usually impossible: Chromium seals its cookie values and
+        no other program can decrypt them. A window this application started
+        can simply be asked for its cookies instead.
+
+        Falling through rather than asking which to use: the difference between
+        them is an implementation detail of somebody else's browser, and nobody
+        should have to learn it to play music on an iPod.
         """
         try:
             available = youtube_module.sign_in(
                 browser or None,
                 prefer=youtube_module.browser_from_user_agent(user_agent),
             )
+            return self._youtube_result(available, opened_a_window=False)
+        except youtube_module.YouTubeError as err:
+            # Bound to a name that outlives the block: Python unbinds an
+            # `except ... as` target the moment the handler ends.
+            read_failure = str(err)
+            logger.info("Could not read an installed browser: %s", read_failure)
+
+        if browser:
+            # A named browser is a specific instruction, not a request for a
+            # session by any means available.
+            return {"saved": False, "error": read_failure}
+
+        try:
+            available = youtube_module.sign_in_with_browser()
         except youtube_module.YouTubeError as err:
             return {"saved": False, "error": str(err)}
+        return self._youtube_result(available, opened_a_window=True)
+
+    @staticmethod
+    def _youtube_result(available: Any, *, opened_a_window: bool) -> dict[str, Any]:
         return {
             "saved": True,
             "signedIn": True,
@@ -249,6 +276,7 @@ class GuiServer:
             "bestAacKbps": available.best_aac_kbps,
             "detail": available.describe(),
             "error": available.error,
+            "openedAWindow": opened_a_window,
         }
 
     def youtube_use_cookies(self, path: str = "") -> dict[str, Any]:
@@ -264,17 +292,39 @@ class GuiServer:
             available = youtube_module.import_cookies_file(path)
         except youtube_module.YouTubeError as err:
             return {"saved": False, "error": str(err)}
-        return {
-            "saved": True,
-            "signedIn": True,
-            "premium": available.premium,
-            "bestAacKbps": available.best_aac_kbps,
-            "detail": available.describe(),
-            "error": available.error,
-        }
+        return self._youtube_result(available, opened_a_window=False)
 
     def youtube_sign_out(self) -> dict[str, Any]:
         return {"signedOut": youtube_module.forget()}
+
+    def eject(self, mount: str = "") -> dict[str, Any]:
+        """Flush the iPod and unmount it, so it is safe to pull out.
+
+        The other half of Cancel. Stopping a sync tidies the database up, but a
+        freshly written one can still be sitting in the operating system's write
+        cache - and the moment after a sync is exactly when somebody in a hurry
+        pulls the cable. Asking for the iPod back should not mean guessing when
+        Windows has finished with it.
+
+        Refused while a sync is running: the run is still writing.
+        """
+        if self.session.running:
+            return {
+                "ejected": False,
+                "error": "A sync is still running. Press Cancel first, then eject.",
+            }
+        try:
+            ipod = (
+                device_module.open_at(mount)
+                if mount
+                else next(iter(device_module.scan()), None)
+            )
+            if ipod is None:
+                return {"ejected": False, "error": "No iPod is connected."}
+            ok, message = ipod.eject()
+        except device_module.DeviceError as err:
+            return {"ejected": False, "error": str(err)}
+        return {"ejected": ok, "message": message, "error": None if ok else message}
 
     def cancel(self) -> dict[str, Any]:
         """Ask the run to stop at the next track boundary.
@@ -512,6 +562,8 @@ def _make_handler(gui: GuiServer):
                 )
             elif path == "/api/cancel":
                 self._json(200, gui.cancel())
+            elif path == "/api/eject":
+                self._json(200, gui.eject(str(body.get("mount") or "")))
             elif path == "/api/pair":
                 self._json(
                     200,

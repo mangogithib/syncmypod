@@ -13,7 +13,7 @@ state of play, what was built most recently, and the eight things that were
 tried and got wrong before they were got right. Then come back to section 3,
 which is the one rule the whole design rests on.
 
-**Last updated:** 12 September 2026, night.
+**Last updated:** 13 September 2026.
 
 ---
 
@@ -32,10 +32,10 @@ which is the one rule the whole design rests on.
 | Splitting combined artist credits | Working — checked against Deezer, so real bands survive |
 | Metadata autocomplete | Working — library names first, completing the name under the caret |
 | Followed artists | Working — future releases, optionally the back catalogue |
-| Device pairing + sync API | Working, verified end to end |
-| Local app: the sync engine | Working, verified on real hardware — a blank restored iPod included |
+| Device pairing + sync API | Working, verified end to end. Failed tracks now show in the web library |
+| Local app: the sync engine | Working, verified on real hardware — a blank restored iPod included. **Four downloads at a time** |
 | Album art on the device | Working — verified by decoding it back off the iPod |
-| YouTube Premium sign-in (local) | Reads a browser where it can; **on Windows Chromium that is never** — see section 5 |
+| YouTube Premium sign-in (local) | Reads a browser where it can, else **opens one of its own** and takes the session from it |
 | Local app: GUI | Working — nothing needs a terminal |
 | Downloadable build | Published — 0.1.1. **0.1.2 is built and unpublished** |
 | Phone layout | Working — measured at 375px, list rows included |
@@ -189,6 +189,18 @@ fine, but start from the reasoning rather than from scratch.
   An iPod moved between two computers then continues one history rather than
   starting a second. Keyed by server and user, so two accounts can share a
   device.
+- **AAC in an `.m4a`, and there is nothing better to choose.** Asked on
+  13 September, so it is written down. A 5.5th gen plays MP3, AAC, Apple
+  Lossless, AIFF and WAV. YouTube serves exactly two audio streams, AAC and
+  Opus, and the iPod cannot play Opus at all - so AAC is the only usable one,
+  and it is taken **untouched**. Converting it to MP3 would add a second lossy
+  pass for a larger file; wrapping it in ALAC or WAV would be a lossless
+  container around lossy audio. Both are strictly worse.
+
+  The format is therefore not the lever. The **source** is: 128kbps signed out,
+  256kbps with Premium, and lossless from a file the user already owns - which
+  is the real argument for the local-files source in section 6, and the only
+  thing that would beat what the tool does today.
 - **No audio quality setting, deliberately.** One was built on 11 September and
   removed the same day at Mohamed's request, and he was right: signed out,
   YouTube offers exactly one AAC stream at ~128kbps, and a Premium account is
@@ -327,6 +339,57 @@ permanent. That is somebody's music, so it stops and says what it found.
 `ensure_device_itunes_database` returns `None` rather than raising when it
 cannot produce a database the device's firmware would accept, so a falsy return
 is a real failure and not a no-op.
+
+### The way round sealed cookies is a browser of our own
+
+Since the browser the user already runs cannot hand over its cookies on
+Windows, `browser_login.py` starts one that can: their installed Chrome or
+Edge, pointed at a profile under the app's own config directory, with the
+DevTools protocol switched on. The user signs in in that window and the cookies
+are read *out of the running browser* rather than off disk, so nothing is ever
+decrypted and the sealing is irrelevant. The profile is kept, so the second
+sign-in needs no typing.
+
+Four things that cost time or would have:
+
+- **It is `Storage.getCookies`, not `Network.getAllCookies`.** The connection is
+  to the *browser* target and Network is a page-level domain, so the obvious
+  call answers `'Network.getAllCookies' wasn't found` - which reads like a
+  protocol-version problem and is not one.
+- **No automation flags.** No `--headless`, no `--enable-automation`. A browser
+  started that way sets `navigator.webdriver` and Google refuses to accept a
+  password in it. The only switches passed are the profile, the port, and the
+  two that stop a fresh profile opening onboarding tabs over the login page.
+- **The WebSocket client is hand-written** (~90 lines in `browser_login.py`)
+  rather than a dependency, because it only ever talks to one local process
+  over an unencrypted socket. A signed-in cookie reply is tens of kilobytes, so
+  the 16-bit length path and continuation frames are the *ordinary* case, not
+  edges - `test_browser_login.py` covers both, and a truncated read would look
+  exactly like a browser that did not sign in.
+- **Signed-in is decided by a cookie, not by a URL.** `LOGIN_INFO`, `SID` or a
+  `__Secure-*PSID` on youtube.com appears when an account is attached and not
+  before. Reading the page's address instead breaks the next time Google
+  changes a redirect.
+
+### An iPod can only ever show one artist per track
+
+Asked on 13 September, and the answer is the file format rather than a choice.
+The iTunesDB stores **one artist string per track** - MHOD type 5 - and the
+device's Artists menu is the list of distinct strings in that column. There is
+no multi-artist structure to write, so a track credited "A, B" physically
+cannot appear under both A and B. iTunes behaves the same way for the same
+reason.
+
+What *is* a choice is what goes in that one field. The tool currently writes the
+full credit, so a soundtrack fills the Artists menu with entries like "Pritam,
+Arijit Singh, Amitabh Bhattacharya". Writing only the primary artist would make
+the menu browsable at the cost of losing the other names on the device; the
+manifest already carries the structured `artists` list with roles and
+positions, so either is a small change in `tagging.py`. Not done, because it is
+taste and it changes what is on the device.
+
+Related and still open: Deezer's contributor order puts the composer first, so
+the "primary" artist is not the first name in the credit.
 
 ### Chromium on Windows cannot hand over cookies, and never will
 
@@ -963,6 +1026,19 @@ whether a virtual device ever reports the artwork store as absent the way a
 restored one does, and whether free space behaves the same when it is reported
 by `shutil.disk_usage` on a simulated folder rather than a FAT32 volume.
 
+### 1c. Watch what four-at-a-time does to YouTube
+
+The sync fetches `DEFAULT_CONCURRENCY` tracks at once now, which is the
+difference between about an hour and about twenty minutes on a 433-track
+library. Four was chosen against one data point: a 12 September run took a
+`403 Forbidden` after eighteen downloads in quick succession, and recovered on
+the next run.
+
+That number has not been tuned against a long run at four. If 403s start
+appearing in a report, the lever is `--at-once` on the command line, and the
+right fix is probably a small delay between submissions rather than dropping
+back to one.
+
 ### 2. A local-files source
 
 The highest-quality option available and the only one with no downside: point
@@ -1216,6 +1292,10 @@ will come from and where the next work should go.
 | A blank iPod gets a database | A restored device has none, and without one it cannot hold music at all |
 | The browser diagnosis reaches the user | It was computed per browser and thrown away for one fixed sentence that was wrong |
 | A cookies.txt can be handed over | The only route left on Windows with sealed Chromium cookies and no Firefox |
+| Sign-in opens a browser of its own | Asked for on 13 September; it is the only route that works without the user installing anything |
+| Four downloads at a time | The slow part of a sync is the network and it parallelises cleanly; the device write does not and stays serialised |
+| Failed syncs surfaced on the web | The local app has always reported them and the server has always stored them; nothing showed them |
+| An Eject button in the local app | Cancel already tidied up, but nothing told the user when Windows had finished writing |
 
 ### Eleven things that were got wrong first
 

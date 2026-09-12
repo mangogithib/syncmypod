@@ -37,6 +37,7 @@ import shutil
 import stat
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .config import config_dir
 
@@ -317,6 +318,76 @@ def import_cookies_file(source: str | Path) -> Availability:
 
     logger.info("Kept %d youtube.com cookies from %s", kept, path.name)
     return check()
+
+
+def sign_in_with_browser(*, timeout: float = 300.0, on_opened=None) -> Availability:
+    """Open a browser this application owns and take the session from it.
+
+    The answer to the question the other two routes cannot answer on Windows.
+    Reading an installed browser fails because Chromium seals its cookie values,
+    and a cookies.txt has to be exported by hand every time the session lapses.
+    A browser started here, against a profile kept here, can simply be asked for
+    its cookies - see `browser_login`.
+
+    The profile persists, so this is typing a password once rather than once a
+    month: the second time, the browser restores the session on its own and this
+    returns as soon as the window has finished loading.
+    """
+    from . import browser_login
+
+    try:
+        cookies = browser_login.collect_cookies(
+            config_dir(), timeout=timeout, on_opened=on_opened
+        )
+    except browser_login.BrowserLoginError as err:
+        raise YouTubeError(str(err)) from err
+
+    kept = _write_youtube_cookies(_jar_from_devtools(cookies))
+    if not kept:
+        raise YouTubeError(
+            "The browser signed in but handed over no youtube.com cookies, which "
+            "should not happen. Try again, or use a cookies.txt file."
+        )
+    logger.info("Kept %d youtube.com cookies from a browser window", kept)
+    return check()
+
+
+def _jar_from_devtools(cookies: list[dict]) -> Any:
+    """DevTools cookie records into the jar shape the rest of this expects.
+
+    The protocol reports expiry as a float and -1 for a session cookie, where
+    `http.cookiejar` wants an int or None. Everything else maps across directly.
+    """
+    import http.cookiejar
+
+    from yt_dlp.cookies import YoutubeDLCookieJar
+
+    jar = YoutubeDLCookieJar()
+    for record in cookies:
+        domain = str(record.get("domain") or "")
+        expires = record.get("expires")
+        jar.set_cookie(
+            http.cookiejar.Cookie(
+                version=0,
+                name=str(record.get("name") or ""),
+                value=str(record.get("value") or ""),
+                port=None,
+                port_specified=False,
+                domain=domain,
+                domain_specified=True,
+                domain_initial_dot=domain.startswith("."),
+                path=str(record.get("path") or "/"),
+                path_specified=True,
+                secure=bool(record.get("secure")),
+                expires=int(expires) if expires and expires > 0 else None,
+                discard=not (expires and expires > 0),
+                comment=None,
+                comment_url=None,
+                rest={"HttpOnly": ""} if record.get("httpOnly") else {},
+                rfc2109=False,
+            )
+        )
+    return jar
 
 
 def forget() -> bool:

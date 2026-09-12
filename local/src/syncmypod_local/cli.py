@@ -303,6 +303,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Tracks per database commit (default {sync_engine.DEFAULT_BATCH_SIZE})",
     )
     sync.add_argument(
+        "--at-once",
+        type=int,
+        default=sync_engine.DEFAULT_CONCURRENCY,
+        metavar="N",
+        help=(
+            "Tracks to download at the same time "
+            f"(default {sync_engine.DEFAULT_CONCURRENCY}). Raising this asks "
+            "YouTube for more at once and invites rate limiting."
+        ),
+    )
+    sync.add_argument(
         "--keep-downloads",
         action="store_true",
         help="Leave downloaded files on disk for debugging. Prints where they are.",
@@ -504,6 +515,7 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         remove=remove,
         limit=args.limit,
         batch_size=max(1, args.batch),
+        concurrency=max(1, args.at_once),
         keep_downloads=args.keep_downloads,
         progress=reporter,
     )
