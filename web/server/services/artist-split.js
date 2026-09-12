@@ -272,6 +272,30 @@ async function applySplit(oldArtistId, artists) {
       }
     }
 
+    // Albums credited to the combined row move to the primary artist.
+    //
+    // Not optional. `albums.album_artist_id` is ON DELETE SET NULL, so deleting
+    // the row without this silently leaves the album with no artist at all -
+    // which is what the first run of this did to seventeen albums before anyone
+    // looked. An album has one album artist, so it gets the first of the names,
+    // which is the convention every catalogue uses.
+    await tx.query('UPDATE albums SET album_artist_id = $2 WHERE album_artist_id = $1', [
+      oldArtistId,
+      newIds[0],
+    ]);
+
+    // A follow of the combined name moves too, rather than being cascaded away.
+    await tx.query(
+      `INSERT INTO followed_artists (user_id, artist_id, followed_at, auto_add,
+                                     include_singles, include_compilations,
+                                     target_playlist_id)
+       SELECT user_id, $2, followed_at, auto_add, include_singles,
+              include_compilations, target_playlist_id
+         FROM followed_artists WHERE artist_id = $1
+       ON CONFLICT DO NOTHING`,
+      [oldArtistId, newIds[0]]
+    );
+
     // The combined row goes. It was never a real artist, and leaving it would
     // keep it on the Artists page beside the people it names.
     await tx.query('DELETE FROM artists WHERE id = $1', [oldArtistId]);
@@ -327,4 +351,33 @@ export async function expandCredit(artists) {
     position: index,
     role: index === 0 ? 'primary' : 'featured',
   }));
+}
+
+// Gives an album back an artist, by asking its own tracks.
+//
+// Only needed because the first version of applySplit above deleted a combined
+// artist without moving the albums credited to it, and the foreign key is ON
+// DELETE SET NULL rather than RESTRICT - so the loss was silent. Kept as a
+// repair rather than quietly fixed, because an album with no artist is visible
+// on the Albums page and somebody has to be able to put it right.
+export async function repairOrphanedAlbums() {
+  const { rowCount } = await query(
+    `UPDATE albums al
+        SET album_artist_id = primary_artist.artist_id
+       FROM (
+         SELECT DISTINCT ON (t.album_id) t.album_id, ta.artist_id
+           FROM tracks t
+           JOIN track_artists ta ON ta.track_id = t.id
+          WHERE t.album_id IS NOT NULL
+       ORDER BY t.album_id, ta.position, ta.artist_id
+       ) AS primary_artist
+      WHERE al.id = primary_artist.album_id
+        AND al.album_artist_id IS NULL`
+  );
+  return rowCount;
+}
+
+export async function countOrphanedAlbums() {
+  const row = await one('SELECT count(*)::int AS n FROM albums WHERE album_artist_id IS NULL');
+  return row?.n || 0;
 }

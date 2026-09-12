@@ -408,9 +408,29 @@ export async function saveResolvedTrack(resolved, { client } = {}) {
   // Kamath". Left alone that becomes an artist who does not exist. Expanded
   // here - and only when each part checks out - the catalogue stays right
   // without a repair pass having to be run afterwards.
+  const trackArtists = await expandCredit(resolved.track?.artists);
+
+  // The album's artist needs the same treatment, and missing it was a real bug.
+  //
+  // upsertAlbum creates the album artist separately from the track's artists,
+  // so expanding only the latter left iTunes' combined string arriving through
+  // the other door - and combined rows kept reappearing after a repair, with no
+  // tracks attached, which made them look like a database fault rather than an
+  // import one.
+  //
+  // An album has exactly one album artist, so it takes the first name. That is
+  // the convention every catalogue uses, and it is what Deezer already returns.
+  const albumArtists = await expandCredit(resolved.track?.album?.artists);
+
   resolved = {
     ...resolved,
-    track: { ...resolved.track, artists: await expandCredit(resolved.track?.artists) },
+    track: {
+      ...resolved.track,
+      artists: trackArtists,
+      ...(resolved.track?.album
+        ? { album: { ...resolved.track.album, artists: albumArtists.slice(0, 1) } }
+        : {}),
+    },
   };
 
   const run = async (tx) => {
