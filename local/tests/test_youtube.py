@@ -287,3 +287,94 @@ def test_the_format_chain_takes_the_best_aac(config_home):
     source = inspect.getsource(downloader._download)
     assert "bestaudio[ext=m4a]" in source
     assert "youtube.cookie_options()" in source
+
+
+class TestSigningInWithoutBeingAsked:
+    """No browser picker.
+
+    "Which browser are you signed in to YouTube in" is a question most people
+    cannot answer and should not be asked, so every readable browser is tried
+    and the first one holding a YouTube session wins.
+    """
+
+    @pytest.fixture
+    def attempts(self, config_home, monkeypatch):
+        """Records which browsers were tried, in order."""
+        tried: list[str] = []
+        monkeypatch.setattr(
+            youtube, "check", lambda: youtube.Availability(best_aac_kbps=130, signed_in=True)
+        )
+        monkeypatch.setattr(
+            "yt_dlp.cookies.extract_cookies_from_browser",
+            lambda name, *_a, **_k: (
+                tried.append(name) or jar_with(cookie("SID", ".youtube.com"))
+            ),
+        )
+        return tried
+
+    def test_the_first_browser_with_a_youtube_session_wins(self, attempts):
+        youtube.sign_in()
+        assert attempts == [youtube.BROWSERS[0]], "it kept looking after finding one"
+        assert youtube.is_signed_in()
+
+    def test_a_browser_without_youtube_cookies_is_passed_over(self, config_home, monkeypatch):
+        """Being signed in to a browser is not being signed in to YouTube."""
+        tried: list[str] = []
+        monkeypatch.setattr(
+            youtube, "check", lambda: youtube.Availability(best_aac_kbps=130, signed_in=True)
+        )
+
+        def extract(name, *_a, **_k):
+            tried.append(name)
+            if name == "chrome":
+                return jar_with(cookie("SID", ".youtube.com"))
+            return jar_with(cookie("sb", ".facebook.com"))
+
+        monkeypatch.setattr("yt_dlp.cookies.extract_cookies_from_browser", extract)
+
+        youtube.sign_in()
+        assert tried[-1] == "chrome"
+        assert youtube.is_signed_in()
+
+    def test_a_browser_that_cannot_be_read_does_not_stop_the_others(
+        self, config_home, monkeypatch
+    ):
+        """Chromium locks its cookie database while running, and seals it on
+        Windows besides. That must not be the end of the attempt."""
+        monkeypatch.setattr(
+            youtube, "check", lambda: youtube.Availability(best_aac_kbps=130, signed_in=True)
+        )
+
+        def extract(name, *_a, **_k):
+            if name != "edge":
+                raise PermissionError("database is locked")
+            return jar_with(cookie("SID", ".youtube.com"))
+
+        monkeypatch.setattr("yt_dlp.cookies.extract_cookies_from_browser", extract)
+
+        youtube.sign_in()
+        assert youtube.is_signed_in()
+
+    def test_finding_nothing_says_what_to_do_rather_than_listing_failures(
+        self, config_home, monkeypatch
+    ):
+        """Seven failure lines is not an error message."""
+        monkeypatch.setattr(
+            "yt_dlp.cookies.extract_cookies_from_browser",
+            lambda *_a, **_k: jar_with(cookie("sb", ".facebook.com")),
+        )
+        with pytest.raises(youtube.YouTubeError, match="No browser on this computer"):
+            youtube.sign_in()
+        assert not youtube.cookies_path().exists()
+
+    def test_the_viewing_browser_is_tried_first(self, attempts):
+        """Only a reordering - every browser is still tried - but it is usually
+        right, and being right first is one cookie-database read instead of
+        seven."""
+        youtube.sign_in(prefer="edge")
+        assert attempts[0] == "edge"
+
+    def test_a_named_browser_is_the_only_one_tried(self, attempts):
+        """The command line still takes one, and then means it."""
+        youtube.sign_in("chrome")
+        assert attempts == ["chrome"]

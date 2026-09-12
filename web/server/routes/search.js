@@ -163,8 +163,31 @@ searchRoutes.get(
     }
 
     try {
+      // YouTube Music first. It is a different index over the same catalogue
+      // and it answers with structured fields - artist, album, song, each
+      // tagged - instead of a video title to be guessed at. So results show
+      // correct credits, and the resolver gets a real artist to match on.
+      //
+      // The video search stays as the fallback, because YouTube Music indexes
+      // music and YouTube indexes everything: a track that only ever existed as
+      // someone's upload is findable by the second and not the first.
+      const music = await youtube.searchMusic(q, { limit: 20 });
+      if (music.length > 0) {
+        return res.json({
+          provider: 'youtube',
+          providerLabel: 'YouTube Music',
+          structured: true,
+          results: music,
+        });
+      }
+
       const results = await youtube.searchTracks(q, { limit: 20 });
-      res.json({ provider: 'youtube', providerLabel: 'YouTube', results });
+      res.json({
+        provider: 'youtube',
+        providerLabel: 'YouTube',
+        structured: false,
+        results,
+      });
     } catch (err) {
       // Reported rather than thrown. This is a secondary source reached by an
       // optional button, and a failure here must read as "that did not work"

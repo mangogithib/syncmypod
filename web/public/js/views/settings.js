@@ -284,6 +284,47 @@ function providerCard(data, reload) {
           musicbrainzResult
         ),
 
+        // --- YouTube -------------------------------------------------------
+        h(
+          'div',
+          h(
+            'div.row-between',
+            { style: { marginBottom: '10px' } },
+            h('div', { style: { fontWeight: 600 } }, 'YouTube'),
+            data.providers?.youtube === false ? badge('Off') : badge('On', 'ok')
+          ),
+          h(
+            'p.small.muted',
+            { style: { marginBottom: '14px' } },
+            'Searching YouTube and importing a public playlist link need no account and no key. The two fields below are for something else: connecting your own YouTube account so its playlists can be followed. Everything else here keeps working without them.'
+          ),
+          toggle('youtube.enabled'),
+          h(
+            'div',
+            { style: { marginTop: '16px' } },
+            h(
+              'p.small.muted',
+              { style: { marginBottom: '10px' } },
+              'Google only lets an application read your playlists with credentials issued to that application, so this instance needs its own. Create them once at ',
+              h(
+                'a',
+                { href: 'https://console.cloud.google.com/apis/credentials', target: '_blank', rel: 'noreferrer' },
+                'console.cloud.google.com'
+              ),
+              ': enable the YouTube Data API v3, make an OAuth client of type Web application, and add the redirect URI shown on the Sources page.'
+            ),
+            field('google.client_id', {
+              placeholder: '000000000000-xxxxxxxx.apps.googleusercontent.com',
+              hint: 'The Client ID from your OAuth client. Not secret.',
+            }),
+            field('google.client_secret', {
+              placeholder: 'GOCSPX-...',
+              type: 'password',
+              hint: 'The Client secret from the same OAuth client. Stored encrypted and never shown again.',
+            })
+          )
+        ),
+
         h('div', { style: { marginTop: '4px' } }, save)
       )
     )

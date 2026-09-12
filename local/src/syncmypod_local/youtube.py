@@ -157,34 +157,75 @@ def cookie_options() -> dict[str, str]:
     return {"cookiefile": str(cookies_path())} if is_signed_in() else {}
 
 
-def sign_in(browser: str) -> Availability:
-    """Borrow the YouTube session from *browser* and keep it.
+def sign_in(browser: str | None = None, *, prefer: str | None = None) -> Availability:
+    """Find a browser signed in to YouTube and borrow its session.
 
-    The browser must have been signed in to YouTube already. Nothing is typed
-    here and no password is ever seen by this application.
+    Nothing is typed here and no password is ever seen by this application.
+
+    **No browser has to be named.** Every browser that can be read is tried in
+    turn, and the first one holding a YouTube session wins. Asking the user
+    which browser to use was asking them to know something they have no reason
+    to know - most people are signed in to YouTube in one browser and could not
+    say which of the seven listed it was. Trying them costs milliseconds each:
+    a browser that is not installed fails immediately.
+
+    A name can still be passed, which is what the command line does, and then
+    only that one is tried. `prefer` reorders the attempts without narrowing
+    them, and is how the window puts the browser it is being viewed in first.
     """
-    chosen = (browser or "").strip().lower()
-    if chosen not in BROWSERS:
-        raise YouTubeError(
-            f"{browser!r} is not a browser this can read. Try one of: {', '.join(BROWSERS)}."
-        )
+    if browser:
+        chosen = browser.strip().lower()
+        if chosen not in BROWSERS:
+            raise YouTubeError(
+                f"{browser!r} is not a browser this can read. Try one of: {', '.join(BROWSERS)}."
+            )
+        candidates = [chosen]
+    else:
+        candidates = list(BROWSERS)
+        # The browser reading the page goes first. It is only a reordering -
+        # every browser is still tried - but it is usually right, and being
+        # right first means one cookie-database read instead of seven.
+        if prefer:
+            preferred = prefer.strip().lower()
+            if preferred in candidates:
+                candidates.remove(preferred)
+                candidates.insert(0, preferred)
 
     from yt_dlp.cookies import extract_cookies_from_browser
 
-    try:
-        jar = extract_cookies_from_browser(chosen)
-    except Exception as err:
-        raise YouTubeError(_explain_extraction_failure(chosen, err)) from err
+    failures: list[str] = []
+    for candidate in candidates:
+        try:
+            jar = extract_cookies_from_browser(candidate)
+        except Exception as err:
+            # Not installed, locked, or sealed. Worth remembering in case every
+            # candidate fails, but not worth stopping for.
+            failures.append(f"{candidate}: {_explain_extraction_failure(candidate, err)}")
+            continue
 
-    kept = _write_youtube_cookies(jar)
-    if not kept:
-        raise YouTubeError(
-            f"No YouTube cookies were found in {chosen}. Sign in to YouTube in that "
-            "browser first, then try again."
+        kept = _write_youtube_cookies(jar)
+        if kept:
+            logger.info("Kept %d youtube.com cookies from %s", kept, candidate)
+            return check()
+        failures.append(
+            f"{candidate}: No YouTube cookies were found in {candidate}. Sign in to "
+            "YouTube in that browser first, then try again."
         )
 
-    logger.info("Kept %d youtube.com cookies from %s", kept, chosen)
-    return check()
+    raise YouTubeError(_explain_nothing_found(candidates, failures))
+
+
+def _explain_nothing_found(candidates: list[str], failures: list[str]) -> str:
+    """One sentence the user can act on, not a list of seven failures."""
+    if len(candidates) == 1:
+        return failures[0].split(": ", 1)[-1] if failures else "That browser could not be read."
+
+    return (
+        "No browser on this computer is signed in to YouTube. Open YouTube in "
+        "Firefox, Chrome or Edge, sign in there, then press Sign in here again. "
+        "(Firefox is the most reliable on Windows: Chrome seals its cookies in a "
+        "way other programs cannot read.)"
+    )
 
 
 def forget() -> bool:

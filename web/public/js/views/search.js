@@ -545,9 +545,11 @@ export async function renderSearch(view, context) {
         h('div.list-sub', result.artist || result.channel || 'Unknown artist'),
         h(
           'div.small.subtle',
-          [result.channel, result.views, result.official ? 'Official audio' : null]
-            .filter(Boolean)
-            .join(' - ')
+          result.source === 'music'
+            ? [result.album, result.views].filter(Boolean).join(' \u00b7 ')
+            : [result.channel, result.views, result.official ? 'Official audio' : null]
+                .filter(Boolean)
+                .join(' \u00b7 ')
         )
       ),
       h('span.small.subtle.nowrap', formatDuration(result.durationMs)),
@@ -555,19 +557,37 @@ export async function renderSearch(view, context) {
     );
   }
 
-  // The video supplies a title and a download address. Nothing else.
+  // What gets sent when a YouTube result is added, and it depends on which
+  // YouTube answered.
   //
-  // A channel is not an artist and a video has no album, so filling those
-  // fields from YouTube produces a library that looks populated and is wrong -
-  // and wrong metadata is harder to notice than missing metadata. skipResolve
-  // stops the server guessing too: matching a bare title against the
-  // catalogues with no artist to check it against returns the wrong recording
-  // confidently.
+  // **YouTube Music** returns structured fields: the artist, the album and the
+  // song separately, each tagged by the API as what it is. That is real
+  // catalogue metadata, so it is passed to the resolver as a proper query -
+  // and a query with a correct artist resolves far more often than a title on
+  // its own, which is the whole reason for preferring this source.
   //
-  // The track lands with the artist and album empty, which keeps it out of
-  // syncing until they are filled in. That is the intended flow, not a
-  // shortcoming.
+  // **A video result** supplies a title and an address, and nothing else. A
+  // channel is not an artist and a video has no album, so filling those fields
+  // from it produces a library that looks populated and is wrong - and wrong
+  // metadata is harder to notice than missing metadata. skipResolve stops the
+  // server guessing too: matching a bare title against the catalogues with no
+  // artist to check against returns the wrong recording confidently.
+  //
+  // Either way, nothing YouTube says is written unless a catalogue confirms it.
+  // A track that resolves is stored with the catalogue's metadata; one that
+  // does not is stored with its title alone and waits for a human. That is the
+  // intended flow, not a shortcoming.
   function youtubeItem(result) {
+    if (result.source === 'music' && result.artist) {
+      return {
+        title: result.title,
+        artist: result.artist,
+        album: result.album || null,
+        durationMs: result.durationMs,
+        sourceHint: result.url,
+      };
+    }
+
     return {
       title: result.trackTitle || result.title,
       durationMs: result.durationMs,

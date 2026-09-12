@@ -240,10 +240,11 @@ def _build_parser() -> argparse.ArgumentParser:
     youtube_login.add_argument(
         "browser",
         nargs="?",
-        default="firefox",
+        default=None,
         choices=youtube_module.BROWSERS,
-        help="Which browser to read the session from (default firefox, which is "
-        "the one that reliably works on Windows)",
+        help="Which browser to read the session from. Omit it and every browser "
+        "is tried until one is found signed in to YouTube, which is what the "
+        "window does.",
     )
     youtube_login.set_defaults(handler=_cmd_youtube_sign_in)
 

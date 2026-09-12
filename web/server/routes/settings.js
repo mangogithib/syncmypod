@@ -4,6 +4,7 @@ import { badRequest, handler } from '../lib/api.js';
 import * as deezer from '../providers/deezer.js';
 import * as itunes from '../providers/itunes.js';
 import * as musicbrainz from '../providers/musicbrainz.js';
+import * as youtube from '../providers/youtube.js';
 import { describe, SETTING_KEYS, setMany } from '../services/app-settings.js';
 
 export const settingsRoutes = Router();
@@ -18,6 +19,17 @@ settingsRoutes.use(requireUser);
 // provider can look healthy and still refuse the data API, and it is the data
 // API that matters.
 const PROVIDERS = {
+  // YouTube is first because it is the one people ask about. It is not in the
+  // resolver's ladder - it is the named fallback for music the catalogues do
+  // not carry - but it is a provider, it has a toggle, and the Settings page
+  // should say whether it is on.
+  youtube: {
+    label: 'YouTube',
+    module: youtube,
+    unconfigured: 'YouTube is switched off.',
+    probe: () => youtube.searchMusic('radiohead creep', { limit: 1 }),
+    count: (found) => found.length,
+  },
   deezer: {
     label: 'Deezer',
     module: deezer,

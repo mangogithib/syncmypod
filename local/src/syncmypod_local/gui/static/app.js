@@ -291,23 +291,6 @@ function renderYouTube(data) {
     check.addEventListener("click", () => youtubeCall(check, "/api/youtube/check"));
     actions.append(check);
 
-    /*
-      The same session, doing a second job.
-
-      It was saved to fetch better audio. It can also list the account's own
-      playlists and liked songs, which is the only way to follow a YouTube
-      Music library without the server holding a Google credential - and the
-      only way that asks the user for nothing but this sign-in they have
-      already done.
-
-      Reading happens here because the session is here. What goes to the server
-      is names and video ids; the credential never leaves this machine.
-    */
-    const send = node("button", "button button-small", "Send playlists to server");
-    send.type = "button";
-    send.addEventListener("click", () => pushLibrary(send));
-    actions.append(send);
-
     const out = node("button", "button button-small", "Sign out");
     out.type = "button";
     out.addEventListener("click", async () => {
@@ -318,30 +301,16 @@ function renderYouTube(data) {
     });
     actions.append(out);
   } else {
-    const picker = node("select", "select-small");
-    for (const browser of youtubeState.browsers || []) {
-      const option = node("option", null, browser);
-      option.value = browser;
-      // Defaulted to whichever browser is reading this page. It cannot hand
-      // over its own YouTube session - a localhost page reading youtube.com's
-      // cookies is what the same-origin policy exists to stop - but it can at
-      // least say which browser to look in.
-      if (browser === youtubeState.likely) option.selected = true;
-      picker.append(option);
-    }
-    actions.append(picker);
-
-    const signIn = node("button", "button button-small button-primary", "Sign in");
+    // No browser picker. Whichever browser is signed in to YouTube is found by
+    // trying them, because "which browser are you signed in to YouTube in" is a
+    // question most people cannot answer and should not be asked.
+    const signIn = node("button", "button button-small button-primary", "Sign in to YouTube");
     signIn.type = "button";
-    signIn.addEventListener("click", () =>
-      youtubeCall(signIn, "/api/youtube/sign-in", { browser: picker.value })
-    );
+    signIn.addEventListener("click", () => youtubeCall(signIn, "/api/youtube/sign-in", {}));
     actions.append(signIn);
   }
 
   body.append(actions);
-
-  body.append(libraryResultSlot);
 
   if (youtubeState.error) {
     body.append(node("p", "notice notice-warn", youtubeState.error));
@@ -357,55 +326,6 @@ function renderYouTube(data) {
   }
 }
 
-/*
-  Kept outside renderYouTube so a result survives the re-render that follows it.
-  Rebuilding the card would otherwise wipe the message the user just asked for.
-*/
-const libraryResultSlot = node("div", null, "");
-
-async function pushLibrary(button) {
-  const original = button.textContent;
-  button.disabled = true;
-  button.textContent = "Reading...";
-  clear(libraryResultSlot);
-
-  try {
-    const result = await api("/api/youtube/library", { method: "POST", body: "{}" });
-
-    if (!result.ok) {
-      libraryResultSlot.append(node("p", "notice notice-warn", result.error));
-      return;
-    }
-
-    libraryResultSlot.append(
-      node("p", result.failures.length ? "notice notice-warn" : "notice notice-ok", result.detail)
-    );
-
-    // A first run always lands here: nothing can be ticked before the list
-    // exists. Saying where to go next turns a dead end into a step.
-    if (result.needsChoosing && result.serverUrl) {
-      const line = node("p", "subtle", "");
-      const link = node("a", null, "Choose them in the web interface");
-      link.href = result.serverUrl.replace(/\/$/, "") + "/#/import";
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      line.append(link);
-      libraryResultSlot.append(line);
-    }
-
-    for (const warning of result.warnings || []) {
-      libraryResultSlot.append(node("p", "subtle", warning));
-    }
-    for (const failure of result.failures || []) {
-      libraryResultSlot.append(node("p", "track-error", failure));
-    }
-  } catch (err) {
-    libraryResultSlot.append(node("p", "notice notice-danger", err.message));
-  } finally {
-    button.disabled = false;
-    button.textContent = original;
-  }
-}
 
 async function youtubeCall(button, path, payload = {}) {
   const original = button.textContent;

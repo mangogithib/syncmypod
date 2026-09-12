@@ -85,6 +85,192 @@ export function isEnabled() {
 
 // Searches YouTube and returns tracks in the same shape the other providers use,
 // so the UI does not need a second renderer.
+// -- YouTube Music ----------------------------------------------------------
+//
+// The important difference from the video search below: **results come back as
+// structured fields**, not as a title to be guessed at.
+//
+// A YouTube video search gives "Bebe Rexha & Faithless - New Religion (Official
+// Visual)" and a channel name, and turning that into an artist and a song is
+// guesswork that goes wrong on every upload that does not follow the
+// convention. YouTube Music is a different index over the same catalogue, and
+// it returns the artist, the album and the song as separate fields, each run
+// tagged with what it is - MUSIC_PAGE_TYPE_ARTIST, MUSIC_PAGE_TYPE_ALBUM.
+//
+// That matters twice over. Search results show correct credits instead of a
+// promo tag, and the resolver gets a real artist to match on rather than a
+// fragment of a title - so far more tracks resolve, and far fewer fall through
+// to being stored with a title alone.
+//
+// This is the approach ytmusicapi takes. That library is Python and this is
+// Node, so what is ported is the method rather than the code: the same
+// InnerTube endpoint, the same WEB_REMIX client, no key and no account.
+
+const MUSIC_API = 'https://music.youtube.com/youtubei/v1/search';
+
+// The client YouTube Music's own web app identifies as. A plain WEB client gets
+// video results back instead, which is the thing being avoided.
+const MUSIC_CLIENT = { clientName: 'WEB_REMIX', clientVersion: '1.20240101.01.00' };
+
+// YouTube's own "songs only" filter. Opaque because it is a base64 protobuf;
+// this is the value the site itself sends. Without it the response mixes in
+// albums, artists, playlists and music videos, and a music video is a different
+// recording from the song - usually with an intro, and a different length.
+const SONGS_ONLY = 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D';
+
+// Searches YouTube Music and returns tracks with real metadata.
+export async function searchMusic(query, { limit = MAX_RESULTS } = {}) {
+  if (!isEnabled()) return [];
+  const text = String(query || '').trim();
+  if (!text) return [];
+
+  let data;
+  try {
+    data = await limiter(() =>
+      postJson(MUSIC_API, {
+        context: { client: { ...MUSIC_CLIENT, hl: 'en', gl: 'US' } },
+        query: text,
+        params: SONGS_ONLY,
+      })
+    );
+  } catch {
+    // A failure here is not worth surfacing: the caller falls back to the video
+    // search, which is the same catalogue reached a worse way.
+    return [];
+  }
+
+  const found = [];
+  collectMusicItems(data, found, new Set(), limit);
+  return found;
+}
+
+export function collectMusicItems(node, out = [], seen = new Set(), limit = MAX_RESULTS) {
+  if (!node || typeof node !== 'object' || out.length >= limit) return out;
+
+  if (Array.isArray(node)) {
+    for (const item of node) collectMusicItems(item, out, seen, limit);
+    return out;
+  }
+
+  if (node.musicResponsiveListItemRenderer) {
+    const track = shapeMusicItem(node.musicResponsiveListItemRenderer);
+    if (track && !seen.has(track.videoId)) {
+      seen.add(track.videoId);
+      out.push(track);
+    }
+    return out;
+  }
+
+  for (const value of Object.values(node)) collectMusicItems(value, out, seen, limit);
+  return out;
+}
+
+function shapeMusicItem(item) {
+  const videoId = item.playlistItemData?.videoId || watchVideoId(item);
+  if (!videoId) return null;
+
+  const columns = item.flexColumns || [];
+  const title = columnText(columns[0]);
+  if (!title) return null;
+
+  // The second column is the interesting one: a list of runs where the ones
+  // that matter carry a navigation endpoint saying what they are. Reading the
+  // tags rather than splitting on the bullet separator is what makes this
+  // reliable - an artist with a bullet in their name would break the split, and
+  // the column's shape varies by result type.
+  const runs = columns[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+
+  const artists = [];
+  let album = null;
+  let durationMs = null;
+
+  for (const run of runs) {
+    const label = String(run?.text || '').trim();
+    if (!label || label === '•') continue;
+
+    const pageType =
+      run.navigationEndpoint?.browseEndpoint?.browseEndpointContextSupportedConfigs
+        ?.browseEndpointContextMusicConfig?.pageType || '';
+
+    if (pageType === 'MUSIC_PAGE_TYPE_ARTIST') artists.push(label);
+    else if (pageType === 'MUSIC_PAGE_TYPE_ALBUM') album = label;
+    else if (/^\d+(:\d\d)+$/.test(label)) durationMs = parseDuration(label);
+  }
+
+  // An album whose name is the song's is a single, and repeating it as an album
+  // adds nothing - the resolver would score it against itself.
+  if (album && album.toLowerCase() === title.toLowerCase()) album = null;
+
+  return {
+    kind: 'youtube',
+    source: 'music',
+    videoId,
+    url: `https://music.youtube.com/watch?v=${videoId}`,
+    title,
+    // Several credited artists come back as separate runs, in the order
+    // YouTube Music lists them, which is the order a record sleeve uses.
+    artist: artists.join(', ') || null,
+    artistCredit: artists.join(', ') || null,
+    album,
+    durationMs,
+    artworkUrl: musicThumbnail(item) || thumbnailFor(videoId),
+    channel: artists[0] || '',
+    views: columnText(columns[2]) || null,
+    // Everything here comes from YouTube's music catalogue rather than from a
+    // video title, so it is worth marking as such: the UI can show it without
+    // the "this is a guess" hedging a scraped title needs.
+    official: true,
+  };
+}
+
+function columnText(column) {
+  const runs = column?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
+  if (!Array.isArray(runs)) return '';
+  return runs.map((run) => run.text || '').join('').trim();
+}
+
+function watchVideoId(item) {
+  // Some results carry the id only on the row's own tap target.
+  const endpoint =
+    item.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer
+      ?.playNavigationEndpoint?.watchEndpoint?.videoId;
+  return endpoint || null;
+}
+
+function musicThumbnail(item) {
+  const sources =
+    item.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails ||
+    item.thumbnail?.thumbnails ||
+    [];
+  if (!Array.isArray(sources) || sources.length === 0) return null;
+  // Largest available. These are square cover art rather than 16:9 video
+  // stills, which is the other thing YouTube Music gets right.
+  return sources[sources.length - 1]?.url || null;
+}
+
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      ...HEADERS,
+      'content-type': 'application/json',
+      origin: 'https://music.youtube.com',
+      referer: 'https://music.youtube.com/',
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
+  });
+
+  if (!response.ok) {
+    throw new ProviderError(`YouTube Music returned ${response.status}.`, {
+      provider: 'youtube',
+      status: 502,
+      retryable: response.status >= 500,
+    });
+  }
+  return response.json();
+}
+
 export async function searchTracks(query, { limit = MAX_RESULTS } = {}) {
   if (!isEnabled()) {
     throw new ProviderError('YouTube search is turned off in Settings.', {
