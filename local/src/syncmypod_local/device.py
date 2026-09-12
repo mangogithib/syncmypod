@@ -107,6 +107,86 @@ class IpodDevice:
         except Exception as err:
             raise DeviceError(f"Could not back up the iPod database: {err}") from err
 
+    # -- the database itself ------------------------------------------------
+
+    @property
+    def has_database(self) -> bool:
+        """Whether this iPod has an iTunesDB at all.
+
+        An iPod restored in iTunes and never synced since does not have one. The
+        folder structure is there, ``iPod_Control/iTunes`` holds the
+        pre-allocated ``iTunesControl`` file, and the database itself only
+        appears the first time something writes music. So does an iPod restored
+        by any other tool, and an iPod somebody has just wiped.
+
+        That is an ordinary state for a device being set up, not a fault, and it
+        is the state this application has to be able to start from.
+        """
+        try:
+            from pypodlib.device.info import resolve_itdb_path
+
+            return bool(resolve_itdb_path(str(self.mount_path)))
+        except Exception:
+            # Never let a question about the database stop a caller. The write
+            # path checks properly; this is for deciding what to show.
+            return False
+
+    def ensure_database(self) -> bool:
+        """Create an empty database when the iPod has none.
+
+        Returns whether one was created; False means there already was one and
+        nothing was touched.
+
+        **Why this is safe, and where it stops being safe.** Creating a database
+        where there is none takes nothing away - there is nothing there to lose,
+        and without it the iPod cannot hold music at all. But a device holding
+        audio files and *no* database is a different situation: those files are
+        already invisible to the iPod, and writing an empty database over the
+        top would make that permanent. That is somebody's music, so it refuses
+        and says what it found rather than guessing.
+
+        This was found on a real 5.5th gen that had been restored and never
+        synced. It had never shown up in testing because a *simulated* iPod
+        rebuilds its own database the moment it is connected, so every test in
+        the suite starts from a device that already has one.
+        """
+        if self._handle is None:
+            raise DeviceError("This device is not open.")
+        if self.has_database:
+            return False
+
+        stranded = _count_audio_files(self.mount_path)
+        if stranded:
+            raise DeviceError(
+                f"This iPod has {stranded} audio file(s) but no database, so the "
+                "device cannot see them. Creating a new database would make that "
+                "permanent, so nothing has been changed. Restore the iPod in "
+                "iTunes to start cleanly, or copy those files off first."
+            )
+
+        from pypodlib.device.bootstrap import ensure_device_itunes_database
+
+        try:
+            created = ensure_device_itunes_database(str(self.mount_path), self._handle.info)
+        except Exception as err:
+            raise DeviceError(f"Could not set up a database on this iPod: {err}") from err
+
+        if not created:
+            # The library returns None rather than raising when it cannot sign a
+            # database this device's firmware would accept. Saying so beats a
+            # later failure that looks like a write error.
+            raise DeviceError(
+                "This iPod needs a signed database and the material to sign one "
+                "could not be read from the device, so an empty database was not "
+                "created. Restoring the iPod in iTunes puts that material back."
+            )
+
+        logger.info("Created an empty iTunesDB at %s", created)
+        # The handle was opened against a device with no database and caches
+        # that fact, so it is reopened rather than reused.
+        self._handle = _connect(self.mount_path)
+        return True
+
     # -- reading the library ------------------------------------------------
 
     def tracks(self, *, reload: bool = False) -> list[IpodTrack]:
@@ -115,7 +195,13 @@ class IpodDevice:
         Includes tracks this tool never touched. The sync needs to see them:
         they occupy space, they must not be removed, and one of them may be the
         same recording the library is about to add.
+
+        An iPod with no database yet holds no tracks, and that is the honest
+        answer rather than an error - it lets a plan be worked out and shown
+        before anything is written to a device being set up.
         """
+        if not self.has_database:
+            return []
         library = self._library(reload=reload)
         found = []
         for track in library.tracks:
@@ -142,6 +228,8 @@ class IpodDevice:
         database writer; the smart playlists are the device's own Music, Movies
         and Podcasts categories. Neither is ours to write.
         """
+        if not self.has_database:
+            return []
         library = self._library()
         return [p.name for p in library.playlists if not p.master]
 
@@ -431,6 +519,43 @@ def _file_for(mount: Path, location: str) -> Path:
     return Path(mount).joinpath(*parts)
 
 
+# Every audio container an iPod will play. Used only to answer "is there music
+# here that a new database would strand", so over-matching is the safe error.
+_AUDIO_SUFFIXES = frozenset(
+    {".mp3", ".m4a", ".m4b", ".m4p", ".aac", ".aif", ".aiff", ".wav", ".mp4", ".alac"}
+)
+
+
+def _count_audio_files(mount: Path) -> int:
+    """How many audio files sit in the iPod's music folders.
+
+    The iPod stores music under ``iPod_Control/Music/F00``..``F49`` regardless of
+    what the database says, so this answers the question the database cannot when
+    there is no database to ask.
+    """
+    music = mount / "iPod_Control" / "Music"
+    if not music.is_dir():
+        return 0
+    found = 0
+    with contextlib.suppress(OSError):
+        for path in music.rglob("*"):
+            if path.suffix.lower() in _AUDIO_SUFFIXES and path.is_file():
+                found += 1
+    return found
+
+
+def _connect(mount: Path) -> Any:
+    """Open a mount point with pypodlib, as a pypodlib handle."""
+    lib = _pypodlib()
+    try:
+        return lib.connect(mount)
+    except Exception as err:
+        raise DeviceError(
+            f"{mount} does not look like an iPod: {err}. Point this at the "
+            "drive's root - the folder containing iPod_Control."
+        ) from err
+
+
 def _pypodlib() -> Any:
     """Import pypodlib, turning a missing dependency into a clear message."""
     try:
@@ -467,19 +592,10 @@ def scan() -> list[IpodDevice]:
 
 def open_at(path: str | Path) -> IpodDevice:
     """Open a specific mount point, for when detection needs overriding."""
-    lib = _pypodlib()
     mount = Path(path)
     if not mount.exists():
         raise DeviceError(f"{mount} does not exist.")
-
-    try:
-        handle = lib.connect(mount)
-    except Exception as err:
-        raise DeviceError(
-            f"{mount} does not look like an iPod: {err}. Point this at the "
-            "drive's root - the folder containing iPod_Control."
-        ) from err
-    return _describe(handle)
+    return _describe(_connect(mount))
 
 
 def create_virtual(

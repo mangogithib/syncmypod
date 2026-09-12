@@ -328,6 +328,14 @@ def run(
             report.message = "Already up to date."
             return report
 
+        # A restored iPod has no database until something writes music to it,
+        # and every read above treats that as "no tracks" rather than failing.
+        # This is the point where it has to become real, and it comes before the
+        # backup because there is nothing to back up until it exists.
+        if not ipod.has_database:
+            say("database", {})
+            ipod.ensure_database()
+
         # Before anything is written. pypodlib is alpha and this is the one
         # operation that can leave a device unusable.
         say("backup", {})

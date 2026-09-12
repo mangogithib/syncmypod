@@ -308,9 +308,25 @@ function renderYouTube(data) {
     signIn.type = "button";
     signIn.addEventListener("click", () => youtubeCall(signIn, "/api/youtube/sign-in", {}));
     actions.append(signIn);
+
+    // The way out when reading the browser cannot work. On Windows, Chromium
+    // seals its cookies and Firefox may not be installed, which leaves nothing
+    // for the button above to find however many times it is pressed.
+    const useFile = node("button", "button button-small", "Use a cookies.txt file");
+    useFile.type = "button";
+    useFile.addEventListener("click", () => {
+      const panel = el("youtube-cookie-file");
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) panel.querySelector("input").focus();
+    });
+    actions.append(useFile);
   }
 
   body.append(actions);
+
+  if (!youtubeState.signedIn) {
+    body.append(cookieFilePanel());
+  }
 
   if (youtubeState.error) {
     body.append(node("p", "notice notice-warn", youtubeState.error));
@@ -326,6 +342,41 @@ function renderYouTube(data) {
   }
 }
 
+
+// A path box rather than a file picker: this page is served to the browser from
+// the user's own machine, and a picked file arrives as bytes with its real path
+// stripped, which is precisely the thing needed here.
+function cookieFilePanel() {
+  const panel = node("div", "cookie-file");
+  panel.id = "youtube-cookie-file";
+  panel.hidden = true;
+
+  panel.append(
+    node(
+      "p",
+      "subtle",
+      "Export cookies.txt from any browser while signed in to YouTube, then give the path to it here."
+    )
+  );
+
+  const row = node("div", "card-actions");
+  const input = node("input", "input-field");
+  input.type = "text";
+  input.placeholder = "C:\Users\you\Downloads\cookies.txt";
+  input.setAttribute("aria-label", "Path to a cookies.txt file");
+
+  const use = node("button", "button button-small button-primary", "Use this file");
+  use.type = "button";
+  const submit = () => youtubeCall(use, "/api/youtube/use-cookies", { path: input.value });
+  use.addEventListener("click", submit);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") submit();
+  });
+
+  row.append(input, use);
+  panel.append(row);
+  return panel;
+}
 
 async function youtubeCall(button, path, payload = {}) {
   const original = button.textContent;
@@ -442,6 +493,9 @@ function handle(event) {
     }
     case "track-failed":
       markFailed(event.id, event.error);
+      break;
+    case "database":
+      note("Setting this iPod up: it has no library database yet…");
       break;
     case "backup":
       note("Backing up the iPod…");

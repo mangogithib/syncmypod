@@ -235,3 +235,85 @@ class TestEject:
         ok, message = probe.eject()
         assert isinstance(ok, bool)
         assert message
+
+
+class TestAnIpodWithNoDatabase:
+    """A restored iPod that has never been synced.
+
+    This is the state a 5.5th gen arrived in: every folder present, the
+    pre-allocated ``iTunesControl`` in place, and no ``iTunesDB`` at all. The
+    sync failed outright on it with "iTunesDB was not found", which is a dead
+    end for anyone setting up a device they have just wiped.
+
+    **Why no existing test caught it.** `create_virtual` is how every other test
+    here gets a device, and a virtual iPod rebuilds its own database the moment
+    it is connected - so the whole suite starts from a device that already has
+    one and cannot reach this path by accident. The database is deleted below
+    *after* the handle is open, which is the only way to hold a device in the
+    state a real one arrives in.
+    """
+
+    @staticmethod
+    def _itdb(pod):
+        from pypodlib.device.info import resolve_itdb_path
+
+        return resolve_itdb_path(str(pod.mount_path))
+
+    @pytest.fixture
+    def blank(self, video):
+        """An open device whose database has been removed underneath it."""
+        from pathlib import Path
+
+        Path(self._itdb(video)).unlink()
+        return video
+
+    def test_a_virtual_ipod_rebuilds_its_database_on_connect(self, video, tmp_path):
+        """The behaviour that hid the bug, asserted so it is not a surprise twice."""
+        from pathlib import Path
+
+        Path(self._itdb(video)).unlink()
+        assert self._itdb(video) is None
+        device.open_at(video.mount_path)
+        assert self._itdb(video) is not None
+
+    def test_the_missing_database_is_noticed(self, blank):
+        assert blank.has_database is False
+
+    def test_reading_it_says_empty_rather_than_failing(self, blank):
+        # The old behaviour raised here, which is what stopped the sync before
+        # it could get as far as creating anything.
+        assert blank.tracks() == []
+        assert blank.playlist_names() == []
+
+    def test_one_is_created_on_demand(self, blank):
+        assert blank.ensure_database() is True
+        assert blank.has_database is True
+        assert blank.tracks() == []
+
+    def test_creating_one_twice_does_nothing(self, blank):
+        assert blank.ensure_database() is True
+        assert blank.ensure_database() is False
+
+    def test_music_already_on_the_device_stops_it(self, blank):
+        """The one case where an empty database would destroy something.
+
+        Audio files with no database are already invisible to the iPod. Writing
+        an empty database over them makes that permanent, and they are somebody
+        else's music.
+        """
+        folder = blank.mount_path / "iPod_Control" / "Music" / "F00"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "ABCD.m4a").write_bytes(b"not really audio, but named like it")
+
+        with pytest.raises(device.DeviceError, match="1 audio file"):
+            blank.ensure_database()
+        assert blank.has_database is False
+
+    def test_counting_ignores_things_that_are_not_audio(self, video):
+        music = video.mount_path / "iPod_Control" / "Music" / "F00"
+        music.mkdir(parents=True, exist_ok=True)
+        (music / "song.m4a").write_bytes(b"x")
+        (music / "song.MP3").write_bytes(b"x")
+        (music / "notes.txt").write_bytes(b"x")
+
+        assert device._count_audio_files(video.mount_path) == 2

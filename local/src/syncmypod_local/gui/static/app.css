@@ -495,6 +495,20 @@ body {
   margin-top: var(--space-4);
 }
 
+/* The cookies.txt escape hatch, folded away until it is asked for. It is the
+   second-choice route and should not compete with the button that usually
+   works, but on Windows without Firefox it is the only one there is. */
+.cookie-file {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.cookie-file .input-field {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
 .input-field {
   font: inherit;
   font-size: var(--text-sm);

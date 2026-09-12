@@ -251,6 +251,28 @@ class GuiServer:
             "error": available.error,
         }
 
+    def youtube_use_cookies(self, path: str = "") -> dict[str, Any]:
+        """Use a cookies.txt the user exported, rather than reading a browser.
+
+        The only route left on a Windows machine with no Firefox: Chromium seals
+        its cookies there, so the browser has to do the decrypting and hand over
+        the result.
+        """
+        if not path.strip():
+            return {"saved": False, "error": "Give the path to a cookies.txt file."}
+        try:
+            available = youtube_module.import_cookies_file(path)
+        except youtube_module.YouTubeError as err:
+            return {"saved": False, "error": str(err)}
+        return {
+            "saved": True,
+            "signedIn": True,
+            "premium": available.premium,
+            "bestAacKbps": available.best_aac_kbps,
+            "detail": available.describe(),
+            "error": available.error,
+        }
+
     def youtube_sign_out(self) -> dict[str, Any]:
         return {"signedOut": youtube_module.forget()}
 
@@ -321,6 +343,8 @@ class GuiServer:
                 excluded=len(plan.excluded),
                 tracks=[{"id": t.id, "label": t.label} for t in plan.to_download],
             )
+        elif event == "database":
+            self.session.add("database")
         elif event == "backup":
             self.session.add("backup")
         elif event == "track":
@@ -509,6 +533,8 @@ def _make_handler(gui: GuiServer):
                         self.headers.get("User-Agent", ""),
                     ),
                 )
+            elif path == "/api/youtube/use-cookies":
+                self._json(200, gui.youtube_use_cookies(str(body.get("path") or "")))
             elif path == "/api/youtube/sign-out":
                 self._json(200, gui.youtube_sign_out())
             else:

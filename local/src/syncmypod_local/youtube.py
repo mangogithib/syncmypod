@@ -30,8 +30,10 @@ being offered and reports that, which is the number the user cares about.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import shutil
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -216,16 +218,105 @@ def sign_in(browser: str | None = None, *, prefer: str | None = None) -> Availab
 
 
 def _explain_nothing_found(candidates: list[str], failures: list[str]) -> str:
-    """One sentence the user can act on, not a list of seven failures."""
-    if len(candidates) == 1:
-        return failures[0].split(": ", 1)[-1] if failures else "That browser could not be read."
+    """What actually happened, in the order the user can act on it.
 
-    return (
-        "No browser on this computer is signed in to YouTube. Open YouTube in "
-        "Firefox, Chrome or Edge, sign in there, then press Sign in here again. "
-        "(Firefox is the most reliable on Windows: Chrome seals its cookies in a "
-        "way other programs cannot read.)"
+    This used to return one fixed sentence saying no browser was signed in to
+    YouTube, and to tell the user to sign in to Chrome or Edge. Both halves were
+    wrong on the machine it was reported from: Chrome held 36 youtube.com
+    cookies the whole time, and no amount of signing in to Chrome or Edge could
+    ever have worked, because Windows Chromium seals its cookie values so that
+    no other program can decrypt them.
+
+    The reasons were being computed per browser and then thrown away, which is
+    the part worth not repeating. A diagnosis that reaches nobody is not a
+    diagnosis.
+    """
+    if len(candidates) == 1:
+        if not failures:
+            return "That browser could not be read."
+        return _without_marks(failures[0].split(": ", 1)[-1])
+
+    # Lead with a browser that could work if the user did something, rather than
+    # with one that cannot work whatever they do.
+    running = [f for f in failures if _LOCKED_MARK in f]
+    sealed = [f for f in failures if _SEALED_MARK in f]
+
+    lines = ["Could not borrow a YouTube session from any browser here."]
+    if running:
+        names = _and_list(sorted({f.split(":", 1)[0] for f in running}))
+        verb = "is" if len(running) == 1 else "are"
+        lines.append(
+            f"{names} {verb} running, which locks the cookie database - close "
+            "it completely and try again."
+        )
+    if sealed:
+        names = _and_list(sorted({f.split(":", 1)[0] for f in sealed}))
+        verb = "seals" if len(sealed) == 1 else "seal"
+        lines.append(
+            f"{names} {verb} every cookie value on this computer (App-Bound "
+            "Encryption), which no other program can undo, closed or not."
+        )
+    lines.append(
+        "Firefox is the one that works on Windows: sign in to YouTube there and "
+        "press Sign in again. Or export a cookies.txt from any browser and use "
+        "'Use a cookies.txt file' below."
     )
+    return " ".join(lines)
+
+
+def _and_list(names: list[str]) -> str:
+    """``a``, ``a and b``, ``a, b and c`` - so the sentence reads as one."""
+    if len(names) <= 1:
+        return names[0] if names else ""
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _without_marks(text: str) -> str:
+    """Strip the grouping markers before anything is shown."""
+    for mark in (_LOCKED_MARK, _SEALED_MARK):
+        text = text.replace(mark, "")
+    return text.strip()
+
+
+def import_cookies_file(source: str | Path) -> Availability:
+    """Use a cookies.txt the user exported themselves.
+
+    The route that works when reading the browser cannot. On Windows, Chromium
+    seals its cookie values so no other program can decrypt them, and if Firefox
+    is not installed there is otherwise nothing left to try - which is exactly
+    the machine this was reported from. A file the user exports with a browser
+    extension sidesteps the whole problem, because the browser does the
+    decrypting.
+
+    The same filtering applies as to a borrowed session: everything that is not
+    a youtube.com cookie is dropped before anything is saved, so handing over a
+    whole-jar export does not leave every other signed-in session on disk.
+    """
+    from yt_dlp.cookies import YoutubeDLCookieJar
+
+    path = Path(str(source).strip().strip('"')).expanduser()
+    if not path.is_file():
+        raise YouTubeError(f"There is no file at {path}.")
+
+    jar = YoutubeDLCookieJar(str(path))
+    try:
+        jar.load(ignore_discard=True, ignore_expires=True)
+    except Exception as err:
+        raise YouTubeError(
+            f"{path.name} is not a cookies.txt file this can read ({err}). Export "
+            "it in Netscape format - that is what every 'Get cookies.txt' "
+            "extension produces."
+        ) from err
+
+    kept = _write_youtube_cookies(jar)
+    if not kept:
+        raise YouTubeError(
+            f"{path.name} has no youtube.com cookies in it. Export it while you "
+            "are on youtube.com and signed in, then try again."
+        )
+
+    logger.info("Kept %d youtube.com cookies from %s", kept, path.name)
+    return check()
 
 
 def forget() -> bool:
@@ -333,13 +424,101 @@ def _write_youtube_cookies(jar) -> int:
     return kept
 
 
+# Markers carried on a per-browser failure so the summary can group them. They
+# are not shown; only their presence is read.
+_LOCKED_MARK = "[locked]"
+_SEALED_MARK = "[sealed]"
+
+CHROMIUM = frozenset({"chrome", "edge", "brave", "chromium", "opera", "vivaldi"})
+
+
+def _chromium_cookies_are_sealed(browser: str) -> bool | None:
+    """Whether this Chromium browser's cookie values can never be decrypted here.
+
+    True, False, or None when it could not be established.
+
+    Worth measuring rather than assuming. Chrome and Edge encrypt each cookie
+    value with a version prefix: ``v10`` is the old scheme, which yt-dlp can
+    unwrap, and ``v20`` is App-Bound Encryption, which it cannot - it falls
+    through to DPAPI and DPAPI has no key for it. So a Chromium browser is a
+    dead end or an ordinary locked file depending on a three-byte prefix, and
+    the advice is opposite in the two cases: one is "close the browser", the
+    other is "this will never work, use something else".
+
+    Measured on the machine this was reported from: every one of Chrome's 961
+    cookies was v20, so closing Chrome would have achieved nothing.
+    """
+    import sqlite3
+    import sys
+    import tempfile
+
+    if sys.platform not in ("win32", "cygwin"):
+        return False
+    try:
+        from yt_dlp.cookies import _get_chromium_based_browser_settings
+
+        root = Path(_get_chromium_based_browser_settings(browser)["browser_dir"])
+    except Exception:
+        return None
+
+    # The default profile is the one that matters; a per-profile answer would be
+    # more precise and is not worth the complexity for a diagnostic.
+    database = root / "Default" / "Network" / "Cookies"
+    if not database.is_file():
+        database = root / "Default" / "Cookies"
+    if not database.is_file():
+        return None
+
+    copy = Path(tempfile.gettempdir()) / f"syncmypod-cookie-probe-{browser}.sqlite"
+    try:
+        # A running browser may hold the file open exclusively, which is the
+        # other failure and is answered elsewhere.
+        shutil.copyfile(database, copy)
+        connection = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+        try:
+            total, sealed = connection.execute(
+                # hex() matters: encrypted_value is a BLOB, and SQLite never
+                # compares a BLOB equal to a text literal, so the obvious
+                # `substr(...) = 'v20'` is false for every row and every browser
+                # comes back unsealed. 763230 is 'v20'.
+                "SELECT count(*), "
+                "sum(CASE WHEN hex(substr(encrypted_value, 1, 3)) = '763230' "
+                "THEN 1 ELSE 0 END) "
+                "FROM cookies"
+            ).fetchone()
+        finally:
+            connection.close()
+    except Exception:
+        return None
+    finally:
+        with contextlib.suppress(OSError):
+            copy.unlink()
+
+    if not total:
+        return None
+    return (sealed or 0) >= total
+
+
 def _explain_extraction_failure(browser: str, err: Exception) -> str:
     """Turn a cookie-database error into something actionable.
 
-    The two that actually happen have completely different fixes, and neither
-    is obvious from what the library raises.
+    The cases that actually happen have completely different fixes, and none of
+    them is obvious from what the library raises.
+
+    The one that was being misread: yt-dlp reports a locked cookie database as
+    "Could not copy Chrome cookie database", with no word matching "locked" or
+    "permission" in it. That fell through to the sealed-cookies branch, so a
+    browser that merely needed closing was reported as one that could never
+    work. It is an errno 13 PermissionError underneath.
     """
     text = str(err).lower()
+    is_locked = (
+        isinstance(err, PermissionError)
+        or "could not copy" in text
+        or "locked" in text
+        or "permission" in text
+        or "being used" in text
+    )
 
     if "could not find" in text or "not found" in text or "no such file" in text:
         return (
@@ -347,16 +526,22 @@ def _explain_extraction_failure(browser: str, err: Exception) -> str:
             "installed but signed in under a different profile, sign in to "
             "YouTube there first."
         )
-    if "locked" in text or "permission" in text or "being used" in text:
+    # A Chromium browser can fail for two reasons with opposite fixes, and the
+    # message yt-dlp raises does not distinguish them. Look at the file.
+    if browser in CHROMIUM and _chromium_cookies_are_sealed(browser):
         return (
-            f"{browser}'s cookie database is locked, which usually means it is "
-            f"running. Close {browser} completely and try again."
+            f"{_SEALED_MARK} {browser} seals every cookie value on this computer "
+            "(App-Bound Encryption), so no other program can decrypt them - "
+            "closing it would not help."
         )
-    if browser in {"chrome", "edge", "brave", "chromium", "opera", "vivaldi"}:
+    if is_locked:
         return (
-            f"Could not read cookies from {browser}: {err}. Recent Chromium "
-            "versions seal their cookies so another program cannot read them. "
-            "Firefox works reliably - sign in to YouTube there and use it "
-            "instead."
+            f"{_LOCKED_MARK} {browser}'s cookie database is locked, which means it "
+            f"is running. Close {browser} completely and try again."
+        )
+    if browser in CHROMIUM:
+        return (
+            f"{_SEALED_MARK} Could not read cookies from {browser}: {err}. Chromium "
+            "seals its cookies on Windows so another program cannot decrypt them."
         )
     return f"Could not read cookies from {browser}: {err}"

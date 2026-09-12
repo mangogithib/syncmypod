@@ -9,6 +9,7 @@ extractor ever asks the jar for.
 from __future__ import annotations
 
 import http.cookiejar
+import re
 import time
 
 import pytest
@@ -358,13 +359,25 @@ class TestSigningInWithoutBeingAsked:
     def test_finding_nothing_says_what_to_do_rather_than_listing_failures(
         self, config_home, monkeypatch
     ):
-        """Seven failure lines is not an error message."""
+        """Seven failure lines is not an error message.
+
+        It is also not one fixed sentence that ignores what happened: this used
+        to tell the user to sign in to Chrome or Edge whatever the reason was,
+        including on a machine where neither could ever work. What it has to do
+        is stay short and still name a way forward.
+        """
         monkeypatch.setattr(
             "yt_dlp.cookies.extract_cookies_from_browser",
             lambda *_a, **_k: jar_with(cookie("sb", ".facebook.com")),
         )
-        with pytest.raises(youtube.YouTubeError, match="No browser on this computer"):
+        with pytest.raises(youtube.YouTubeError) as raised:
             youtube.sign_in()
+
+        message = str(raised.value)
+        assert len(message.splitlines()) == 1
+        # Both routes that can actually work are named.
+        assert "Firefox" in message
+        assert "cookies.txt" in message
         assert not youtube.cookies_path().exists()
 
     def test_the_viewing_browser_is_tried_first(self, attempts):
@@ -378,3 +391,139 @@ class TestSigningInWithoutBeingAsked:
         """The command line still takes one, and then means it."""
         youtube.sign_in("chrome")
         assert attempts == ["chrome"]
+
+
+class TestACookiesFileTheUserExports:
+    """The route that works when no browser can be read.
+
+    On Windows, Chromium seals every cookie value with App-Bound Encryption and
+    no other program can decrypt it. If Firefox is not installed there is then
+    nothing left for `sign_in` to find, however many times it is pressed - which
+    is the machine this was reported from. A file the user exports themselves
+    sidesteps it, because the browser does the decrypting.
+    """
+
+    @staticmethod
+    def netscape(tmp_path, *lines):
+        path = tmp_path / "cookies.txt"
+        path.write_text("# Netscape HTTP Cookie File\n" + "".join(lines), encoding="utf-8")
+        return path
+
+    @pytest.fixture
+    def no_probe(self, monkeypatch):
+        """The bitrate probe is a network call and is not what is under test."""
+        monkeypatch.setattr(
+            youtube,
+            "check",
+            lambda *a, **k: youtube.Availability(best_aac_kbps=256, signed_in=True),
+        )
+
+    def test_a_file_with_youtube_cookies_is_accepted(self, config_home, no_probe, tmp_path):
+        source = self.netscape(tmp_path, ".youtube.com\tTRUE\t/\tTRUE\t2000000000\tSID\tabc\n")
+        available = youtube.import_cookies_file(source)
+
+        assert available.premium is True
+        assert youtube.is_signed_in() is True
+        assert "SID" in youtube.cookies_path().read_text(encoding="utf-8")
+
+    def test_other_sites_in_the_export_never_reach_the_file(
+        self, config_home, no_probe, tmp_path
+    ):
+        """The same privacy property as a borrowed jar, on a route people paste
+        a whole-browser export into."""
+        source = self.netscape(
+            tmp_path,
+            ".youtube.com\tTRUE\t/\tTRUE\t2000000000\tSID\tabc\n",
+            ".bank.example\tTRUE\t/\tTRUE\t2000000000\tSESSION\tdo-not-keep\n",
+            ".google.com\tTRUE\t/\tTRUE\t2000000000\tAPISID\talso-not\n",
+        )
+        youtube.import_cookies_file(source)
+
+        saved = youtube.cookies_path().read_text(encoding="utf-8")
+        assert "do-not-keep" not in saved
+        assert "bank.example" not in saved
+        assert "google.com" not in saved
+
+    def test_a_file_with_no_youtube_cookies_is_refused(self, config_home, no_probe, tmp_path):
+        source = self.netscape(tmp_path, ".example.com\tTRUE\t/\tTRUE\t2000000000\tX\ty\n")
+        with pytest.raises(youtube.YouTubeError, match=re.escape("no youtube.com cookies")):
+            youtube.import_cookies_file(source)
+        assert youtube.is_signed_in() is False
+
+    def test_a_missing_file_says_so(self, config_home, tmp_path):
+        with pytest.raises(youtube.YouTubeError, match="no file at"):
+            youtube.import_cookies_file(tmp_path / "nope.txt")
+
+    def test_something_that_is_not_a_cookie_file_says_so(self, config_home, tmp_path):
+        source = tmp_path / "notes.txt"
+        source.write_text("this is not a cookie file", encoding="utf-8")
+        with pytest.raises(youtube.YouTubeError, match=re.escape("not a cookies.txt file")):
+            youtube.import_cookies_file(source)
+
+    def test_quotes_a_windows_path_arrives_wrapped_in_are_ignored(
+        self, config_home, no_probe, tmp_path
+    ):
+        """Copy As Path on Windows quotes the path, and people paste it as-is."""
+        source = self.netscape(tmp_path, ".youtube.com\tTRUE\t/\tTRUE\t2000000000\tSID\tabc\n")
+        youtube.import_cookies_file(f'"{source}"')
+        assert youtube.is_signed_in() is True
+
+
+class TestSayingWhichBrowserFailedAndWhy:
+    """The diagnosis used to be computed per browser and then discarded.
+
+    What reached the user was one fixed sentence telling them to sign in to
+    Chrome or Edge. On the machine it was reported from, Chrome held 36
+    youtube.com cookies the whole time and signing in again could never have
+    helped - the values were sealed. A diagnosis nobody sees is not one.
+    """
+
+    def test_a_locked_browser_is_told_to_close(self):
+        message = youtube._explain_extraction_failure(
+            "firefox", PermissionError(13, "Permission denied")
+        )
+        assert "close firefox" in message.lower()
+
+    def test_yt_dlps_copy_failure_is_recognised_as_a_lock(self):
+        """It says "Could not copy Chrome cookie database" and nothing else.
+
+        No word in it matches "locked" or "permission", so it used to fall
+        through to the sealed-cookies branch and report a browser that merely
+        needed closing as one that could never work.
+        """
+        message = youtube._explain_extraction_failure(
+            "firefox", Exception("Could not copy Chrome cookie database. See ...")
+        )
+        assert "close firefox" in message.lower()
+
+    def test_the_summary_names_what_has_to_be_done(self):
+        failures = [
+            f"edge: {youtube._LOCKED_MARK} edge's cookie database is locked",
+            f"chrome: {youtube._SEALED_MARK} chrome seals every cookie value",
+        ]
+        summary = youtube._explain_nothing_found(["edge", "chrome", "firefox"], failures)
+
+        assert "edge is running" in summary
+        assert "chrome seals" in summary
+        assert "cookies.txt" in summary
+        # The markers are for grouping, not for reading.
+        assert youtube._LOCKED_MARK not in summary
+        assert youtube._SEALED_MARK not in summary
+
+    def test_a_single_browser_answer_carries_no_marker(self):
+        failures = [f"firefox: {youtube._LOCKED_MARK} firefox's cookie database is locked"]
+        summary = youtube._explain_nothing_found(["firefox"], failures)
+        assert youtube._LOCKED_MARK not in summary
+        assert "locked" in summary
+
+    @pytest.mark.parametrize(
+        ("names", "expected"),
+        [
+            ([], ""),
+            (["chrome"], "chrome"),
+            (["chrome", "edge"], "chrome and edge"),
+            (["brave", "chrome", "edge"], "brave, chrome and edge"),
+        ],
+    )
+    def test_browsers_are_listed_as_a_sentence(self, names, expected):
+        assert youtube._and_list(names) == expected
