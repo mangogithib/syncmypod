@@ -23,10 +23,9 @@ project's state and its reasoning.
 | Import: any playlist link | Working — **Spotify, Apple Music, YouTube, YouTube Music, Deezer** in one box |
 | Import: pasted list | Working |
 | Sources (followed playlists) | Working — same five services, re-read when the page is opened |
-| Connected YouTube account | Built; **blocked on the OAuth consent screen's Test users list** |
 | Re-matching songs with no artist | Working — a re-run of the resolver, merged into existing rows |
 | Splitting combined artist credits | Working — verified against Deezer, real bands survive |
-| Metadata autocomplete | Working — library names first, then Deezer |
+| Metadata autocomplete | Working — library names first, then Deezer, completing the name under the caret |
 | Followed artists | Working — future releases, and optionally the back catalogue |
 | Device pairing + sync API | Working, verified end to end |
 | Local app: the sync engine | Working, verified on real hardware |
@@ -36,6 +35,7 @@ project's state and its reasoning.
 | Downloadable build | **Published** — 0.1.1 |
 | Phone layout | Working — verified at 375px; the songs table drops to title + artist |
 | CI | Green. Parses every file and checks for undefined references |
+| Connected YouTube account | **Removed.** Needed a per-instance Google OAuth client and a Test users entry — see section 5 |
 | **A web test suite** | **Still none. The largest gap — see What is next** |
 
 Roughly 18,000 lines across 56 JavaScript files, 16 Python modules, 7 SQL
@@ -430,37 +430,36 @@ Do not "simplify" these walkers back into direct property access. They are
 defensive on purpose, and the page has already changed once during this
 project's lifetime.
 
-### Reading someone's own YouTube playlists needs OAuth, and there is no way round it
+### The connected YouTube account was built twice and then removed
 
-Two wrong turns were taken here. Both are worth keeping so they are not retaken.
+Worth keeping because the reasoning cost a day and the conclusion is not obvious
+from the outside.
 
-**"Sign in with Google" IS OAuth.** They are one mechanism, not two. The login
-button a service like TuneMyMusic shows is its own registered OAuth client's
-consent screen; the developer-console step is not an alternative to that button,
-it is what makes the button exist. Everything else a website could try is
-closed: asking for the password is phishing and 2FA defeats it, framing
-`accounts.google.com` is blocked by `X-Frame-Options: DENY`, and reading
-youtube.com's cookies from another origin is what the same-origin policy exists
-to prevent. A client secret in a public repository is not a secret, and Google
-revokes the ones it finds.
+**Reading somebody's own playlists genuinely requires OAuth.** "Sign in with
+Google" *is* OAuth - they are one mechanism, not two, and the developer-console
+step is what makes the login button exist rather than an alternative to it.
+Everything else a website could try is closed: asking for the password is
+phishing and 2FA defeats it, framing `accounts.google.com` is blocked by
+`X-Frame-Options: DENY`, and reading youtube.com's cookies from another origin
+is what the same-origin policy exists to prevent. A client secret in a public
+repository is not a secret.
 
-**The local app's YouTube session is not a substitute.** The second attempt had
-the local app read its signed-in account's playlists and push them up, which
-needed nothing set up. Mohamed's correction: that sign-in is a *borrowed*
-account, kept only so downloads get the 256kbps stream. Its playlists are
-somebody else's. The whole path was removed - three modules, three device
-routes, an importer and a button.
+**The local app's session is not a substitute.** A second attempt had the local
+app read its signed-in account and push the list up, which needed nothing set
+up. Mohamed's correction: that sign-in is a *borrowed* account kept for
+downloading, so its playlists are somebody else's.
 
-So the connected account is OAuth, the instance owner registers one Google
-client, and Settings has the two fields for it. The Sources page shows the exact
-redirect URI to paste.
+**So it went back to OAuth, and OAuth is what killed it.** Every instance owner
+had to create a Cloud project, enable the API, register a client, paste two
+values into Settings - and then, because `youtube.readonly` is a **sensitive
+scope**, add their own address to that client's **Test users** list before
+sign-in would work at all. Mohamed did all of it and still met
+`Error 403: access_denied`, which is exactly what a missing Test users entry
+looks like. Migration `008_drop_youtube_account.sql` removed it.
 
-**Related bug, since it hid for a while:** the Settings page renders its fields
-by hand rather than from the schema, so adding `google.client_id` and
-`google.client_secret` to the schema was not enough - the one screen the setup
-instructions point at did not have the boxes they tell you to fill in. Anything
-new added to `SCHEMA` in `app-settings.js` needs a matching `field()` call in
-`views/settings.js`.
+Following a public playlist link does the same job from five services and asks
+for none of it. Do not rebuild this unless somebody genuinely needs their
+*private* playlists followed, and knows what it costs them to set up.
 
 ### YouTube Music answers with real metadata, and that changes everything
 
@@ -841,34 +840,7 @@ Worth knowing so they are not reintroduced:
 
 Roughly in the order it is worth doing.
 
-### 1. The Google OAuth client — the live blocker, and it is one checkbox
-
-Mohamed created the client and got **Error 403: access_denied** at sign-in. That
-is not a code fault: the request was well formed, with the right redirect URI
-and scope. `youtube.readonly` is a **sensitive scope**, so an account that is
-not on the OAuth consent screen's **Test users** list is refused.
-
-Google Cloud console → APIs & Services → OAuth consent screen → Audience →
-Test users → add the exact account being signed in with. Keep the app in
-**Testing**; moving it to Production requires Google verification, which is not
-worth it for one person.
-
-The full steps are on the Settings page, with that cause called out.
-
-He is creating it. Once he has:
-
-1. Google Cloud console → new project → enable **YouTube Data API v3**.
-2. Credentials → OAuth client ID → **Web application**.
-3. Authorised redirect URI, exactly:
-   `https://syncmypod.duckdns.org:8444/api/youtube-account/callback`
-4. OAuth consent screen → add himself under **Test users**. No publishing or
-   review is needed for his own account.
-5. Paste the client ID and secret into **Settings → YouTube**.
-
-Then **Sources → Connect YouTube account**. Everything else on Sources and
-Import works today without it.
-
-### 2. A web-side test suite, and a route smoke test first
+### 1. A web-side test suite, and a route smoke test first
 
 Still none, and it is now the clearest gap. Three bugs reached the user's screen
 in two days and every one would have been caught by the simplest possible test:
@@ -892,7 +864,7 @@ resolver, `lib/normalise.js` (`matchKey`, `scoreCandidate`, `titleOverlap`,
 `answerExplains`) and `services/artist-split.js` are pure logic with real
 regression history; the band list in section 5 is ready-made fixtures.
 
-### 3. A local-files source
+### 2. A local-files source
 
 The highest-quality option available and the only one with no downside: point
 the local app at a folder of music already owned, match manifest tracks against
@@ -900,7 +872,7 @@ it, and skip downloading entirely. The iPod Classic plays Apple Lossless, so a
 CD rip goes on untouched. Discussed on 11 September and deferred; the engine
 already has every piece it needs.
 
-### 4. A "needs attention" view
+### 3. A "needs attention" view
 
 38 songs currently have a title and no artist, and they will never sync until
 someone fills one in. Re-matching handles what YouTube Music can identify; the
@@ -908,7 +880,7 @@ rest need a human, and editing them one at a time from the Songs list is the
 only way to do it now. A filtered view with inline artist entry is the obvious
 next step, and the filter already exists (`#/library?state=unresolved`).
 
-### 5. macOS and Linux builds of the local app
+### 4. macOS and Linux builds of the local app
 
 PyInstaller does not cross-compile. Linux means adding a runner; macOS means
 that **and** resolving the ffmpeg licensing question, since every readily
