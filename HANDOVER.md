@@ -53,11 +53,17 @@ migrations. 206 Python tests, all passing.
 
 ### The download
 
-<https://github.com/mangogithib/syncmypod/releases/tag/local-v0.1.0>
+<https://github.com/mangogithib/syncmypod/releases/latest>
 
-`SyncMyPod-0.1.0-windows-x64.zip`, 174MB. Unpack anywhere and run
+`SyncMyPod-0.1.1-windows-x64.zip`, 183MB. Unpack anywhere and run
 `syncmypod.exe`. Everything — pairing included — happens in the window that
 opens.
+
+**Creating a release through the API also creates the tag**, which fires
+`release.yml`, which builds its own copy and would replace a hand-verified asset
+with an unverified one mid-upload. Both releases so far were published by hand
+and that run cancelled. Either push the tag and let CI do all of it, or publish
+by hand and cancel the run — not half of each.
 
 **Credentials are deliberately not recorded here.** This file is in a git
 repository, and repositories get cloned, shared and occasionally made public.
