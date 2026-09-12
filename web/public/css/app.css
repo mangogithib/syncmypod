@@ -391,6 +391,12 @@ tbody tr:hover td.actions { background: var(--surface-2); }
 .cell-truncate { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .track-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* The title, with room beside it for an unresolved marker. `overflow: hidden`
+   on the title is what lets it shrink and ellipsise here - a flex item's
+   automatic minimum size is its content otherwise, and a long title would push
+   the badge off the row instead of truncating. */
+.track-title-line { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.track-title-line .badge { flex: none; }
 .track-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .track-sub { font-size: var(--text-sm); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -911,7 +917,6 @@ code {
   .col-album,
   .col-year,
   .col-time,
-  .col-meta,
   .col-artist {
     display: none;
   }
@@ -936,6 +941,14 @@ code {
 
   .track-cell { min-width: 0; }
 
+  /* The unresolved marker is a desktop affordance. The title cell here is about
+     200px and the badge is 73 of them, which leaves a title two characters long
+     - measured, not guessed. Nothing is lost by dropping it: an unresolved
+     track is precisely the one whose artist is blank, so the line underneath
+     already reads "Unknown artist", which is the same fact in the space the
+     row actually has. */
+  .track-title-line .badge { display: none; }
+
   /* Wide enough for the three icon buttons at a size a finger can hit, so the
      title gets the rest and stops short of them rather than sliding under. */
   td.actions,
@@ -954,6 +967,24 @@ code {
   .toolbar > * { width: 100%; }
   .toolbar .search-input { max-width: none; }
   .toolbar select.select { width: 100% !important; }
+
+  /* The same squeeze, in every card list on the site.
+
+     A list row is a thumbnail, a block of text and some actions. `.list-main`
+     is allowed to shrink to nothing and `.list-actions` is not, so on a phone
+     the actions take the width outright and the text is left with about forty
+     pixels - which is how a followed artist ended up reading one word per line.
+
+     A floor under the text and permission for the row to wrap fixes all of
+     them at once: actions drop to their own line the moment they stop fitting,
+     and stay alongside when they are only a badge or a running time. */
+  .list-row { flex-wrap: wrap; }
+  .list-main { min-width: 10rem; }
+  .list-actions { flex-wrap: wrap; row-gap: var(--space-2); }
+
+  /* The second line of that wrap needs the same treatment: a sub-line that can
+     only wrap on spaces is what produced the column of single words. */
+  .list-sub { overflow-wrap: anywhere; }
 
   /* A notice with an action beside it squashes the text into a column two words
      wide. The action goes underneath, full width, where it is also a reachable

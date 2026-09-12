@@ -218,6 +218,55 @@ for (const file of files) {
   }
 }
 
+// --- calls on the api client ----------------------------------------------
+//
+// The scan above deliberately ignores anything after a dot, because a property
+// could come from anywhere and every guess would be a false positive. `api` is
+// the exception worth making: it is one object literal in one file, every view
+// reaches for it, and a name that is not on it fails only when a user clicks
+// the thing.
+//
+// This is not hypothetical. `api.importJob` was called from two views and never
+// existed, which turned every playlist import and every re-match into "Lost
+// track of the import" the moment it started - the server finished the job
+// correctly and the dialog could not read it. Nothing here caught that, because
+// of the dot.
+const API_MODULE = join(ROOT, 'public', 'js', 'lib', 'api.js');
+let apiMethods = null;
+try {
+  const source = stripNoise(readFileSync(API_MODULE, 'utf8'));
+  const open = source.indexOf('export const api = {');
+  if (open !== -1) {
+    // Ends at the first line that is nothing but `};`, which is how the object
+    // is closed. Nested objects inside it are indented, so they cannot match.
+    const rest = source.slice(open);
+    const end = rest.search(/\n\};/);
+    const literal = end === -1 ? rest : rest.slice(0, end);
+    apiMethods = new Set(
+      [...literal.matchAll(/^ {2}([A-Za-z_$][\w$]*)\s*:/gm)].map((match) => match[1])
+    );
+  }
+} catch {
+  // No client module here - this may be a partial tree. Not a failure.
+}
+
+if (apiMethods && apiMethods.size > 0) {
+  for (const file of files) {
+    const rel = relative(ROOT, file).replace(/\\/g, '/');
+    if (!rel.startsWith('public/') || rel === 'public/js/lib/api.js') continue;
+
+    const source = stripNoise(readFileSync(file, 'utf8'));
+    const seen = new Set();
+    for (const match of source.matchAll(/\bapi\.([A-Za-z_$][\w$]*)\s*\(/g)) {
+      const name = match[1];
+      if (apiMethods.has(name) || seen.has(name)) continue;
+      seen.add(name);
+      const line = source.slice(0, match.index).split('\n').length;
+      problems.push(`${rel}:${line}: api.${name}() is not on the api client`);
+    }
+  }
+}
+
 if (problems.length > 0) {
   console.error('Undefined references:\n');
   for (const problem of problems) console.error('  ' + problem);

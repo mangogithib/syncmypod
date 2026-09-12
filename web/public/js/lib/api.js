@@ -136,6 +136,10 @@ export const api = {
   importPlaylist: (payload) => request('POST', '/api/import/playlist', payload),
   importPlatforms: () => request('GET', '/api/import/platforms'),
   importJobs: () => request('GET', '/api/import/jobs'),
+  // The progress dialog polls this. It was missing while two callers used it,
+  // which turned every import into "Lost track of the import" the instant it
+  // started - the work carried on server-side, but the dialog could not say so.
+  importJob: (jobId) => request('GET', `/api/import/jobs/${jobId}`),
 
   suggestArtists: (q) => request('GET', `/api/suggest/artists?q=${encodeURIComponent(q)}`),
   suggestAlbums: (q) => request('GET', `/api/suggest/albums?q=${encodeURIComponent(q)}`),

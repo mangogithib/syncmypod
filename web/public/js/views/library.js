@@ -325,7 +325,6 @@ export async function renderLibrary(view, context) {
               sortHeader('Album', 'album', '.col-album'),
               sortHeader('Year', 'year', '.right.col-year'),
               sortHeader('Time', 'duration', '.right.col-time'),
-              h('th.col-meta', 'Metadata'),
               h('th.col-actions', { 'aria-label': 'Actions' })
             )
           ),
@@ -350,7 +349,17 @@ export async function renderLibrary(view, context) {
           h(
             'div',
             { style: { minWidth: 0 } },
-            h('div.track-title', track.title),
+            // The unresolved marker sits against the title rather than in a
+            // column of its own. Almost every track resolves, so a dedicated
+            // column was an empty column on every screen it was wide enough to
+            // show - it carried a heading and no information. Beside the title
+            // it appears only on the few rows that need a human, which is the
+            // only thing it was ever for.
+            h(
+              'div.track-title-line',
+              h('span.track-title', track.title),
+              track.metadataState === 'resolved' ? null : metadataBadge(track.metadataState)
+            ),
             // Shown under the title only on a narrow screen, where the artist
             // column itself is hidden. A song list without an artist is not a
             // song list.
@@ -377,13 +386,6 @@ export async function renderLibrary(view, context) {
       ),
       h('td.num.col-year', track.releaseYear || '--'),
       h('td.num.col-time', formatDuration(track.durationMs)),
-      // Blank when there is nothing to say. Almost every track resolves, so a
-      // green badge on every row is a column of noise that hides the few rows
-      // that actually need attention - which is what the column is for.
-      h(
-        'td.shrink.col-meta',
-        track.metadataState === 'resolved' ? null : metadataBadge(track.metadataState)
-      ),
       h(
         'td.actions.shrink',
         h('div.row', { style: { justifyContent: 'flex-end' } },
