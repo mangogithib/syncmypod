@@ -64,6 +64,11 @@ jobs:
       # This imports every server module for real and scans every file for
       # identifiers that are called but never defined. It is the part of a
       # linter that has actually caught something here, with no new dependency.
+      #
+      # It also checks every `api.something()` in the frontend against the api
+      # client's own keys, which the general scan cannot do - it stops at a dot.
+      # `api.importJob` was missing while two views called it, and every import
+      # in the application reported failure while the server completed it.
       - name: Check for undefined references
         env:
           DATABASE_URL: postgres://unused@localhost:5432/unused
