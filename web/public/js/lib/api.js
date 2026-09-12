@@ -133,9 +133,8 @@ export const api = {
   // --- import ------------------------------------------------------------
   previewTrackList: (text, order) => request('POST', '/api/import/preview', { text, order }),
   importTrackList: (payload) => request('POST', '/api/import/track-list', payload),
-  importDeezerPlaylist: (payload) => request('POST', '/api/import/deezer-playlist', payload),
-  importYouTubePlaylist: (payload) =>
-    request('POST', '/api/import/youtube-playlist', payload),
+  importPlaylist: (payload) => request('POST', '/api/import/playlist', payload),
+  importPlatforms: () => request('GET', '/api/import/platforms'),
   importJobs: () => request('GET', '/api/import/jobs'),
 
   suggestArtists: (q) => request('GET', `/api/suggest/artists?q=${encodeURIComponent(q)}`),

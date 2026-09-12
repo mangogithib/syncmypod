@@ -1,5 +1,6 @@
 import { one, query, transaction } from '../db/pool.js';
 import * as deezer from '../providers/deezer.js';
+import * as playlistReaders from '../providers/playlists.js';
 import * as youtube from '../providers/youtube.js';
 import * as sources from './sources.js';
 import * as youtubeAccount from './youtube-account.js';
@@ -42,80 +43,44 @@ import { resolveAndSave } from './resolver.js';
 // a second worker for the same job.
 const running = new Set();
 
-export async function startDeezerPlaylistImport(userId, playlistRef, options = {}) {
-  const playlistId = deezer.parsePlaylistRef(playlistRef);
-  if (!playlistId) {
-    throw new Error(
-      'That does not look like a Deezer playlist. Paste the playlist URL, or just its numeric id.'
-    );
-  }
+// One import for a playlist link from any service.
+//
+// Replaces the per-service starters this had before. Which platform a link
+// belongs to comes from the address, because the address already says - asking
+// the user to classify their own link first was a question with an obvious
+// answer, and it meant a separate box per service on the Import page.
+//
+// Reading each service lives in providers/playlists.js; adding another is a
+// reader there and nothing here.
+export async function startPlaylistImport(userId, url, options = {}) {
+  const detected = playlistReaders.detect(url);
+  if (!detected) throw new Error(unrecognisedLink());
 
   const job = await one(
     `INSERT INTO import_jobs (user_id, source, source_ref, status, target_playlist_id)
-     VALUES ($1, 'deezer-playlist', $2, 'queued', $3)
+     VALUES ($1, $2, $3, 'queued', $4)
      RETURNING id`,
-    [userId, playlistId, options.targetPlaylistId || null]
+    [userId, `${detected.platform}-playlist`, detected.ref, options.targetPlaylistId || null]
   );
 
-  // Deliberately not awaited: the caller returns the job id straight away.
-  // The catch is essential - an unhandled rejection here would take the process
-  // down and lose every other job with it.
-  runJob(job.id, () => importDeezerPlaylist(job.id, userId, playlistId, options)).catch(
-    (err) => console.error(`[import] job ${job.id} crashed:`, err.message)
+  // Deliberately not awaited: the caller returns the job id straight away, and
+  // the catch is essential or an unhandled rejection takes the process down.
+  runJob(job.id, () => importPlaylist(job.id, userId, detected, options)).catch((err) =>
+    console.error(`[import] job ${job.id} crashed:`, err.message)
   );
 
-  return job.id;
+  return { jobId: job.id, platform: detected.platform };
 }
 
-// A public YouTube playlist.
-//
-// The metadata rule is the same one the YouTube search button follows, applied
-// to a whole playlist at once: nothing YouTube says about a track is written to
-// the library unless a real catalogue agrees with it.
-//
-// So each entry is cross-checked. The video title is split into a rough artist
-// and title, and that guess - plus the duration, which is the strongest signal
-// available and is why live streams are dropped when reading the playlist - is
-// put to Deezer, iTunes and MusicBrainz in turn. A confident match means the
-// track is stored with the catalogue's artist, album, artwork and ISRC, exactly
-// as if it had been added from a search.
-//
-// A track no catalogue knows keeps its title and nothing else. Not the channel
-// name as an artist, not the video title as an album. Those are the tracks that
-// show up needing attention, and they are the ones that genuinely only exist on
-// YouTube - which is the case this whole path is for.
-export async function startYouTubePlaylistImport(userId, playlistRef, options = {}) {
-  const playlistId = youtube.parsePlaylistRef(playlistRef);
-  if (!playlistId) {
-    throw new Error(
-      'That does not look like a YouTube playlist. Paste the playlist link, or just the part after "list=".'
-    );
-  }
-
-  const job = await one(
-    `INSERT INTO import_jobs (user_id, source, source_ref, status, target_playlist_id)
-     VALUES ($1, 'youtube-playlist', $2, 'queued', $3)
-     RETURNING id`,
-    [userId, playlistId, options.targetPlaylistId || null]
+export function unrecognisedLink() {
+  const labels = Object.values(playlistReaders.PLATFORMS).map((spec) => spec.label);
+  return (
+    `That is not a playlist link this recognises. ${labels.slice(0, -1).join(', ')} and ` +
+    `${labels.at(-1)} all work - paste the address straight from the browser or the ` +
+    `app's share menu.`
   );
-
-  runJob(job.id, () => importYouTubePlaylist(job.id, userId, playlistId, options)).catch(
-    (err) => console.error(`[import] job ${job.id} crashed:`, err.message)
-  );
-
-  return job.id;
 }
 
-// Re-checks every playlist a connected YouTube account has been asked to follow.
-//
-// Called when the app is opened, and by the Sync now button. One job covers all
-// the selected playlists rather than one job each, because the question being
-// asked is "is my library up to date" and that has a single answer.
-//
-// A track already in the library is counted as skipped and costs nothing beyond
-// the resolver's own dedupe, so a re-run over an unchanged playlist is cheap.
-// Cheap, not free - the YouTube API calls still happen, against a daily quota -
-// which is why the open-the-app path below only runs when something is stale.
 export async function startYouTubeAccountSync(userId) {
   const followed = (await youtubeAccount.listPlaylists(userId)).filter((p) => p.selected);
   if (followed.length === 0) {
@@ -447,50 +412,10 @@ function isHeaderRow({ title, artist }) {
 // The importers
 // ---------------------------------------------------------------------------
 
-async function importDeezerPlaylist(jobId, userId, playlistId, options) {
+async function importPlaylist(jobId, userId, detected, options) {
   await query(`UPDATE import_jobs SET status = 'running' WHERE id = $1`, [jobId]);
 
-  const { playlist, tracks } = await deezer.getPlaylist(playlistId);
-
-  await query(`UPDATE import_jobs SET total = $2, source_name = $3 WHERE id = $1`, [
-    jobId,
-    tracks.length,
-    playlist.name,
-  ]);
-
-  let targetPlaylistId = options.targetPlaylistId || null;
-  if (!targetPlaylistId && options.createPlaylist !== false) {
-    targetPlaylistId = await ensurePlaylist(userId, playlist.name, {
-      description: playlist.description,
-      source: 'deezer',
-      sourceRef: playlist.deezerId,
-    });
-    await query('UPDATE import_jobs SET target_playlist_id = $2 WHERE id = $1', [
-      jobId,
-      targetPlaylistId,
-    ]);
-  }
-
-  // Playlist entries already carry a Deezer track id, so resolution is a direct
-  // hydrate rather than a search. That is what makes a large playlist fast.
-  await processItems(
-    jobId,
-    userId,
-    tracks.map((track) => ({
-      deezerId: track.deezerId,
-      title: track.title,
-      artist: track.artists?.[0]?.name || null,
-      album: track.album?.name || null,
-      durationMs: track.durationMs,
-    })),
-    { targetPlaylistId, addedVia: 'deezer-import' }
-  );
-}
-
-async function importYouTubePlaylist(jobId, userId, playlistId, options) {
-  await query(`UPDATE import_jobs SET status = 'running' WHERE id = $1`, [jobId]);
-
-  const playlist = await youtube.getPlaylist(playlistId);
+  const playlist = await playlistReaders.read(detected.platform, detected.ref);
 
   await query(`UPDATE import_jobs SET total = $2, source_name = $3 WHERE id = $1`, [
     jobId,
@@ -501,8 +426,8 @@ async function importYouTubePlaylist(jobId, userId, playlistId, options) {
   let targetPlaylistId = options.targetPlaylistId || null;
   if (!targetPlaylistId && options.createPlaylist !== false) {
     targetPlaylistId = await ensurePlaylist(userId, playlist.name, {
-      source: 'youtube',
-      sourceRef: playlist.id,
+      source: detected.platform,
+      sourceRef: detected.ref,
     });
     await query('UPDATE import_jobs SET target_playlist_id = $2 WHERE id = $1', [
       jobId,
@@ -513,22 +438,25 @@ async function importYouTubePlaylist(jobId, userId, playlistId, options) {
   await processItems(
     jobId,
     userId,
-    playlist.tracks.map((entry) => ({
-      // The guess, offered to the resolver as a search - never stored as-is.
-      title: entry.title,
-      artist: entry.artist || null,
-      durationMs: entry.durationMs,
-      // Keeps two different videos with the same title apart when neither
-      // resolves, since both will have an empty artist by then - and doubles as
-      // the address the local app downloads from, which matters most for
-      // exactly those tracks.
-      matchKeyExtra: entry.url,
-      sourceHint: entry.url,
+    playlist.tracks.map((track) => ({
+      title: track.title,
+      artist: track.artist || null,
+      album: track.album || null,
+      durationMs: track.durationMs || null,
+      // A Deezer entry carries a real track id, so the resolver hydrates it
+      // directly instead of searching. Nothing else here has one.
+      deezerId: track.deezerId || null,
+      matchKeyExtra: track.identity || null,
+      sourceHint: track.sourceHint || null,
     })),
     {
       targetPlaylistId,
-      addedVia: 'youtube-import',
-      discardUnverifiedMetadata: true,
+      addedVia: `${detected.platform}-import`,
+      // A YouTube playlist is a list of videos, so its "artist" was split out of
+      // a title and is discarded unless a catalogue confirms it. Spotify, Apple
+      // Music and Deezer are music catalogues - their credits are records, so an
+      // unmatched track keeps what they said rather than arriving blank.
+      discardUnverifiedMetadata: playlist.quality === 'upload',
     }
   );
 }

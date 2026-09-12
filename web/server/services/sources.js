@@ -1,6 +1,5 @@
 import { many, one, query } from '../db/pool.js';
-import * as deezer from '../providers/deezer.js';
-import * as youtube from '../providers/youtube.js';
+import * as playlists from '../providers/playlists.js';
 import { importSourceTracks } from './import.js';
 
 // Standing sources: a playlist somewhere else that this library follows.
@@ -19,55 +18,8 @@ import { importSourceTracks } from './import.js';
 // Metadata is unchanged from every other route - the resolver decides, and
 // nothing a source claims is written unless a catalogue confirms it.
 
-// Two readers, and adding a third means a module here and a case below rather
-// than a schema change.
-const KINDS = {
-  'youtube-playlist': {
-    label: 'YouTube playlist',
-    module: youtube,
-    parse: (input) => youtube.parsePlaylistRef(input),
-    read: async (ref) => {
-      const playlist = await youtube.getPlaylist(ref);
-      return {
-        name: playlist.name,
-        artworkUrl: playlist.tracks[0]?.artworkUrl || null,
-        // The video title is a hint. Splitting it here rather than in the
-        // importer keeps every reader returning the same shape.
-        tracks: playlist.tracks.map((entry) => ({
-          title: entry.title,
-          artist: entry.artist || null,
-          durationMs: entry.durationMs,
-          identity: entry.url,
-          trusted: false,
-        })),
-      };
-    },
-  },
-  'deezer-playlist': {
-    label: 'Deezer playlist',
-    module: deezer,
-    parse: (input) => deezer.parsePlaylistRef(input),
-    read: async (ref) => {
-      const { playlist, tracks } = await deezer.getPlaylist(ref);
-      return {
-        name: playlist.name,
-        artworkUrl: playlist.artworkUrl || null,
-        tracks: tracks.map((track) => ({
-          title: track.title,
-          artist: track.artists?.[0]?.name || null,
-          album: track.album?.name || null,
-          durationMs: track.durationMs,
-          deezerId: track.deezerId,
-          identity: `deezer:${track.deezerId}`,
-          // A Deezer playlist entry carries a real track id, so this is a
-          // catalogue record rather than a guess and the resolver hydrates it
-          // directly instead of searching.
-          trusted: true,
-        })),
-      };
-    },
-  },
-};
+// Which service a link belongs to, and how to read it, both live in
+// providers/playlists.js. Adding a platform is a reader there and nothing here.
 
 // How stale a source has to be before opening the app re-reads it.
 //
@@ -89,26 +41,19 @@ export async function addSource(userId, input) {
   const text = String(input || '').trim();
   if (!text) throw new SourceError('Paste a playlist link first.');
 
-  let kind = null;
-  let ref = null;
-  for (const [name, spec] of Object.entries(KINDS)) {
-    const parsed = spec.parse(text);
-    if (parsed) {
-      kind = name;
-      ref = parsed;
-      break;
-    }
-  }
-
-  if (!kind) {
+  const detected = playlists.detect(text);
+  if (!detected) {
     throw new SourceError(
-      'That is not a playlist link this recognises. YouTube and Deezer playlists both work; paste the address from the browser.'
+      `That is not a playlist link this recognises. ${supportedList()} all work - paste the address straight from the browser or the app's share menu.`
     );
   }
 
+  const kind = detected.platform;
+  const ref = detected.ref;
+
   let read;
   try {
-    read = await KINDS[kind].read(ref);
+    read = await playlists.read(kind, ref);
   } catch (err) {
     throw new SourceError(err.message || 'That playlist could not be read.');
   }
@@ -183,12 +128,11 @@ export async function checkSource(userId, id) {
   );
   if (!source) return null;
 
-  const spec = KINDS[source.kind];
-  if (!spec) return null;
+  if (!playlists.PLATFORMS[source.kind]) return null;
 
   let read;
   try {
-    read = await spec.read(source.ref);
+    read = await playlists.read(source.kind, source.ref);
   } catch (err) {
     // Recorded against the source rather than thrown. A playlist made private
     // should say so next to itself, where it can be acted on, and must not stop
@@ -207,6 +151,7 @@ export async function checkSource(userId, id) {
     sourceName: read.name || source.name,
     sourceRef: source.ref,
     kind: source.kind,
+    quality: read.quality,
     targetPlaylistId: source.targetPlaylistId,
     tracks: read.tracks,
   });
@@ -272,5 +217,10 @@ export class SourceError extends Error {
 }
 
 export const SOURCE_KINDS = Object.fromEntries(
-  Object.entries(KINDS).map(([name, spec]) => [name, spec.label])
+  Object.entries(playlists.PLATFORMS).map(([name, spec]) => [name, spec.label])
 );
+
+function supportedList() {
+  const labels = Object.values(playlists.PLATFORMS).map((spec) => spec.label);
+  return `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`;
+}

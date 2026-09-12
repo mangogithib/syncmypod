@@ -29,6 +29,13 @@ import {
 // library, and removing a source keeps everything it already brought - the same
 // reasoning as the local app never deleting a track it did not add.
 
+// The service a source came from, for the line under its name. Filled from the
+// server's own list so it cannot drift from what the readers support.
+let platformLabels = {};
+function platformLabel(kind) {
+  return platformLabels[kind] || kind;
+}
+
 export async function renderSources(view, context) {
   const listSlot = h('div');
   const accountSlot = h('div');
@@ -46,6 +53,13 @@ export async function renderSources(view, context) {
     accountSlot
   );
 
+  // Names for the platform badges, before the list renders.
+  try {
+    ({ kinds: platformLabels } = await api.sources());
+  } catch {
+    // Cosmetic; the raw key is a fine fallback.
+  }
+
   await Promise.all([loadSources(), loadAccount()]);
 
   // --- adding ---------------------------------------------------------------
@@ -53,7 +67,7 @@ export async function renderSources(view, context) {
   function addCard() {
     const input = h('input.input', {
       type: 'text',
-      placeholder: 'https://www.youtube.com/playlist?list=...  or  https://www.deezer.com/playlist/...',
+      placeholder: 'Paste a playlist link from any service',
     });
     const submit = h('button.btn.btn-primary', { type: 'submit' }, icon('plus', 15), 'Follow');
 
@@ -94,7 +108,7 @@ export async function renderSources(view, context) {
             input,
             h(
               'span.hint',
-              'YouTube and Deezer playlists both work, public or unlisted. Copying the address straight out of the browser is fine, even if it points at one song inside the playlist.'
+              'Spotify, Apple Music, YouTube, YouTube Music and Deezer all work, public or unlisted. Copying the address straight out of the browser or an app’s share menu is fine, even if it points at one song inside the playlist.'
             )
           ),
           h('div', submit)
@@ -210,7 +224,7 @@ export async function renderSources(view, context) {
         h(
           'div.list-sub',
           [
-            source.kind === 'youtube-playlist' ? 'YouTube' : 'Deezer',
+            platformLabel(source.kind),
             source.lastSeenCount != null
               ? `${formatNumber(source.lastSeenCount)} track${source.lastSeenCount === 1 ? '' : 's'}`
               : null,

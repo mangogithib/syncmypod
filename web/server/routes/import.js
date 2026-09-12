@@ -2,12 +2,12 @@ import { Router } from 'express';
 import { rateLimit, requireUser } from '../auth/middleware.js';
 import { many, one } from '../db/pool.js';
 import { badRequest, bool, handler, id, notFound, str } from '../lib/api.js';
+import { PLATFORMS } from '../providers/playlists.js';
 import {
   getJob,
   parseTrackList,
-  startDeezerPlaylistImport,
+  startPlaylistImport,
   startTrackListImport,
-  startYouTubePlaylistImport,
 } from '../services/import.js';
 
 export const importRoutes = Router();
@@ -69,11 +69,15 @@ importRoutes.post(
   })
 );
 
+// One route for a playlist from any service. The address says which.
 importRoutes.post(
-  '/deezer-playlist',
+  '/playlist',
   rateLimit({ windowMs: 60_000, max: 10, key: (req) => `user:${req.user?.id}` }),
   handler(async (req, res) => {
-    const ref = str(req.body?.playlist, 'Playlist', { required: true, max: 500 });
+    const url = str(req.body?.url ?? req.body?.playlist, 'Playlist link', {
+      required: true,
+      max: 500,
+    });
 
     const targetPlaylistId = req.body?.targetPlaylistId
       ? id(req.body.targetPlaylistId, 'targetPlaylistId')
@@ -81,38 +85,26 @@ importRoutes.post(
     if (targetPlaylistId) await assertOwnedPlaylist(targetPlaylistId, req.user.id);
 
     try {
-      const jobId = await startDeezerPlaylistImport(req.user.id, ref, {
+      const { jobId, platform } = await startPlaylistImport(req.user.id, url, {
         createPlaylist: bool(req.body?.createPlaylist, true),
         targetPlaylistId,
       });
-      res.status(202).json({ jobId });
+      res.status(202).json({ jobId, platform });
     } catch (err) {
-      // A malformed URL is the user's mistake to correct, not a server fault.
+      // A link this cannot read is the user's to correct, not a server fault.
       throw badRequest(err.message);
     }
   })
 );
 
-importRoutes.post(
-  '/youtube-playlist',
-  rateLimit({ windowMs: 60_000, max: 10, key: (req) => `user:${req.user?.id}` }),
-  handler(async (req, res) => {
-    const ref = str(req.body?.playlist, 'Playlist', { required: true, max: 500 });
-
-    const targetPlaylistId = req.body?.targetPlaylistId
-      ? id(req.body.targetPlaylistId, 'targetPlaylistId')
-      : null;
-    if (targetPlaylistId) await assertOwnedPlaylist(targetPlaylistId, req.user.id);
-
-    try {
-      const jobId = await startYouTubePlaylistImport(req.user.id, ref, {
-        createPlaylist: bool(req.body?.createPlaylist, true),
-        targetPlaylistId,
-      });
-      res.status(202).json({ jobId });
-    } catch (err) {
-      throw badRequest(err.message);
-    }
+// What the box should say it accepts, so the UI does not keep its own list that
+// drifts from the readers.
+importRoutes.get(
+  '/platforms',
+  handler(async (_req, res) => {
+    res.json({
+      platforms: Object.entries(PLATFORMS).map(([id, spec]) => ({ id, label: spec.label })),
+    });
   })
 );
 
