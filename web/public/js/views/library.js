@@ -1,5 +1,6 @@
 import { api } from '../lib/api.js';
 import { h, icon, mount } from '../lib/dom.js';
+import { suggestInput } from '../lib/suggest.js';
 import {
   artwork,
   confirmDialog,
@@ -529,8 +530,21 @@ export async function renderLibrary(view, context) {
 // consequence, so the dialog says so rather than leaving it implicit.
 export function editTrackDialog(track, onSaved) {
   const title = h('input.input', { type: 'text', value: track.title || '' });
-  const artist = h('input.input', { type: 'text', value: track.artistCredit || '' });
-  const album = h('input.input', { type: 'text', value: track.albumName || track.albumCredit || '' });
+  // Both suggest as you type: names already in this library first, then what
+  // Deezer knows. Picking an existing one is what stops the Artists page filling
+  // with near-duplicates that differ by a space.
+  const artistField = suggestInput({
+    value: track.artistCredit || '',
+    placeholder: 'Start typing an artist...',
+    fetchSuggestions: (q) => api.suggestArtists(q),
+  });
+  const albumField = suggestInput({
+    value: track.albumName || track.albumCredit || '',
+    placeholder: 'Start typing an album...',
+    fetchSuggestions: (q) => api.suggestAlbums(q),
+  });
+  const artist = artistField.input;
+  const album = albumField.input;
   const trackNo = h('input.input', { type: 'number', min: '0', value: track.trackNo ?? '' });
   const discNo = h('input.input', { type: 'number', min: '0', value: track.discNo ?? '' });
 
@@ -544,10 +558,10 @@ export function editTrackDialog(track, onSaved) {
       h(
         'div.field',
         h('label', 'Artist'),
-        artist,
+        artistField.element,
         h('span.hint', 'Multiple artists are joined with a comma. This is what gets written to the iPod tag.')
       ),
-      h('div.field', h('label', 'Album'), album),
+      h('div.field', h('label', 'Album'), albumField.element),
       h(
         'div.row',
         h('div.field', { style: { flex: 1 } }, h('label', 'Track no.'), trackNo),

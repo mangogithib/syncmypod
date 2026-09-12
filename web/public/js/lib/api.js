@@ -138,6 +138,8 @@ export const api = {
     request('POST', '/api/import/youtube-playlist', payload),
   importJobs: () => request('GET', '/api/import/jobs'),
 
+  suggestArtists: (q) => request('GET', `/api/suggest/artists?q=${encodeURIComponent(q)}`),
+  suggestAlbums: (q) => request('GET', `/api/suggest/albums?q=${encodeURIComponent(q)}`),
   unresolvedCount: () => request('GET', '/api/library/unresolved/count'),
   combinedArtistCount: () => request('GET', '/api/artists/combined/count'),
   repairCombinedArtists: () => request('POST', '/api/artists/combined/repair'),
