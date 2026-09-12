@@ -8,8 +8,7 @@ For what the tool *is*, read [README.md](README.md). For how it works
 internally, read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). This file is the
 project's state and its reasoning.
 
-**Last updated:** 12 September 2026 (YouTube playlist import, following a
-YouTube library with no setup, first published release)
+**Last updated:** 12 September 2026 (YouTube Music metadata, Sources, re-matching unresolved songs, artist credit splitting)
 
 ---
 
@@ -19,26 +18,29 @@ YouTube library with no setup, first published release)
 |---|---|
 | Web library manager | Working, deployed, publicly reachable over HTTPS |
 | Metadata resolution | Working — Deezer → iTunes → MusicBrainz, **no API keys needed** |
-| Search | Working — combined by default, YouTube Music as a named fallback with real metadata |
+| Search | Working — combined by default, **YouTube Music** as a named fallback with real structured metadata |
 | Artist and album pages | Working — browse a discography before adding anything |
 | Bulk import: pasted list | Working |
 | Bulk import: Deezer playlist | Working |
 | Bulk import: YouTube playlist link | Working — verified on a real 50-track playlist |
-| Sources (followed playlists) | Working - YouTube and Deezer playlist links, re-read on page open |
-| Connected YouTube account | Built; **needs a Google OAuth client**, which Mohamed is setting up |
+| Sources (followed playlists) | Working — YouTube and Deezer links, re-read when the page is opened |
+| Connected YouTube account | Built and tested against a stubbed Google; **waiting on a Google OAuth client** |
+| Re-matching unresolved songs | Working — asks YouTube Music, merges into existing rows |
+| Splitting combined artist credits | Working — verified against Deezer, so real bands survive |
 | Followed artists | Working — future releases, and optionally the back catalogue |
 | Device pairing + sync API | Working, verified end to end |
 | Local app: the sync engine | Working, verified on real hardware |
 | Album art on the device | Working — verified by decoding it back off the iPod |
-| YouTube Premium sign-in (local) | Working — 256kbps where the account allows it |
+| YouTube Premium sign-in (local) | Working — 256kbps where the account allows it. No browser picker |
 | Local app: GUI | Working — pairing, status, sync, live progress, cancel. No terminal anywhere |
 | Bundled ffmpeg | Working — fetched by the build, shipped in the zip |
-| Downloadable build | **Published** — see the release link below |
-| CI | Green as of 12 September, after two long-standing failures were fixed |
-| **Furnishing (visual polish)** | **Not started — this is next** |
+| Downloadable build | **Published** — 0.1.1, see the release link below |
+| CI | Green. Now also checks for undefined references, which shipped twice |
+| Furnishing (visual polish) | First pass done; what remains is taste rather than defect |
 
-Roughly 16,000 lines across 48 JavaScript files, 13 Python modules, 7 SQL
-migrations. 206 Python tests, all passing.
+Roughly 17,000 lines across 55 JavaScript files, 16 Python modules, 7 SQL
+migrations. 182 Python tests, all passing. The web side still has **no unit
+suite** — see What is next.
 
 ### Live instance
 
@@ -50,6 +52,8 @@ migrations. 206 Python tests, all passing.
 | Deploy directory | `/root/syncmypod` |
 | Containers | `syncmypod-app-1`, `syncmypod-db-1`, `syncmypod-caddy-1` |
 | Certificate | Let's Encrypt, expires 10 Dec 2026, auto-renews |
+| Contents (12 Sep) | 353 songs, 478 artists, 317 albums, 3 playlists, 5 paired devices |
+| Needing attention | 38 songs with no artist, 4 artist rows naming more than one person |
 
 ### The download
 
@@ -542,6 +546,105 @@ Other facts about both routes:
   `SESSION_SECRET`). Rotating the session secret invalidates stored grants,
   which is correct — rotating it is what you do after a compromise.
 
+### Splitting a combined artist credit, without inventing band members
+
+The Artists page listed people who do not exist: "Pritam & Soham", "Kailash
+Kher, Naresh Kamath & Paresh Kamath". iTunes reports every credited artist as
+one string and gives no structured list; Deezer gives a proper contributor list.
+Every combined row in the library had an `itunes_id` and no `deezer_id`.
+
+**Do not split on punctuation.** The counter-example is in the library:
+**Earth, Wind & Fire** is one band, and so are Simon & Garfunkel, Hall & Oates,
+Blood, Sweat & Tears. Splitting those invents members, silently and permanently.
+
+Two discriminators were tried and both are wrong:
+
+- *"The whole name exists as an artist, so leave it."* Deezer files
+  collaborations as artists too - "Alan Walker & Ava Max" is a real entry, id
+  80722242 - so existence separates nothing.
+- *"All the parts exist, so split it."* Earth, Wind and Fire are each also
+  artists on Deezer. This shatters the band.
+
+**What works is follower counts**, and it is not a close call in either
+direction:
+
+    Earth, Wind & Fire     1,264,655 fans   best part     1,759    x719
+    Simon & Garfunkel      1,165,520 fans   best part     3,053    x382
+    Alan Walker & Ava Max      1,996 fans   best part 4,052,443   /2030
+    BUNT. & Malou                 12 fans   best part    13,979   /1165
+
+A band is what its audience follows; a collaboration is a footnote to two
+artists who each have one of their own. So the whole name stays whole only when
+it is at least as followed as its biggest part. `deezer.toArtist()` carries
+`fans` for this, populated by `/search/artist` and absent from a track's
+contributor list.
+
+Three more things that cost a round each:
+
+- **Normalising punctuation away is not the same as ignoring it.** Stripping it
+  entirely makes "Soham" and "So Ham" the same string, and Deezer has both - the
+  first run credited a song to the wrong artist. Punctuation becomes a space.
+- **The album artist comes in through a different door.** `upsertAlbum()`
+  creates it separately from the track's artists, so expanding only
+  `track.artists` let the combined string keep arriving. The rows it made had no
+  `track_artists` links, which made them look like a database fault rather than
+  an import one. Both are expanded now, before the transaction, because the
+  expansion calls out to Deezer and holding a transaction across a network
+  request is how a pool runs dry.
+- **`albums.album_artist_id` is ON DELETE SET NULL.** Deleting a combined artist
+  without moving its albums first silently left seventeen albums with no artist
+  at all. `repairOrphanedAlbums()` puts them back by re-deriving from each
+  album's own tracks. Check `SELECT count(*) FROM albums WHERE album_artist_id
+  IS NULL` after anything that deletes an artist.
+
+`artist_credit` on the track is deliberately never touched by any of this. That
+string is the iPod's artist tag and "Kailash Kher, Naresh Kamath & Paresh
+Kamath" is the correct tag. Only the browse-by-artist structure was wrong.
+
+### Two undefined-reference bugs shipped, so CI now checks for them
+
+`node --check` parses a file and stops. It has no idea whether `loadJobs()`
+refers to anything, and twice that gap put a broken page in front of the user:
+
+- A slice taken from one comment marker to the next removed the YouTube account
+  card **and** the `loadJobs` definition sitting between them. The Import page
+  rendered "loadJobs is not defined" and nothing else.
+- A route used `rateLimit` that its file never imported. The container
+  restart-looped on startup.
+
+`web/scripts/check-references.mjs` now runs in CI. It imports every server
+module for real - a missing import at module scope fails there - and scans every
+file for identifiers called but never defined. No new dependency.
+
+It was verified against both original bugs rather than assumed to catch them,
+and tuned until it was clean across all 53 files. The false positives worth
+knowing about, because they will come back if it is rewritten: `async (`, class
+and object method shorthand, `for...of` bindings, destructured parameters, and
+text inside regex literals. It also skips `scripts/` - its own source contains
+backticks inside regex literals, which its own string-stripper cannot pair - and
+skips `server/index.js`, which starts a listener as a side effect of import.
+
+### Re-matching songs that arrived with no artist
+
+A track stored with a title and nothing else was close to unmatchable, because a
+title alone does not identify a recording. YouTube Music changed that, so
+`services/rematch.js` walks the unresolved tracks, asks YouTube Music, and puts
+the answer to the ordinary resolver. On the real library: 24 examined, 4
+identified with correct credits and real ISRCs, 20 genuinely not in any
+catalogue and left untouched.
+
+**It merges rather than updates, and that is the hard part.** A resolved track's
+identity comes from its ISRC, so it gets a different `match_key` and therefore a
+*different row* - often one that already exists, because the same recording may
+already be in the library from a search. So `library_tracks`, `playlist_tracks`
+(positions included) and `device_tracks` are moved onto the resolved row in one
+transaction before the old one is deleted. Anything that resolves an existing
+track has to do this or it will duplicate rows and drop playlist entries.
+
+Guards, because this runs unattended over a whole library: a candidate whose
+title shares too few words with the original is refused, and so is one more than
+fifteen seconds off the known duration.
+
 ### What packaging found
 
 Freezing the application surfaced two bugs that source runs had hidden, which is
@@ -646,63 +749,85 @@ Worth knowing so they are not reintroduced:
 
 ## 6. What is next
 
-### Furnishing
+Roughly in the order it is worth doing.
 
-Mohamed's word for visual polish. A first pass is done - dead CSS removed, the
-local window's cards no longer stretching to a common height, disabled buttons
-legible, keyboard focus visible throughout, empty states inside cards rather
-than floating between them. What is left is taste rather than defect.
+### 1. The Google OAuth client — waiting on Mohamed, blocks nothing else
 
-`web/public/css/theme.css` is all tokens and the local app's GUI carries a copy,
-so re-theming is two files that must be kept in step.
+He is creating it. Once he has:
 
-### Before the connected YouTube account works
-
-Mohamed is creating the Google OAuth client. Once he has it:
-
-1. Google Cloud console -> new project -> enable **YouTube Data API v3**.
-2. Credentials -> OAuth client ID -> **Web application**.
-3. Authorised redirect URI:
+1. Google Cloud console → new project → enable **YouTube Data API v3**.
+2. Credentials → OAuth client ID → **Web application**.
+3. Authorised redirect URI, exactly:
    `https://syncmypod.duckdns.org:8444/api/youtube-account/callback`
-4. OAuth consent screen -> add himself under **Test users**. No publishing or
-   review needed for his own account.
-5. Paste the client ID and secret into **Settings -> YouTube**.
+4. OAuth consent screen → add himself under **Test users**. No publishing or
+   review is needed for his own account.
+5. Paste the client ID and secret into **Settings → YouTube**.
 
-Then Sources -> Connect YouTube account. Following a public playlist link needs
-none of this and works today.
+Then **Sources → Connect YouTube account**. Everything else on Sources and
+Import works today without it.
 
-### Then
+### 2. A web-side test suite — the largest gap in the project
 
-1. **A local-files source.** The highest-quality option available and the only
-   one with no downside: point the app at a folder of music already owned, match
-   manifest tracks against it, and skip downloading entirely. The iPod Classic
-   plays Apple Lossless, so a CD rip can go on untouched. Discussed on
-   11 September and deferred; the engine already has every piece it needs.
-2. **A web-side test suite.** There is none. `web / check` runs a JS syntax
-   check and a Docker build, which catches a typo and nothing else. The local
-   app has 176 tests; the web app's resolver deserves the same and does not have
-   it. This is the largest gap in the project.
-3. **macOS and Linux builds of the local app.** PyInstaller does not
-   cross-compile. Linux means adding a runner; macOS means that *and* resolving
-   the ffmpeg licensing question, since every readily available static macOS
-   build is GPL and this project is MIT — `fetch_ffmpeg.py` refuses macOS rather
-   than quietly bundling one.
+There is none. `web / check` parses every file, checks for undefined references,
+validates the compose file and builds the images. That catches a typo, a missing
+import and a broken Dockerfile, and nothing about whether the code is *right*.
 
-### Open questions not yet decided
+The local app has 182 tests and they have repeatedly caught real bugs. The web
+app has the resolver, the scorer, the artist splitter and the metadata rule —
+all pure logic, all easy to test, and all currently unprotected. Two of the
+three bugs a user saw this week were in the web half.
 
+Start with `lib/normalise.js` (`matchKey`, `scoreCandidate`, `stripDecorations`)
+and `services/artist-split.js` (`classify` against a stubbed Deezer, with the
+band list as fixtures). Node has a built-in test runner, so this needs no new
+dependency: `node --test`.
+
+### 3. A local-files source
+
+The highest-quality option available and the only one with no downside: point
+the local app at a folder of music already owned, match manifest tracks against
+it, and skip downloading entirely. The iPod Classic plays Apple Lossless, so a
+CD rip goes on untouched. Discussed on 11 September and deferred; the engine
+already has every piece it needs.
+
+### 4. A "needs attention" view
+
+38 songs currently have a title and no artist, and they will never sync until
+someone fills one in. Re-matching handles what YouTube Music can identify; the
+rest need a human, and editing them one at a time from the Songs list is the
+only way to do it now. A filtered view with inline artist entry is the obvious
+next step, and the filter already exists (`#/library?state=unresolved`).
+
+### 5. macOS and Linux builds of the local app
+
+PyInstaller does not cross-compile. Linux means adding a runner; macOS means
+that **and** resolving the ffmpeg licensing question, since every readily
+available static macOS build is GPL and this project is MIT —
+`fetch_ffmpeg.py` refuses macOS rather than quietly bundling one.
+
+### Open questions, not yet decided
+
+- **Whether YouTube Music should be trusted directly.** Its artist and album
+  fields come from Google's music catalogue, not from a video title, so they are
+  genuinely good. They are currently used only as a *search query*, and a track
+  the other catalogues cannot confirm still ends up with a title alone. That
+  honours the metadata rule as written; relaxing it for YouTube Music
+  specifically is a decision for Mohamed, not a refactor.
 - Whether to strip `(From "...")` suffixes from titles before writing tags. They
   currently reach the iPod verbatim.
 - Deezer's contributor order puts the composer first, so Kesariya reads
-  "Pritam, Arijit Singh, ..." rather than leading with the singer. Faithful to
-  the source; may not be what he wants on the device.
+  "Pritam, Arijit Singh, …" rather than leading with the singer. Faithful to the
+  source; may not be what he wants on the device.
 - HSTS is still `max-age=0`. Ready to enable, deliberately not done — it is a
   one-year browser commitment with no quick undo.
-- The unresolved tracks from a YouTube import need a comfortable way to be
-  fixed. They land correctly and are visible, but filling in an artist is
-  currently a per-track edit; a "needs attention" view would be the obvious next
-  step.
 - Code signing for the Windows build. Defender flags every unsigned PyInstaller
   executable, and the release notes say so, but saying so is not a fix.
+- **Furnishing.** A first pass is done — dead CSS removed, the local window's
+  cards no longer stretching to a common height, disabled buttons legible,
+  keyboard focus visible throughout, empty states inside cards rather than
+  floating between them. What is left is taste rather than defect.
+  `web/public/css/theme.css` is all tokens and the local app's GUI carries a
+  copy, so re-theming is two files that must be kept in step.
 
 ---
 
@@ -744,6 +869,24 @@ The full suite takes about three minutes; most of it is writing and signing
 simulated iTunesDB files, which is the part worth not mocking. The tests need
 ffmpeg on `PATH` or in `_bin` — they convert audio for real.
 
+### Checking the web tool
+
+There is no test suite, so these two are the whole safety net. Run both before
+deploying:
+
+```bash
+cd web
+find server public -name '*.js' -exec node --check {} \;
+node scripts/check-references.mjs .
+```
+
+The second needs the dependencies installed. Without a local Node, run it the
+way CI does, in a container:
+
+```bash
+ssh root@100.96.249.123 'cd /root/syncmypod && docker run --rm -v /root/syncmypod:/src:ro -w /work node:22-alpine sh -c "cp -r /src/server /src/public /src/scripts /src/package.json /work/; npm install --silent >/dev/null 2>&1; DATABASE_URL=postgres://unused@localhost:5432/unused SESSION_SECRET=ci node scripts/check-references.mjs ."'
+```
+
 ### Deploying a change to the web tool
 
 ```bash
@@ -777,37 +920,66 @@ cd local/dist && unzip -p SyncMyPod-*.zip '*/_internal/**/app.js' | grep -c rend
 
 ## 8. Loose ends
 
-- A test device named **"Dev container"** is paired against the live server from
-  CLI testing, and **"Mo Desktop"** is the Windows machine used for hardware
-  testing. Revoke either from the web interface when convenient.
-- **The live library holds 61 tracks, all of them from feature testing.** By
-  how they arrived: 37 from the follow-artist backfill, 19 from search, 3 from a
-  pasted list, 1 from a Deezer playlist, 1 from YouTube search. Real, correctly
-  resolved data, but not a curated library — and 43 of them would sync to an
-  iPod, so it is worth clearing before a real one is built.
-
-  A 50-track YouTube playlist imported on 12 September to prove that path end to
-  end was **removed again afterwards**, because the tracks resolved and would
-  therefore have gone onto the iPod on the next sync without anyone choosing
-  them. Import any public playlist link to see it work.
-- **A `uitest` account was created and deleted on 12 September** to verify the
-  new Import page renders and submits, since the `mo` password is not recorded
-  anywhere. `DELETE FROM users` cascades; no orphan rows were left.
-- **The attached iPod is not Mohamed's.** It is "Nihal's ipod", and the 18
-  library tracks were written onto it alongside 184 that were already there. It
-  has a full backup in `%LOCALAPPDATA%\SyncMyPod\backups` taken before the first
-  write, so putting it back exactly as it was is `IPod.restore(snapshot_id)`.
-- **`local/src/syncmypod_local/_bin` holds ~149MB of ffmpeg binaries** and
-  `local/dist` holds a 174MB zip. Both are gitignored but inside a
-  OneDrive-synced folder, so they sync. Moving the project out of OneDrive was
-  offered on 11 September and not answered; deleting `_bin` is safe and
-  `fetch_ffmpeg.py` gets it back.
-- **`Desktop/Claude/syncmypod-local`** on Mohamed's machine is the now-redundant
-  original local-app repository. Its commit is preserved in the monorepo under
-  `local/`. Safe to delete.
-- A pairing code can be minted directly in the database if a browser session is
-  not available:
+- **The live library is real data now, not a test fixture.** 353 songs, 478
+  artists, 317 albums, imported by Mohamed himself while this was being built.
+  Earlier versions of this file described it as test data; that is no longer
+  true, so do not clear it.
+- **38 songs have a title and no artist** and will never sync until one is
+  filled in. Re-matching has already taken the ones YouTube Music could
+  identify; the rest need a human. See "A needs-attention view" in What is next.
+- **4 artist rows still name more than one person.** They were left alone
+  deliberately, because a name in each could not be confirmed against a
+  catalogue - "Aaghaz", "D a n n y". Leaving one odd row beats inventing several
+  plausible wrong ones.
+- Five devices are paired against the live server, most from testing. **"Mo
+  Desktop"** is the real Windows machine; **"Dev container"**, **"Push test"**
+  and friends can be revoked from the web interface.
+- **The attached iPod is not Mohamed's.** It is "Nihal's ipod", and the test
+  tracks were written onto it alongside 184 that were already there. It has a
+  full backup in `%LOCALAPPDATA%\SyncMyPod\backups` taken before the first
+  write, so restoring it exactly is `IPod.restore(snapshot_id)`.
+- **`local/src/syncmypod_local/_bin` holds ~149MB of ffmpeg** and `local/dist`
+  holds a 183MB zip. Both are gitignored but inside a OneDrive-synced folder, so
+  they sync. Moving the project out of OneDrive was offered and not answered;
+  deleting `_bin` is safe and `fetch_ffmpeg.py` gets it back.
+- **`Desktop/Claude/syncmypod-local`** is the now-redundant original local-app
+  repository. Its commit is preserved in the monorepo under `local/`. Safe to
+  delete.
+- Temporary accounts (`uitest`, `uitest2`, `uitest3`, `vtest`) were created to
+  verify UI changes, because the `mo` password is not recorded anywhere, and all
+  were deleted afterwards. `DELETE FROM users` cascades cleanly; no orphan rows
+  were left. Create one the same way if a page needs looking at:
+  ```bash
+  ssh root@100.96.249.123 'cd /root/syncmypod && docker compose exec app npm run create-user -- checkme "<password>"'
+  ```
+- A pairing code can be minted directly if a browser session is not available:
   ```sql
   INSERT INTO pairing_codes (code, user_id, expires_at)
   SELECT 'ABCD1234', id, now() + interval '20 minutes' FROM users LIMIT 1;
   ```
+
+---
+
+## 9. What happened in the session ending 12 September
+
+Recorded because the reasoning matters more than the diffs, and two of these
+reversed an earlier decision.
+
+| Change | Why |
+|---|---|
+| **YouTube Music metadata** | Ported ytmusicapi's method (InnerTube, `WEB_REMIX` client) to Node. Structured artist/album/song fields instead of a video title. Turned two unresolvable regional tracks into resolved ones with ISRCs |
+| **Removed the local-app library push** | Built it, then Mohamed corrected the premise: the local app's YouTube sign-in is a *borrowed* account kept for downloading. Reading its playlists is reading somebody else's library |
+| **Settings: Google OAuth fields** | They were in the schema and the API but the page renders fields by hand, so the screen the setup instructions point at had no boxes |
+| **Removed the browser picker** | "Which browser are you signed in to YouTube in" is a question most people cannot answer. Every browser is tried; the one viewing the page goes first |
+| **Sources page** | An import happens once; a source is followed. The YouTube account moved here from Import, where it looked like a fourth one-shot importer |
+| **Re-matching unresolved songs** | YouTube Music changed the odds for tracks stored with a title alone |
+| **Artist credit splitting** | The Artists page listed people who do not exist. Solved by verification rather than punctuation |
+| **Reference checker in CI** | Two undefined-reference bugs shipped in one session |
+| **Dead code and layout fixes** | Two unused exports, three unreachable CSS rules, cards stretching to a common height, illegible disabled buttons |
+| **Release 0.1.1 published** | The local app changed, so the download had to |
+
+Three things were got wrong first and are worth not repeating: treating "Sign in
+with Google" as an alternative to OAuth rather than the same thing; assuming the
+local app's YouTube session could stand in for the user's own; and splitting
+artist credits on punctuation before checking them. Each is written up in
+section 5.
