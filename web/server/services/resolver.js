@@ -1,9 +1,18 @@
 import { transaction } from '../db/pool.js';
-import { joinArtists, matchKey, scoreCandidate, stripDecorations } from '../lib/normalise.js';
+import {
+  answerExplains,
+  cleanUploadTitle,
+  joinArtists,
+  matchKey,
+  scoreCandidate,
+  stripDecorations,
+  titleOverlap,
+} from '../lib/normalise.js';
 import { expandCredit } from './artist-split.js';
 import * as deezer from '../providers/deezer.js';
 import * as itunes from '../providers/itunes.js';
 import * as musicbrainz from '../providers/musicbrainz.js';
+import * as youtube from '../providers/youtube.js';
 
 // Metadata resolution.
 //
@@ -118,6 +127,32 @@ export async function resolveTrack(input, { preferProvider } = {}) {
     }
   }
 
+  // --- Tier 4: YouTube Music, on its own terms -----------------------------
+  //
+  // Only reached when the three catalogues have all said no, which for this
+  // library means a regional or very recent release. Before this existed such a
+  // track was stored with a title and no artist and stayed that way.
+  //
+  // Judged by two checks rather than by the scorer, because there is nothing to
+  // score against:
+  //
+  //   * the answer's title must share most of its words with the query, which
+  //     catches YouTube Music returning a different song entirely; and
+  //   * where a duration is known it must be within fifteen seconds, which
+  //     catches a remix, a live take or an extended cut.
+  //
+  // Both are stricter than the scorer's own bar on purpose: this runs
+  // unattended over whole imports rather than against something a person just
+  // typed and is watching.
+  if (youtube.isEnabled()) {
+    const fromMusic = await safely(
+      () => youtubeMusicMatch(input, cleanTitle),
+      attempts,
+      'youtube-music:search'
+    );
+    if (fromMusic) return accepted(fromMusic, 'youtube-music', 0.7, attempts);
+  }
+
   // --- Tier 3: loose title-only search ------------------------------------
   // For the "video title as metadata" case, where the artist field was junk or
   // the artist name was embedded in the title.
@@ -184,6 +219,94 @@ const PROVIDERS = [
   { name: 'itunes', module: itunes },
   { name: 'musicbrainz', module: musicbrainz },
 ];
+
+// YouTube Music is deliberately NOT in that list. It is reached as a tier of its
+// own - see below - because scoring it against the query is the wrong question.
+// The scorer asks "does this candidate match what you already know", and for a
+// track whose only known field is a title there is nothing to check against, so
+// every candidate scores about 0.5 and none is ever accepted. That is correct
+// for a catalogue search and useless here, where YouTube Music's answer IS the
+// metadata rather than a candidate for it.
+
+// Asks YouTube Music about a title, and refuses anything it cannot stand behind.
+const YOUTUBE_MUSIC_TITLE_OVERLAP = 0.6;
+const YOUTUBE_MUSIC_DURATION_SLACK_MS = 15_000;
+// Close enough to identify a recording on its own, without the title having
+// to account for every name an uploader put in it.
+const YOUTUBE_MUSIC_DURATION_EXACT_MS = 5_000;
+
+async function youtubeMusicMatch(input, cleanTitle) {
+  // The ORIGINAL title, not the one the other tiers use.
+  //
+  // stripDecorations removes "(From 'Brahmastra')" because the licensed
+  // catalogues file that song as "Kesariya" and the suffix only gets in the
+  // way. YouTube Music does the opposite: it indexes film music *with* the
+  // film, so "Sanware (from 'NOT A STUDIO SESSION')" is the title it knows and
+  // "Sanware" on its own returns a different song of that name.
+  //
+  // Only the uploader's own additions are stripped here. Handing this tier the
+  // decoration-stripped title cost an afternoon: every search ran, every search
+  // succeeded, and every one came back with the wrong record.
+  const cleaned = cleanUploadTitle(input.title) || cleanUploadTitle(cleanTitle);
+  if (!cleaned) return null;
+
+  const found = await youtube.searchTracksForResolver({
+    title: cleaned,
+    artist: input.artist,
+    album: input.album,
+    limit: 3,
+  });
+
+  for (const candidate of found) {
+    if (!candidate.artists?.length) continue;
+
+    const overlap = titleOverlap(candidate.title, cleaned);
+    const gap =
+      input.durationMs && candidate.durationMs
+        ? Math.abs(input.durationMs - candidate.durationMs)
+        : null;
+
+    // The duration is checked before the title gate, not after it.
+    //
+    // Checking the title first threw away the better answer: for
+    // "Anne-Marie & Ed Sheeran - 2002" the right record is "2002 (Acoustic)",
+    // whose length is five seconds out - and whose title overlaps only 0.5,
+    // because the upload names two artists the catalogue title does not. The
+    // strict gate dropped it and let the plain "2002", nineteen seconds out,
+    // be considered instead.
+    if (gap !== null && gap <= YOUTUBE_MUSIC_DURATION_EXACT_MS && overlap >= 0.4) {
+      return candidate;
+    }
+
+    if (overlap < YOUTUBE_MUSIC_TITLE_OVERLAP) continue;
+
+    // Duration is the strong evidence, and it is ranked accordingly.
+    //
+    // A length that agrees to within a few seconds identifies a recording about
+    // as well as anything short of an ISRC, and it is evidence the title cannot
+    // argue with. Where it is that close, the answer is taken even though the
+    // upload title mentions people the catalogue does not credit - which is the
+    // normal case, not the exception: "Leher (Official Video) Shahid, Kriti,
+    // Rashmika" names the actors, and "Anne-Marie & Ed Sheeran - 2002" names a
+    // duet partner YouTube Music files under Anne-Marie alone.
+    // Further out, or with no duration at all, the title has to carry the whole
+    // argument: everything significant in it must be accounted for by the
+    // answer. This is what stops "JUST US - AASHIR WAJAHAT | KOMAL MEER"
+    // becoming a different song called "just us" by Gabriela Bee - overlap
+    // alone scored that a perfect match, because overlap is measured against
+    // the shorter title and every word of the shorter one was present.
+    if (!answerExplains(cleaned, candidate.title, candidate.artists.map((a) => a.name)).ok) {
+      continue;
+    }
+
+    // And a length that is known but disagrees is a refusal regardless: a
+    // remix, a live take or an extended cut is a different recording.
+    if (gap !== null && gap > YOUTUBE_MUSIC_DURATION_SLACK_MS) continue;
+
+    return candidate;
+  }
+  return null;
+}
 
 function providerOrder(preferProvider) {
   if (!preferProvider) return PROVIDERS;

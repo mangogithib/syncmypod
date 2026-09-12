@@ -47,7 +47,16 @@ const routes = [
 ];
 
 function matchRoute(hash) {
-  const path = hash.replace(/^#\/?/, '').replace(/\/+$/, '');
+  // The query string is stripped before matching, not after.
+  //
+  // A view's own parameters ride in the hash - "#/library?state=unresolved" is
+  // how the Overview links to the songs needing attention - and leaving them on
+  // meant the path never equalled "library", no route matched, and the link
+  // bounced back to the dashboard. The link looked broken; the router was.
+  const path = hash
+    .replace(/^#\/?/, '')
+    .split('?')[0]
+    .replace(/\/+$/, '');
 
   for (const route of routes) {
     if (route.path === path) return { route, params: {} };

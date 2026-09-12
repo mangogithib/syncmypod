@@ -271,6 +271,87 @@ async function postJson(url, body) {
   return response.json();
 }
 
+// -- The resolver's view of YouTube Music ------------------------------------
+//
+// Deezer, iTunes and MusicBrainz between them cover licensed commercial
+// releases, which is most music and not all of it. What they miss is regional
+// and recent: a Malayalam single from last month is on YouTube Music and
+// nowhere else, and until this existed such a track was stored with a title and
+// no artist and never synced.
+//
+// So YouTube Music sits at the **end** of the ladder, after the three
+// catalogues have said no. That ordering is the whole design:
+//
+//   * It has no ISRC, so a track it resolves cannot converge with the same
+//     recording found elsewhere. Letting it answer first would fragment the
+//     catalogue for music the others know perfectly well.
+//   * Its album field is sometimes the single's own name, which is true but
+//     less useful than a real release.
+//
+// What it does have is a real artist, a real album name and real cover art,
+// taken from Google's music catalogue rather than from a video title. That is
+// the difference between this and the video search below, and it is why this
+// one is allowed to resolve a track at all.
+export async function findByIsrc() {
+  // YouTube Music does not expose ISRCs. Answering "no" quickly keeps it out of
+  // the resolver's first tier without a request.
+  return null;
+}
+
+// The ladder's shape: same arguments, same returned records, as every other
+// provider.
+export async function searchTracksForResolver({ title, artist, album, limit = 10 }) {
+  const query = [title, artist].filter(Boolean).join(' ').trim();
+  if (!query) return [];
+
+  const found = await searchMusic(query, { limit });
+  return found.map((entry) => toResolverTrack(entry, album)).filter(Boolean);
+}
+
+function toResolverTrack(entry, queriedAlbum) {
+  if (!entry?.title) return null;
+
+  const names = String(entry.artist || '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+  if (names.length === 0) return null;
+
+  const artists = names.map((name, index) => ({
+    provider: 'youtube-music',
+    name,
+    position: index,
+    role: index === 0 ? 'primary' : 'featured',
+  }));
+
+  const albumName = entry.album || queriedAlbum || null;
+
+  return {
+    provider: 'youtube-music',
+    // No identifier of any kind, deliberately. A YouTube video id is not an
+    // identity for a recording - the same song is uploaded many times - so
+    // storing one would create a false sense of having identified something.
+    isrc: null,
+    title: entry.title,
+    durationMs: entry.durationMs ?? null,
+    trackNo: null,
+    discNo: null,
+    explicit: null,
+    artists,
+    album: albumName
+      ? {
+          provider: 'youtube-music',
+          name: albumName,
+          // Square cover art rather than a 16:9 video still, which is the other
+          // thing YouTube Music gets right.
+          artworkUrl: entry.artworkUrl || null,
+          artists: [artists[0]],
+        }
+      : null,
+    externalUrl: entry.url || null,
+  };
+}
+
 export async function searchTracks(query, { limit = MAX_RESULTS } = {}) {
   if (!isEnabled()) {
     throw new ProviderError('YouTube search is turned off in Settings.', {

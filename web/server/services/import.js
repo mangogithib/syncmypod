@@ -193,6 +193,9 @@ async function syncYouTubeAccount(jobId, userId, followed) {
         matchKeyExtra: item.videoId
           ? `https://www.youtube.com/watch?v=${item.videoId}`
           : null,
+        sourceHint: item.videoId
+          ? `https://www.youtube.com/watch?v=${item.videoId}`
+          : null,
       })),
       {
         targetPlaylistId,
@@ -260,6 +263,9 @@ export async function importSourceTracks(userId, source) {
       durationMs: track.durationMs || null,
       deezerId: track.deezerId || null,
       matchKeyExtra: track.trusted ? null : track.identity,
+      // Only when it is genuinely a URL. A Deezer entry's identity is
+      // "deezer:12345", which is an identity and not somewhere to download from.
+      sourceHint: /^https?:\/\//.test(track.identity || '') ? track.identity : null,
     })),
     {
       targetPlaylistId,
@@ -513,8 +519,11 @@ async function importYouTubePlaylist(jobId, userId, playlistId, options) {
       artist: entry.artist || null,
       durationMs: entry.durationMs,
       // Keeps two different videos with the same title apart when neither
-      // resolves, since both will have an empty artist by then.
+      // resolves, since both will have an empty artist by then - and doubles as
+      // the address the local app downloads from, which matters most for
+      // exactly those tracks.
       matchKeyExtra: entry.url,
+      sourceHint: entry.url,
     })),
     {
       targetPlaylistId,
@@ -576,14 +585,24 @@ async function processItems(
         discardUnverifiedMetadata,
       });
 
+      // The source URL travels with the track, and matters most for exactly
+      // the tracks that do not resolve. The local app short-circuits its
+      // YouTube search when a sourceHint is present, so a song with no artist
+      // is still fetched from the right recording rather than from whatever a
+      // title-only search turns up - which, for a song with no artist, is the
+      // weakest search there is.
       const result = await query(
-        `INSERT INTO library_tracks (user_id, track_id, added_via)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (user_id, track_id) DO NOTHING`,
-        [userId, trackId, addedVia]
+        `INSERT INTO library_tracks (user_id, track_id, added_via, source_hint)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, track_id) DO UPDATE
+            SET source_hint = COALESCE(library_tracks.source_hint, EXCLUDED.source_hint)
+         RETURNING (xmax = 0) AS inserted`,
+        [userId, trackId, addedVia, item.sourceHint || null]
       );
 
-      if (result.rowCount > 0) added++;
+      // DO UPDATE always reports a row, so "was this new" can no longer be read
+      // from rowCount. The insert reports it instead.
+      if (result.rows?.[0]?.inserted) added++;
       else skipped++;
 
       if (targetPlaylistId) await appendToPlaylist(targetPlaylistId, trackId);

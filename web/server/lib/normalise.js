@@ -164,3 +164,106 @@ export function scoreCandidate(query, candidate) {
     titleScore * 0.5 + artistScore * 0.3 + durationScore * 0.12 + albumScore * 0.08
   );
 }
+
+// ---------------------------------------------------------------------------
+// Titles that came from an upload rather than a catalogue
+// ---------------------------------------------------------------------------
+
+// Strips what an uploader added and the song is not called.
+//
+// Used before asking YouTube Music about a title, because it indexes songs
+// rather than uploads: "(Official Video)" only ever hurts the match.
+export function cleanUploadTitle(title) {
+  return String(title || '')
+    // Everything after the first pipe is credits on a South Asian upload.
+    .split('|')[0]
+    // Bracketed descriptors: (Official Video), [Lyric Video], (4K Remaster).
+    .replace(
+      /[([{]\s*(?:official|full|hd|4k|lyrics?|lyrical|audio|video|visuali[sz]er|music\s*video|mv|remaster(?:ed)?|color\s*coded|eng\s*sub)[^)\]}]*[)\]}]/gi,
+      ' '
+    )
+    // Trailing bare descriptors with no brackets at all.
+    .replace(/\s*[-–—]\s*(?:official\s*)?(?:music\s*)?(?:video|audio|lyrics?|visuali[sz]er)\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// How alike two titles are, 0 to 1, by shared words.
+//
+// Word overlap rather than edit distance, because the failure being guarded
+// against is a search answering with a different song entirely, and that shows
+// up as having almost no words in common. Edit distance would call "Kesariya"
+// and "Kesariya (From Brahmastra)" distant when they are the same song.
+export function titleOverlap(a, b) {
+  const words = (text) =>
+    new Set(
+      String(text || '')
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .split(/\s+/)
+        .filter(Boolean)
+    );
+
+  const left = words(a);
+  const right = words(b);
+  if (left.size === 0 || right.size === 0) return 0;
+
+  let shared = 0;
+  for (const word of left) if (right.has(word)) shared++;
+  // Against the shorter side, so a title that is the other plus a suffix still
+  // scores 1 - which is the common case here.
+  return shared / Math.min(left.size, right.size);
+}
+
+// Words an uploader adds that are not part of what a song is called.
+//
+// Used when deciding whether a catalogue answer accounts for a scruffy upload
+// title: "Oru Nokku Kaanuvaan Lyrical Video Song" is fully explained by a
+// catalogue entry called "Oru Nokku Kaanuvaan", because the three words left
+// over are all in here.
+const UPLOAD_NOISE = new Set(
+  (
+    'official video audio lyric lyrics lyrical song songs full hd 4k uhd ' +
+    'visualizer visualiser mv remaster remastered version ver cover mashup ' +
+    'reprise live studio session teaser trailer promo exclusive new latest ' +
+    'x vs feat ft featuring with and the a an of from movie film ost ' +
+    'soundtrack presents presenting records music entertainment original ' +
+    'motion picture track'
+  ).split(' ')
+);
+
+function wordsOf(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+export function significantWords(text) {
+  return wordsOf(text).filter((word) => !UPLOAD_NOISE.has(word) && word.length > 1);
+}
+
+/**
+ * Does `answer` (a catalogue title plus its artists) account for everything in
+ * a scruffy upload `title`?
+ *
+ * This is the check that `titleOverlap` alone cannot make. Overlap measured
+ * against the shorter side gives "just us" a perfect score against
+ * "JUST US - AASHIR WAJAHAT | KOMAL MEER", because both its words are present -
+ * and the answer was a different song by Gabriela Bee. What gives it away is
+ * the other direction: the upload title carries "aashir" and "wajahat", and the
+ * answer explains neither.
+ *
+ * So every significant word in the upload title has to turn up somewhere in the
+ * answer. Uploader noise is ignored, which is what lets a real match through.
+ */
+export function answerExplains(title, answerTitle, answerArtists = []) {
+  const claimed = new Set([
+    ...wordsOf(answerTitle),
+    ...wordsOf(Array.isArray(answerArtists) ? answerArtists.join(' ') : answerArtists),
+  ]);
+
+  const unexplained = significantWords(title).filter((word) => !claimed.has(word));
+  return { ok: unexplained.length === 0, unexplained };
+}

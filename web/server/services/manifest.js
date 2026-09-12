@@ -27,10 +27,22 @@ export async function buildManifest(userId, deviceId) {
 
   // Only resolved and manually-corrected tracks are eligible.
   //
-  // This is the enforcement point for the concept's central rule: nothing gets
-  // written to an iPod tagged from an unverified source title. A pending or
-  // unresolved track is reported separately as `excluded` so the user can see
-  // and fix it, rather than it vanishing silently.
+  // The central rule, and the one place it is enforced: nothing is written to an
+  // iPod tagged from an unverified source title.
+  //
+  // **That is not the same as refusing to write the track.** Until now an
+  // unresolved track was held back entirely, which meant a song somebody had
+  // deliberately added never reached the device and the only remedy was typing
+  // an artist in by hand. Mohamed asked for the opposite, and he is right: the
+  // song goes on, and the fields nobody could confirm go on empty.
+  //
+  // An unresolved row already stores an empty artist and a null album - see
+  // saveUnresolvedTrack - so including it here writes exactly those. The iPod
+  // files it under "Unknown Artist", which is honest, visible, and fixable
+  // later by filling the metadata in and syncing again.
+  //
+  // `pending` is still held back. That means resolution has not been attempted
+  // yet rather than attempted and failed, so it is a race rather than a result.
   const tracks = await many(
     `SELECT t.id,
             t.title,
@@ -60,7 +72,7 @@ export async function buildManifest(userId, deviceId) {
   LEFT JOIN artists aa ON aa.id = al.album_artist_id
   LEFT JOIN device_tracks dt ON dt.track_id = t.id AND dt.device_id = $2
       WHERE lt.user_id = $1
-        AND t.metadata_state IN ('resolved', 'manual')
+        AND t.metadata_state IN ('resolved', 'manual', 'unresolved')
    ORDER BY lower(coalesce(aa.name, t.artist_credit)),
             lower(coalesce(al.name, '')),
             t.disc_no NULLS FIRST,
@@ -100,8 +112,10 @@ export async function buildManifest(userId, deviceId) {
   );
 
   // Playlist membership in one query rather than one per playlist. Entries whose
-  // track is not in the library, or is unresolved, are filtered out here so the
-  // local app never has to reason about a dangling reference.
+  // track is not in the library, or has not been resolved yet, are filtered out
+  // here so the local app never has to reason about a dangling reference. The
+  // state list matches the track query above exactly - a song on the device but
+  // missing from its playlist would be a worse bug than either.
   const playlistRows = await many(
     `SELECT pt.playlist_id AS "playlistId", pt.track_id AS "trackId", pt.position
        FROM playlist_tracks pt
@@ -110,7 +124,7 @@ export async function buildManifest(userId, deviceId) {
        JOIN tracks t ON t.id = pt.track_id
       WHERE p.user_id = $1
         AND p.sync_to_ipod = TRUE
-        AND t.metadata_state IN ('resolved', 'manual')
+        AND t.metadata_state IN ('resolved', 'manual', 'unresolved')
    ORDER BY pt.playlist_id, pt.position`,
     [userId]
   );
@@ -120,11 +134,14 @@ export async function buildManifest(userId, deviceId) {
     tracksByPlaylist.get(row.playlistId).push(row.trackId);
   }
 
+  // Only what is genuinely held back, which is now just `pending`. An
+  // unresolved track syncs with empty fields rather than being excluded, so
+  // listing it here would tell the user it had been skipped when it had not.
   const excluded = await many(
     `SELECT t.id, t.title, t.artist_credit AS "artist", t.metadata_state AS "metadataState"
        FROM library_tracks lt
        JOIN tracks t ON t.id = lt.track_id
-      WHERE lt.user_id = $1 AND t.metadata_state IN ('pending', 'unresolved')
+      WHERE lt.user_id = $1 AND t.metadata_state = 'pending'
    ORDER BY lower(t.title)
       LIMIT 500`,
     [userId]

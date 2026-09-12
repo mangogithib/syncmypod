@@ -1,5 +1,4 @@
 import { many, one, query, transaction } from '../db/pool.js';
-import * as youtube from '../providers/youtube.js';
 import { resolveTrack, saveResolvedTrack } from './resolver.js';
 
 // Another go at the tracks nothing could identify.
@@ -32,12 +31,6 @@ import { resolveTrack, saveResolvedTrack } from './resolver.js';
 // count.
 
 const DEFAULT_LIMIT = 200;
-
-// Below this the YouTube Music result is not the same song, and feeding it to
-// the resolver would launder a bad guess into confident metadata. Deliberately
-// stricter than the resolver's own bar, because this runs unattended over a
-// whole library rather than against something a person just searched for.
-const TITLE_SIMILARITY = 0.6;
 
 export async function countUnresolved(userId) {
   const row = await one(
@@ -161,32 +154,19 @@ export async function rematchUnresolved(userId, { limit = DEFAULT_LIMIT, onProgr
 }
 
 async function rematchOne(track) {
-  // The title is all there is. Stripping it of the things that are not part of
-  // the song name gives YouTube Music a better chance - it indexes songs, not
-  // uploads, so "(Official Video)" only ever hurts.
-  const searchText = cleanForSearch(track.title);
-  if (!searchText) return { resolved: false };
-
-  const candidates = await youtube.searchMusic(searchText, { limit: 3 });
-  const candidate = candidates.find(
-    (entry) => entry.artist && similar(entry.title, searchText) >= TITLE_SIMILARITY
-  );
-  if (!candidate) return { resolved: false };
-
-  // Duration is the strongest check available on a title-only track. A match
-  // more than fifteen seconds out is a different recording - a remix, a live
-  // take, an extended cut - and those are exactly the mistakes worth refusing.
-  if (track.durationMs && candidate.durationMs) {
-    if (Math.abs(track.durationMs - candidate.durationMs) > 15_000) {
-      return { resolved: false };
-    }
-  }
-
+  // Just ask the resolver again.
+  //
+  // This used to do its own YouTube Music lookup with its own guards, because
+  // the resolver had no tier that could answer a title-only query. It has one
+  // now, with the same two checks - title word overlap and a duration window -
+  // applied to every route rather than only to this one. Keeping a second copy
+  // here would mean two definitions of "close enough" drifting apart.
+  //
+  // So this is a re-run, and the only thing it adds is what to do with the
+  // answer: merge it into whatever row the resolved identity belongs to.
   const resolution = await resolveTrack({
-    title: candidate.title,
-    artist: candidate.artist,
-    album: candidate.album,
-    durationMs: candidate.durationMs || track.durationMs,
+    title: track.title,
+    durationMs: track.durationMs,
   });
   if (resolution.state !== 'resolved') return { resolved: false };
 
@@ -198,7 +178,7 @@ async function rematchOne(track) {
     resolved: true,
     merged,
     title: resolution.track.title,
-    artist: resolution.track.artists?.map((a) => a.name).join(', ') || candidate.artist,
+    artist: resolution.track.artists?.map((a) => a.name).join(', ') || '',
   };
 }
 
@@ -242,51 +222,4 @@ async function absorb(oldId, newId) {
 
     await tx.query('DELETE FROM tracks WHERE id = $1', [oldId]);
   });
-}
-
-// ---------------------------------------------------------------------------
-// Matching
-// ---------------------------------------------------------------------------
-
-// Strips what an uploader added and the song is not called.
-export function cleanForSearch(title) {
-  return String(title || '')
-    // Everything after the first pipe is credits on a South Asian upload.
-    .split('|')[0]
-    // Bracketed descriptors: (Official Video), [Lyric Video], (4K Remaster).
-    .replace(
-      /[([{]\s*(?:official|full|hd|4k|lyrics?|lyrical|audio|video|visuali[sz]er|music\s*video|mv|remaster(?:ed)?|color\s*coded|eng\s*sub)[^)\]}]*[)\]}]/gi,
-      ' '
-    )
-    // Trailing bare descriptors with no brackets at all.
-    .replace(/\s*[-–—]\s*(?:official\s*)?(?:music\s*)?(?:video|audio|lyrics?|visuali[sz]er)\s*$/i, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-// How alike two titles are, 0 to 1, by shared words.
-//
-// Word overlap rather than edit distance: the failure being guarded against is
-// YouTube Music answering with a different song entirely, and that shows up as
-// having almost no words in common. Edit distance would call "Kesariya" and
-// "Kesariya (From Brahmastra)" distant when they are the same song.
-export function similar(a, b) {
-  const words = (text) =>
-    new Set(
-      String(text || '')
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-        .split(/\s+/)
-        .filter(Boolean)
-    );
-
-  const left = words(a);
-  const right = words(b);
-  if (left.size === 0 || right.size === 0) return 0;
-
-  let shared = 0;
-  for (const word of left) if (right.has(word)) shared++;
-  // Against the shorter side, so a title that is the other plus a suffix still
-  // scores 1 - which is the common case here.
-  return shared / Math.min(left.size, right.size);
 }
