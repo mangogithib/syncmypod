@@ -85,11 +85,3 @@ export function pagination(query, { defaultLimit = 50, maxLimit = 200 } = {}) {
   const offset = Math.max(Number(query.offset) || 0, 0);
   return { limit, offset };
 }
-
-// Restricts a sort parameter to a known set of columns. Sort keys arrive from
-// the query string and end up in SQL, where a parameter placeholder cannot be
-// used for an identifier - so an allowlist is the mechanism, not a nicety.
-export function sortClause(requested, allowed, fallback) {
-  const key = String(requested || '').toLowerCase();
-  return allowed[key] || allowed[fallback];
-}

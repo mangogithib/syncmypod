@@ -144,14 +144,6 @@ export async function setMany(updates, userId) {
   return { applied, rejected };
 }
 
-// Notified after a write, so a provider can drop a cached access token or
-// rebuild a User-Agent string rather than carrying on with stale credentials.
-const listeners = new Set();
-export function onSettingsChanged(fn) {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
-}
-
 // What the Settings page renders. Secrets are reported as set/unset with a
 // short prefix, never as a value.
 export function describe() {

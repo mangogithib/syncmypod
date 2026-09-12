@@ -34,13 +34,11 @@ export async function renderSources(view, context) {
 
   mount(
     view,
+    // No heading here: the page header above already says Sources, and saying
+    // it twice is the kind of thing that makes an interface feel unconsidered.
     h(
-      'div.page-intro',
-      h('h2.section-heading', 'Sources'),
-      h(
-        'p.muted',
-        'Playlists this library follows. They are re-read whenever you open this page, and anything new is added. Nothing is ever removed.'
-      )
+      'p.page-intro',
+      'Playlists this library follows. They are re-read whenever you open this page, and anything new is added. Nothing is ever removed.'
     ),
     addCard(),
     listSlot,
@@ -121,13 +119,18 @@ export async function renderSources(view, context) {
 
     mount(
       listSlot,
-      sources.length === 0
-        ? emptyState({
-            iconName: 'list',
-            title: 'Nothing followed yet',
-            body: 'Paste a playlist link above and this library will keep up with it.',
-          })
-        : h('div.card', h('div.list', sources.map(sourceRow)))
+      // Inside a card either way. An empty state floating between two cards
+      // reads as a gap in the page rather than as one of its parts.
+      h(
+        'div.card',
+        sources.length === 0
+          ? emptyState({
+              iconName: 'list',
+              title: 'Nothing followed yet',
+              body: 'Paste a playlist link above and this library will keep up with it.',
+            })
+          : h('div.list', sources.map(sourceRow))
+      )
     );
   }
 

@@ -124,15 +124,11 @@ class GuiServer:
             "ffmpeg": {"found": found is not None, "detail": ffmpeg_finder.describe()},
             # Only whether a session is saved. Asking YouTube what it will
             # actually offer costs a request, and this runs on every page load.
-            "youtube": {
-                "signedIn": youtube_module.is_signed_in(),
-                "browsers": list(youtube_module.BROWSERS),
-                # Which browser is reading this page, so the form can default to
-                # it rather than asking. The page cannot hand over its own
-                # YouTube session - same-origin policy - so the browser still
-                # has to be named, but it should not have to be chosen.
-                "likely": youtube_module.browser_from_user_agent(user_agent),
-            },
+            # Only whether a session is saved. Which browser it came from is
+            # not the page's business any more: signing in tries them all, and
+            # the browser viewing this page is used to order the attempts
+            # server-side rather than to fill in a menu.
+            "youtube": {"signedIn": youtube_module.is_signed_in()},
             "running": self.session.running,
             "ipod": None,
             "ipodError": None,

@@ -256,7 +256,7 @@ function labelled(text, control) {
   a session is saved, and checks only when asked.
 */
 
-let youtubeState = { signedIn: false, browsers: [], detail: null, premium: false };
+let youtubeState = { signedIn: false, detail: null, premium: false };
 
 function renderYouTube(data) {
   if (data && data.youtube) {

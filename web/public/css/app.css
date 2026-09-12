@@ -162,13 +162,6 @@ a:hover { text-decoration: underline; }
 
 .view { padding: var(--space-5); flex: 1; min-width: 0; }
 
-.view-header {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-4);
-  margin-bottom: var(--space-5);
-  flex-wrap: wrap;
-}
 .view-header h1 { font-size: var(--text-xl); }
 .view-header .sub { color: var(--text-muted); font-size: var(--text-sm); margin-top: 2px; }
 .view-header .spacer { flex: 1; }
@@ -298,7 +291,6 @@ a:hover { text-decoration: underline; }
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
 }
-.card-pad { padding: var(--space-5); }
 .card-head {
   padding: var(--space-4) var(--space-5);
   border-bottom: 1px solid var(--border);
@@ -438,13 +430,6 @@ tbody tr:hover td.actions { background: var(--surface-2); }
 .badge-warn { background: var(--warn-soft); color: var(--warn); }
 .badge-danger { background: var(--danger-soft); color: var(--danger); }
 .badge-accent { background: var(--accent-soft); color: var(--accent-text); }
-.badge-dot::before {
-  content: "";
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-}
 
 /* ---------------------------------------------------------------------------
    Album / artist grids
@@ -943,18 +928,13 @@ code {
 /* --- Sources -------------------------------------------------------------- */
 
 /* A page that opens with a sentence rather than straight into a form, because
-   "source" is a word this application has given a specific meaning to. */
+   "source" is a word this application has given a specific meaning to.
+   Measured rather than full-width: a line of prose past about 70 characters is
+   harder to track back from, and this sits above cards that are wider. */
 .page-intro {
-  margin-bottom: var(--space-4);
-}
-
-.page-intro .section-heading {
-  margin-bottom: var(--space-1);
-}
-
-.page-intro p {
-  margin: 0;
-  max-width: 62ch;
+  margin: 0 0 var(--space-4);
+  max-width: 68ch;
+  color: var(--text-muted);
 }
 
 /* A card inside a card. Used for the playlist picker, which belongs to the

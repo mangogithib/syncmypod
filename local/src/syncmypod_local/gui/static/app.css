@@ -76,9 +76,16 @@ body {
   gap: var(--space-4);
 }
 
+/*
+  `align-items: start` matters more than it looks. Without it a grid stretches
+  every card to the height of the tallest, so "No iPod detected" - two lines -
+  became a card the height of the pairing form beside it, and the window read as
+  mostly empty boxes. Cards should be the size of what is in them.
+*/
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  align-items: start;
   gap: var(--space-4);
 }
 
@@ -189,11 +196,18 @@ body {
 
 /* --- Actions ------------------------------------------------------------ */
 
+/*
+  The row that runs the sync. Set apart from the cards above it with a rule
+  rather than more space, because it is the one thing on this page that does
+  something irreversible and it should not read as another card.
+*/
 .actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
 }
 
 .button {
@@ -213,9 +227,16 @@ body {
   background: var(--surface-3);
 }
 
+/*
+  A disabled primary button at half opacity turns muddy against the accent
+  colour - it reads as a rendering fault rather than as unavailable. Giving it
+  the plain surface treatment instead says the same thing more clearly.
+*/
 .button:disabled {
-  opacity: 0.5;
   cursor: not-allowed;
+  background: var(--surface-3);
+  border-color: var(--border);
+  color: var(--text-subtle);
 }
 
 .button-primary {
@@ -227,6 +248,14 @@ body {
 .button-primary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
+}
+
+/* Keyboard focus has to be visible on every control, not only the ones that
+   happen to be inputs. */
+.button:focus-visible,
+.select-small:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .button-danger {
