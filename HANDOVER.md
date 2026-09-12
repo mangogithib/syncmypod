@@ -8,7 +8,12 @@ For what the tool *is*, read [README.md](README.md). For how it works
 internally, read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). This file is the
 project's state and its reasoning.
 
-**Last updated:** 12 September 2026 (one playlist box for five services, YouTube Music as a resolver tier, unresolved songs sync, phone layout)
+**Picking this up cold? Read section 9 first** - it is a page, and it covers the
+state of play, what was built most recently, and the eight things that were
+tried and got wrong before they were got right. Then come back to section 3,
+which is the one rule the whole design rests on.
+
+**Last updated:** 12 September 2026, end of day.
 
 ---
 
@@ -17,30 +22,29 @@ project's state and its reasoning.
 | Area | State |
 |---|---|
 | Web library manager | Working, deployed, publicly reachable over HTTPS |
-| Metadata resolution | Working — Deezer → iTunes → MusicBrainz → **YouTube Music**, no API keys |
-| Search | Working — combined by default, YouTube Music as a named fallback |
+| Metadata resolution | Working — Deezer → iTunes → MusicBrainz → YouTube Music. **No API keys anywhere** |
+| Search | Combined by default; YouTube Music as a named fallback |
 | Artist and album pages | Working — browse a discography before adding anything |
-| Import: any playlist link | Working — **Spotify, Apple Music, YouTube, YouTube Music, Deezer** in one box |
-| Import: pasted list | Working |
-| Sources (followed playlists) | Working — same five services, re-read when the page is opened |
+| Import: a playlist link | **Spotify, Apple Music, YouTube, YouTube Music, Deezer** in one box |
+| Import: a pasted list | Working — dash, tab and CSV shapes |
+| Sources (followed playlists) | Same five services, re-read when the page is opened |
 | Re-matching songs with no artist | Working — a re-run of the resolver, merged into existing rows |
-| Splitting combined artist credits | Working — verified against Deezer, real bands survive |
-| Metadata autocomplete | Working — library names first, then Deezer, completing the name under the caret |
-| Followed artists | Working — future releases, and optionally the back catalogue |
+| Splitting combined artist credits | Working — checked against Deezer, so real bands survive |
+| Metadata autocomplete | Working — library names first, completing the name under the caret |
+| Followed artists | Working — future releases, optionally the back catalogue |
 | Device pairing + sync API | Working, verified end to end |
 | Local app: the sync engine | Working, verified on real hardware |
 | Album art on the device | Working — verified by decoding it back off the iPod |
 | YouTube Premium sign-in (local) | Working — no browser picker, tries them all |
-| Local app: GUI | Working — no terminal anywhere |
+| Local app: GUI | Working — nothing needs a terminal |
 | Downloadable build | **Published** — 0.1.1 |
-| Phone layout | Working — verified at 375px; the songs table drops to title + artist |
-| CI | Green. Parses every file and checks for undefined references |
-| Connected YouTube account | **Removed.** Needed a per-instance Google OAuth client and a Test users entry — see section 5 |
-| **A web test suite** | **Still none. The largest gap — see What is next** |
+| Phone layout | Working — verified at 375px |
+| CI | Green. Parses every file, checks for undefined references, runs migrations |
+| Connected YouTube account | **Removed.** Needed a per-instance Google client *and* a Test users entry |
+| **A web test suite** | **Still none. The biggest gap — see section 6** |
 
-Roughly 18,000 lines across 56 JavaScript files, 16 Python modules, 7 SQL
-migrations. 182 Python tests, all passing. The web side still has **no unit
-suite** — see What is next.
+About 18,000 lines: 56 JavaScript files, 16 Python modules, 8 SQL migrations.
+**182 Python tests, all passing. Zero JavaScript tests.**
 
 ### Live instance
 
@@ -49,11 +53,34 @@ suite** — see What is next.
 | Public URL | `https://syncmypod.duckdns.org:8444` |
 | SSH | `ssh root@100.96.249.123` |
 | Public IP | `145.241.202.47` |
-| Deploy directory | `/root/syncmypod` |
+| Deploy directory | `/root/syncmypod` (an rsync target, **not** a clone) |
 | Containers | `syncmypod-app-1`, `syncmypod-db-1`, `syncmypod-caddy-1` |
 | Certificate | Let's Encrypt, expires 10 Dec 2026, auto-renews |
-| Contents | 388 songs, ~480 artists, 3 playlists, 5 paired devices |
-| Needing attention | 23 songs with no artist — they sync, with blank fields |
+
+**Library contents, end of 12 September** — this is Mohamed's own music now, not
+test data. Do not clear it.
+
+| | |
+|---|---|
+| Songs | 395 |
+| Artists / albums | 579 / 407 |
+| Playlists | 1 ("Liked") |
+| Songs with no artist | 20 — they sync, with the fields blank |
+| Combined artist rows | 0 |
+| Paired devices | 5, most from testing |
+| Followed sources | 0 |
+
+Where the songs came from: 290 from YouTube playlist imports, 72 from the
+follow-artist backfill, 20 from search, 8 from browsing, 5 from lists and
+Deezer.
+
+**A note on the playlist count.** Only one playlist exists although several
+playlists were imported, because most of those imports ran with "Recreate it as
+a playlist here" unchecked - the import history shows `target_playlist_id` null
+for all but one. Several `DELETE FROM playlists` statements were also run during
+testing to clear test data, and it is possible one removed more than intended.
+If a playlist is missing that should not be, that is the likeliest cause; the
+tracks themselves are all still in the library.
 
 ### The download
 
@@ -65,22 +92,19 @@ opens.
 
 **Creating a release through the API also creates the tag**, which fires
 `release.yml`, which builds its own copy and would replace a hand-verified asset
-with an unverified one mid-upload. Both releases so far were published by hand
-and that run cancelled. Either push the tag and let CI do all of it, or publish
-by hand and cancel the run — not half of each.
+mid-upload. Both releases so far were published by hand with that run cancelled.
+Pick one route or the other, not half of each.
 
-**Credentials are deliberately not recorded here.** This file is in a git
-repository, and repositories get cloned, shared and occasionally made public.
-The account is `mo`; reset the password without needing the old one:
+**Credentials are deliberately not in this file.** It is in a git repository,
+and repositories get cloned and shared. The account is `mo`; reset the password
+without needing the old one:
 
 ```bash
 ssh root@100.96.249.123 'cd /root/syncmypod && docker compose exec app npm run create-user -- mo'
 ```
 
-Secrets live in `/root/syncmypod/.env` on the server (chmod 600) and in the
-`app_settings` table. Nothing sensitive is in the repository.
-
----
+Secrets live in `/root/syncmypod/.env` (chmod 600) and the `app_settings` table.
+Nothing sensitive is in the repository.
 
 ## 2. The idea, in one paragraph
 
@@ -167,16 +191,13 @@ fine, but start from the reasoning rather than from scratch.
   offered one at 256. There is nothing to choose between, so the policy is a
   single format expression that takes the best AAC the account is entitled to.
   A bitrate menu would offer numbers no source can supply.
-- **Two YouTube sign-ins, deliberately separate.** They do different jobs and
-  must not share a credential:
-  - *In the local app:* the browser's own cookies, on the user's machine, used
-    to fetch the 256kbps stream a Premium account is entitled to. Never leaves
-    the machine.
-  - *In the web app:* a read-only OAuth grant held by the server, used to list
-    playlists. It cannot download and cannot write.
+- **There is exactly one YouTube sign-in, and it is in the local app.** The
+  browser's own cookies, on the user's machine, used to fetch the 256kbps stream
+  a Premium account is entitled to. It never leaves that machine, and the server
+  holds no YouTube credential of any kind.
 
-  A server compromise cannot reach a download session, and revoking either
-  leaves the other working.
+  A second one briefly existed in the web app - a read-only OAuth grant for
+  listing playlists - and was removed. Section 5 has why.
 - **Signing in to YouTube locally stores only youtube.com cookies.** yt-dlp's
   extractor calls `_get_cookies('https://www.youtube.com')` and nothing else, so
   a whole browser jar would put every other signed-in session on disk for no
@@ -874,11 +895,15 @@ already has every piece it needs.
 
 ### 3. A "needs attention" view
 
-38 songs currently have a title and no artist, and they will never sync until
-someone fills one in. Re-matching handles what YouTube Music can identify; the
-rest need a human, and editing them one at a time from the Songs list is the
-only way to do it now. A filtered view with inline artist entry is the obvious
-next step, and the filter already exists (`#/library?state=unresolved`).
+20 songs have a title and no artist. They *do* sync now - with the fields blank,
+so they arrive on the iPod under Unknown Artist - which makes this untidy rather
+than blocking.
+
+Re-matching has taken everything YouTube Music could identify; what is left
+genuinely needs a human. Editing them one at a time from the Songs list is the
+only way to do that at the moment. A filtered view with inline artist entry is
+the obvious next step, and both halves already exist: the filter is
+`#/library?state=unresolved` and the field already autocompletes.
 
 ### 4. macOS and Linux builds of the local app
 
@@ -975,7 +1000,18 @@ tar -czf - -C web --exclude=node_modules --exclude=.env . \
 ssh root@100.96.249.123 'cd /root/syncmypod && docker compose up -d --build app'
 ```
 
-Migrations apply automatically at startup. `--build` is not optional.
+Migrations apply automatically at startup. `--build` is not optional: the source
+is `COPY`ed into the image, so `restart` re-runs the old build.
+
+**The deploy never deletes.** `tar -x` only extracts, so a file removed from the
+repository lives on at the server and keeps being imported. Remove it there too:
+
+```bash
+ssh root@100.96.249.123 'cd /root/syncmypod && rm -f server/services/gone.js'
+```
+
+`check-references.mjs` catches this, because the orphan still tries to import
+things that no longer exist. That is how it was found.
 
 ### Building and publishing the local app
 
@@ -1000,79 +1036,119 @@ cd local/dist && unzip -p SyncMyPod-*.zip '*/_internal/**/app.js' | grep -c rend
 
 ## 8. Loose ends
 
-- **The live library is real data now, not a test fixture.** 353 songs, 478
-  artists, 317 albums, imported by Mohamed himself while this was being built.
-  Earlier versions of this file described it as test data; that is no longer
-  true, so do not clear it.
-- **38 songs have a title and no artist** and will never sync until one is
-  filled in. Re-matching has already taken the ones YouTube Music could
-  identify; the rest need a human. See "A needs-attention view" in What is next.
-- **4 artist rows still name more than one person.** They were left alone
-  deliberately, because a name in each could not be confirmed against a
-  catalogue - "Aaghaz", "D a n n y". Leaving one odd row beats inventing several
-  plausible wrong ones.
-- Five devices are paired against the live server, most from testing. **"Mo
-  Desktop"** is the real Windows machine; **"Dev container"**, **"Push test"**
-  and friends can be revoked from the web interface.
-- **The attached iPod is not Mohamed's.** It is "Nihal's ipod", and the test
-  tracks were written onto it alongside 184 that were already there. It has a
-  full backup in `%LOCALAPPDATA%\SyncMyPod\backups` taken before the first
-  write, so restoring it exactly is `IPod.restore(snapshot_id)`.
-- **`local/src/syncmypod_local/_bin` holds ~149MB of ffmpeg** and `local/dist`
-  holds a 183MB zip. Both are gitignored but inside a OneDrive-synced folder, so
-  they sync. Moving the project out of OneDrive was offered and not answered;
+- **The library is Mohamed's own music.** Earlier versions of this file called
+  it test data; that stopped being true on 12 September. Do not clear it. The
+  numbers are in section 1.
+- **20 songs have a title and no artist.** They *do* sync now, with the fields
+  blank, so this is untidy rather than broken. Re-matching has already taken
+  everything YouTube Music could identify; the rest need a human. See "A
+  needs-attention view" in section 6.
+- **Five devices are paired**, most from testing. "Mo Desktop" is the real
+  Windows machine; "Dev container", "Test PC", "Push test" and "MANR-LT001" can
+  be revoked from the web interface.
+- **The attached iPod is not Mohamed's.** It is "Nihal's ipod", and test tracks
+  were written onto it alongside 184 that were already there. There is a full
+  backup in `%LOCALAPPDATA%\SyncMyPod\backups` taken before the first write, so
+  restoring it exactly is `IPod.restore(snapshot_id)`.
+- **`local/src/syncmypod_local/_bin` holds ~149MB of ffmpeg** and `local/dist` a
+  183MB zip. Both gitignored, both inside a OneDrive-synced folder, so they sync
+  anyway. Moving the project out of OneDrive was offered and never answered;
   deleting `_bin` is safe and `fetch_ffmpeg.py` gets it back.
-- **`Desktop/Claude/syncmypod-local`** is the now-redundant original local-app
-  repository. Its commit is preserved in the monorepo under `local/`. Safe to
-  delete.
-- Temporary accounts (`uitest`, `uitest2`, `uitest3`, `vtest`) were created to
-  verify UI changes, because the `mo` password is not recorded anywhere, and all
-  were deleted afterwards. `DELETE FROM users` cascades cleanly; no orphan rows
-  were left. Create one the same way if a page needs looking at:
+- **`Desktop/Claude/syncmypod-local`** is the redundant original local-app
+  repository. Its commit is preserved under `local/`. Safe to delete.
+- **Temporary accounts are how the UI gets checked**, because the `mo` password
+  is not recorded anywhere. Several were created and deleted during this work
+  (`uitest`, `vtest`, `mtest`, `vt`); `DELETE FROM users` cascades cleanly and
+  left no orphan rows. Make one the same way:
   ```bash
   ssh root@100.96.249.123 'cd /root/syncmypod && docker compose exec app npm run create-user -- checkme "<password>"'
   ```
-- A pairing code can be minted directly if a browser session is not available:
+  **Delete it afterwards.** A live session against a deleted account looks like
+  a broken page, which wasted a round of debugging once.
+- A pairing code can be minted directly when a browser session is not available:
   ```sql
   INSERT INTO pairing_codes (code, user_id, expires_at)
   SELECT 'ABCD1234', id, now() + interval '20 minutes' FROM users LIMIT 1;
   ```
+- **Check these two after anything that deletes artists or merges tracks.** Both
+  have been silently wrong once:
+  ```sql
+  SELECT count(*) FROM albums WHERE album_artist_id IS NULL;           -- expect 0
+  SELECT count(*) FROM playlist_tracks pt
+    LEFT JOIN tracks t ON t.id = pt.track_id WHERE t.id IS NULL;       -- expect 0
+  ```
 
 ---
 
-## 9. What happened, and what was got wrong first
+## 9. Start here if you are picking this up cold
 
-Recorded because the reasoning matters more than the diffs, and because several
-of these reversed an earlier decision of mine.
+Read sections 2 and 3 first - the premise, and the metadata rule. Then this.
+
+### The state of play in three sentences
+
+The web tool and the local app both work end to end, and the local app is
+published as a download. Metadata comes from four sources in a fixed order and
+needs no keys; playlists can be imported or followed from five services, also
+with no keys. The web half has no tests at all, which is where the next bugs
+will come from and where the next work should go.
+
+### What was built on 12 September, and why
 
 | Change | Why |
 |---|---|
-| **YouTube Music metadata** | ytmusicapi's method ported to Node. Structured artist/album/song instead of a video title |
-| **YouTube Music as resolver tier 4** | Mohamed: it is a metadata source, so it belongs in the resolver, not behind a button |
-| **Unresolved songs sync with empty fields** | Holding them back meant a song somebody added never reached the device |
-| **One playlist box, five services** | The address says which service it is; asking the user first was a question with an obvious answer |
-| **Artist credits split, unconfirmed parts included** | The Artists page listed people who do not exist |
-| **Metadata autocomplete** | The library already held "Garvit - Priyansh" *and* "Garvit-Priyansh" |
-| **Phone layout** | Mohamed expects a phone to be the main device |
-| **OAuth setup moved to Settings** | Five Google Cloud steps made the Sources page look like work |
-| **Reference checker in CI** | Two undefined-reference bugs shipped in one session |
-| **Sources page** | An import happens once; a source is followed |
-| **Release 0.1.1 published** | The local app changed, so the download had to |
+| YouTube Music ported from ytmusicapi's method | Structured artist/album/song instead of a video title to guess at |
+| YouTube Music as resolver tier 4 | It is a metadata source, so it belongs in the resolver rather than behind a button |
+| Unresolved songs sync with empty fields | Holding them back meant a song somebody added never reached the device |
+| One playlist box, five services | The address says which service it is; asking the user first was a question with an obvious answer |
+| Artist credits split, unconfirmed parts kept | The Artists page listed people who do not exist |
+| Metadata autocomplete | The library already held "Garvit - Priyansh" *and* "Garvit-Priyansh" |
+| Phone layout | Mohamed expects a phone to be the device most used |
+| Reference checker in CI | Two undefined-reference bugs shipped in one day |
+| Connected YouTube account removed | It could not work until somebody edited a Google console |
 
-Six things were got wrong first. Each is written up in section 5, and each is
-worth not repeating:
+### Eight things that were got wrong first
 
-1. Treating "Sign in with Google" as an alternative to OAuth rather than the
-   same mechanism.
-2. Assuming the local app's borrowed YouTube session could stand in for the
-   user's own account.
-3. Splitting artist credits on punctuation before checking them — and then
-   over-correcting into refusing a credit over one unknown name.
-4. Handing the YouTube Music tier a decoration-stripped title, so every search
-   succeeded and every one returned the wrong record.
-5. Deleting a combined artist without moving its albums, when the foreign key is
-   `ON DELETE SET NULL` — seventeen albums quietly lost their artist.
-6. Slicing code from one comment marker to another. It has now eaten a function
-   definition (`loadJobs`) and, on a second occasion, six unrelated functions.
-   **Bound a replacement by the exact thing that follows it**, and check the
-   function list afterwards.
+Every one of these was written, deployed, and then corrected. They are the
+cheapest thing in this file.
+
+1. **Treating "Sign in with Google" as an alternative to OAuth.** They are one
+   mechanism. The console step is what makes the login button exist.
+2. **Assuming the local app's YouTube session could stand in for the user's
+   own.** It is a borrowed account kept for downloading.
+3. **Splitting artist credits on punctuation** - and then over-correcting into
+   refusing a whole credit over one unconfirmable name.
+4. **Handing the YouTube Music tier a decoration-stripped title.** Every search
+   ran, every search succeeded, every one returned the wrong record, and nothing
+   looked broken.
+5. **Deleting a combined artist without moving its albums**, when the foreign key
+   is `ON DELETE SET NULL`. Seventeen albums silently lost their artist and it
+   was only noticed because the count matched the number of splits.
+6. **Expanding only the track's artists and not the album's.** `upsertAlbum`
+   creates the album artist down a different path, so combined rows kept
+   reappearing with no tracks attached, which looked like a database fault.
+7. **Slicing code between two comment markers.** It ate a function definition
+   (`loadJobs`, which broke the Import page), and on a second occasion six
+   unrelated functions. **Bound every replacement by the exact thing that
+   follows it, and check the function list afterwards.**
+8. **Trusting that a deploy removes deleted files.** The tar deploy only
+   extracts. A module deleted locally kept being imported on the server until it
+   was deleted there too.
+
+### Three habits that paid for themselves
+
+- **Measure on the real library rather than reasoning about the code.** The
+  YouTube Music guards took four passes and every correction came from looking
+  at what it actually matched, not from thinking harder.
+- **Run the reference check before deploying.** It has caught a missing import
+  three times, including one introduced while fixing something else.
+- **Clean up test data immediately.** Two imports of 50 tracks each went into
+  Mohamed's real library during testing; both would have reached the iPod on the
+  next sync.
+
+### The one thing to do next
+
+A route smoke test. CI already runs Postgres for the migrations job - boot the
+app against it, request every GET route, assert nothing returns 500. Three bugs
+reached the user's screen in two days and that would have caught all three,
+including the one `check-references.mjs` structurally cannot catch. Section 6
+has the detail.
