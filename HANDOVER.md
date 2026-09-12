@@ -13,7 +13,7 @@ state of play, what was built most recently, and the eight things that were
 tried and got wrong before they were got right. Then come back to section 3,
 which is the one rule the whole design rests on.
 
-**Last updated:** 12 September 2026, late evening.
+**Last updated:** 12 September 2026, night.
 
 ---
 
@@ -33,18 +33,18 @@ which is the one rule the whole design rests on.
 | Metadata autocomplete | Working — library names first, completing the name under the caret |
 | Followed artists | Working — future releases, optionally the back catalogue |
 | Device pairing + sync API | Working, verified end to end |
-| Local app: the sync engine | Working, verified on real hardware |
+| Local app: the sync engine | Working, verified on real hardware — a blank restored iPod included |
 | Album art on the device | Working — verified by decoding it back off the iPod |
-| YouTube Premium sign-in (local) | Working — no browser picker, tries them all |
+| YouTube Premium sign-in (local) | Reads a browser where it can; **on Windows Chromium that is never** — see section 5 |
 | Local app: GUI | Working — nothing needs a terminal |
-| Downloadable build | **Published** — 0.1.1 |
+| Downloadable build | Published — 0.1.1. **0.1.2 is built and unpublished** |
 | Phone layout | Working — measured at 375px, list rows included |
 | CI | Green. Parses every file, checks for undefined references, checks the api client, runs migrations |
 | Connected YouTube account | **Removed.** Needed a per-instance Google client *and* a Test users entry |
 | **A web test suite** | **Still none. The biggest gap — see section 6** |
 
 About 18,000 lines: 56 JavaScript files, 16 Python modules, 8 SQL migrations.
-**182 Python tests, all passing. Zero JavaScript tests.**
+**203 Python tests, all passing. Zero JavaScript tests.**
 
 ### Live instance
 
@@ -303,6 +303,57 @@ Pinned to `==0.1.0` — alpha, one release, published 30 Aug 2026 — and
 quarantined in `local/src/syncmypod_local/device.py`, the only module that
 imports it. Everything else uses the local `IpodDevice` type, so replacing or
 forking it changes one file.
+
+### A restored iPod has no database, and a simulated one always does
+
+An iPod restored in iTunes and not synced since has `iPod_Control/iTunes` with
+a pre-allocated 75MB `iTunesControl` in it and **no `iTunesDB`**. Reading it
+raises `FileNotFoundError: iTunesDB was not found`, which is where the sync
+stopped dead for anyone setting a device up. `ensure_database()` in `device.py`
+creates one through `pypodlib.device.bootstrap.ensure_device_itunes_database`
+at the point where something is about to be written.
+
+**The trap that hid it for a whole release.** `pypodlib.connect()` on a
+*virtual* iPod calls `ensure_virtual_itunes_database`, so a simulated device
+rebuilds its own database the moment it is opened. Every device test uses
+`create_virtual`, so the suite could not reach this path however many tests were
+added. The regression test deletes the database *after* the handle is open,
+which is the only way to hold a device in the state a real one arrives in.
+
+The one refusal worth keeping: a device with audio files and no database. Those
+files are already invisible to the iPod and an empty database makes that
+permanent. That is somebody's music, so it stops and says what it found.
+
+`ensure_device_itunes_database` returns `None` rather than raising when it
+cannot produce a database the device's firmware would accept, so a falsy return
+is a real failure and not a no-op.
+
+### Chromium on Windows cannot hand over cookies, and never will
+
+Three separate obstacles, and only the first is the one people assume:
+
+- **The database is locked while the browser runs.** yt-dlp reports this as
+  `Could not copy Chrome cookie database`, an errno 13 `PermissionError`
+  underneath. Nothing in that string matches "locked" or "permission", which is
+  why it was being misclassified.
+- **App-Bound Encryption.** Since Chrome 127 each cookie value carries a `v20`
+  prefix, and yt-dlp handles `v10` and falls back to DPAPI for anything else -
+  DPAPI has no key for `v20`. Closing the browser does not help. Measured on
+  Mohamed's machine: **961 of 961 Chrome cookies were v20**, while the app was
+  telling him to go and sign in to Chrome.
+- **Firefox may not be installed**, and it is the only one that works.
+
+`_chromium_cookies_are_sealed()` copies the cookie file and counts the prefixes
+rather than guessing, because "close it and retry" and "this can never work" are
+opposite advice. **The `hex()` in that query is load-bearing**: `encrypted_value`
+is a BLOB and SQLite never compares a BLOB equal to a text literal, so
+`substr(encrypted_value,1,3) = 'v20'` is false for every row and every browser
+comes back unsealed. That bug was written, and only caught because the answer
+disagreed with a measurement taken by hand first.
+
+The way through is a cookies.txt the user exports, which is what
+`import_cookies_file()` accepts. Same filtering as a borrowed jar: everything
+that is not youtube.com is dropped before anything is saved.
 
 ### Windows has no timezone database
 
@@ -898,6 +949,20 @@ resolver, `lib/normalise.js` (`matchKey`, `scoreCandidate`, `titleOverlap`,
 `answerExplains`) and `services/artist-split.js` are pure logic with real
 regression history; the band list in section 5 is ready-made fixtures.
 
+### 1b. Work out what else the simulated iPod is hiding
+
+`create_virtual` is the right tool and it is how the sync path gets tested
+without hardware. But it is not a real device, and one difference had been
+silently covering a bug that reached a user: a virtual iPod rebuilds its own
+database on connect, so the whole device suite starts from a state a freshly
+restored iPod is never in.
+
+That is one known difference. Nobody has looked for the others, and they are
+exactly where the next hardware-only bug lives. Two worth checking first:
+whether a virtual device ever reports the artwork store as absent the way a
+restored one does, and whether free space behaves the same when it is reported
+by `shutil.disk_usage` on a simulated folder rather than a FAT32 volume.
+
 ### 2. A local-files source
 
 The highest-quality option available and the only one with no downside: point
@@ -1071,12 +1136,26 @@ cd local/dist && unzip -p SyncMyPod-*.zip '*/_internal/**/app.js' | grep -c rend
 - **Five devices are paired**, most from testing. "Mo Desktop" is the real
   Windows machine; "Dev container", "Test PC", "Push test" and "MANR-LT001" can
   be revoked from the web interface.
-- **The attached iPod is not Mohamed's.** It is "Nihal's ipod", and test tracks
-  were written onto it alongside 184 that were already there. There is a full
-  backup in `%LOCALAPPDATA%\SyncMyPod\backups` taken before the first write, so
-  restoring it exactly is `IPod.restore(snapshot_id)`.
-- **`local/src/syncmypod_local/_bin` holds ~149MB of ffmpeg** and `local/dist` a
-  183MB zip. Both gitignored, both inside a OneDrive-synced folder, so they sync
+- **Two different iPods have been used, and the current one is blank.** The
+  earlier device was "Nihal's ipod", a Classic 6.5th gen (MB562, `HASH58`) with
+  184 tracks already on it; there is a full backup in
+  `%LOCALAPPDATA%\SyncMyPod\backups` taken before the first write, so restoring
+  it exactly is `IPod.restore(snapshot_id)`.
+
+  What is attached now is a **5.5th gen 80GB (MA450, serial 8K719QF4V9R,
+  `ChecksumType.NONE`)** at `D:`, restored and never synced. It had no database
+  at all, which is what produced the "iTunesDB was not found" failure - see
+  section 5. It now has one, plus two tracks and the "Liked" playlist written
+  during verification. 433 tracks are still to sync.
+- **The paired-device config on disk is stale.** `%LOCALAPPDATA%\SyncMyPod\config.json`
+  names device "Mo Desktop", whose token was revoked on 12 September, while the
+  running GUI reports itself as "MANR-LT001" (device 5, valid). The running
+  process and the file disagree, and the file was not rewritten when the
+  MANR-LT001 pairing was made. **Anyone restarting the app should expect it to
+  come back unpaired** and should re-pair from the GUI. Not chased further: the
+  cause is unknown and it is one button to fix.
+- **`local/src/syncmypod_local/_bin` holds ~149MB of ffmpeg** and `local/dist` the
+  built zips. Both gitignored, both inside a OneDrive-synced folder, so they sync
   anyway. Moving the project out of OneDrive was offered and never answered;
   deleting `_bin` is safe and `fetch_ffmpeg.py` gets it back.
 - **`Desktop/Claude/syncmypod-local`** is the redundant original local-app
@@ -1134,8 +1213,11 @@ will come from and where the next work should go.
 | The api client checked in CI | The scan ignores anything after a dot; `api` is one literal in one file and worth the exception |
 | List rows wrap on a phone | `.list-main` may shrink to nothing and `.list-actions` may not, so every card list read one word per line |
 | Metadata column dropped from Songs | It was blank on almost every row by design; the marker now sits against the title |
+| A blank iPod gets a database | A restored device has none, and without one it cannot hold music at all |
+| The browser diagnosis reaches the user | It was computed per browser and thrown away for one fixed sentence that was wrong |
+| A cookies.txt can be handed over | The only route left on Windows with sealed Chromium cookies and no Firefox |
 
-### Ten things that were got wrong first
+### Eleven things that were got wrong first
 
 Every one of these was written, deployed, and then corrected. They are the
 cheapest thing in this file.
@@ -1167,7 +1249,12 @@ cheapest thing in this file.
    the `api` object. Nothing caught it, because the reference scan stops at a
    dot. Every import looked broken while the server was finishing every one of
    them correctly.
-10. **Moving a badge out of a dropped column without measuring the phone.**
+10. **Comparing a SQLite BLOB to a text literal.** `substr(encrypted_value,1,3)
+   = 'v20'` is false for every row, because SQLite never compares a BLOB equal
+   to text. The sealed-cookie detector reported every browser as fine and would
+   have given confidently wrong advice. Caught only because the answer
+   disagreed with a count taken by hand first - `hex()` both sides.
+11. **Moving a badge out of a dropped column without measuring the phone.**
    Removing the Metadata column and putting the marker beside the title is
    right on a desktop. On a 375px screen the title cell is about 200px and the
    badge is 73 of them, which left a title two characters long - worse than
