@@ -21,6 +21,7 @@ import { libraryRoutes } from './routes/library.js';
 import { playlistRoutes } from './routes/playlists.js';
 import { searchRoutes } from './routes/search.js';
 import { settingsRoutes } from './routes/settings.js';
+import { sourceRoutes } from './routes/sources.js';
 import { syncRoutes } from './routes/sync.js';
 import { youtubeAccountRoutes } from './routes/youtube-account.js';
 import { loadSettings } from './services/app-settings.js';
@@ -95,6 +96,7 @@ app.use('/api/search', searchRoutes);
 app.use('/api/artists', artistRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/import', importRoutes);
+app.use('/api/sources', sourceRoutes);
 app.use('/api/youtube-account', youtubeAccountRoutes);
 app.use('/api/settings', settingsRoutes);
 // The device API. Token-authenticated only - see requireDevice.

@@ -5,6 +5,7 @@ import { renderAuth } from './views/auth.js';
 import { renderDashboard } from './views/dashboard.js';
 import { renderDevices } from './views/devices.js';
 import { renderImport } from './views/import.js';
+import { renderSources } from './views/sources.js';
 import { renderLibrary } from './views/library.js';
 import { renderPlaylist, renderPlaylists } from './views/playlists.js';
 import { renderSearch } from './views/search.js';
@@ -34,6 +35,9 @@ const routes = [
   { path: 'playlists/:id', title: 'Playlist', render: renderPlaylist },
   { path: 'search', title: 'Add music', render: renderSearch, nav: 'Add music', icon: 'search', group: 'Add' },
   { path: 'import', title: 'Import', render: renderImport, nav: 'Import', icon: 'download', group: 'Add' },
+  // Sources sit below Import because that is the order people arrive at them:
+  // you import a playlist once, then decide you want it to keep up.
+  { path: 'sources', title: 'Sources', render: renderSources, nav: 'Sources', icon: 'link', group: 'Add' },
   // Provider-backed browsing, reached from a search result rather than the
   // sidebar: these are pages about music that is not in the library yet.
   { path: 'artist/:id', title: 'Artist', render: renderArtistPage },

@@ -1,6 +1,7 @@
 import { one, query, transaction } from '../db/pool.js';
 import * as deezer from '../providers/deezer.js';
 import * as youtube from '../providers/youtube.js';
+import * as sources from './sources.js';
 import * as youtubeAccount from './youtube-account.js';
 import { appendToPlaylist } from './playlist-writes.js';
 import { resolveAndSave } from './resolver.js';
@@ -14,6 +15,8 @@ import { resolveAndSave } from './resolver.js';
 //   track-list        pasted text, one track per line
 //   youtube-account   the playlists a connected YouTube account has been asked
 //                     to follow, re-checked when the app is opened
+//   source:*          a standing source - a playlist link the library follows,
+//                     re-read when the app is opened
 //
 // Only the last needs an account, because reading somebody's own playlists
 // needs their permission. The other three need nothing at all, which is a
@@ -212,6 +215,71 @@ async function syncYouTubeAccount(jobId, userId, followed) {
       targetPlaylistId,
     });
   }
+}
+
+// Imports the tracks a standing source is currently showing.
+//
+// The difference from every other importer is that this one runs repeatedly
+// over the same playlist, so almost every run finds nothing new. That shapes
+// it: already-present tracks cost one indexed insert that does nothing, the
+// job row is only kept when something actually happened, and the playlist is
+// created once and then reused.
+//
+// `trusted` on a track says whether the source handed over a catalogue record
+// or a guess. A Deezer entry carries a real track id, so the resolver hydrates
+// it directly. A YouTube entry is a video title, so it goes through the same
+// rule as everywhere else: a search, and a title alone if nothing confirms it.
+export async function importSourceTracks(userId, source) {
+  const { sourceId, sourceName, sourceRef, kind, tracks } = source;
+  if (tracks.length === 0) return null;
+
+  let targetPlaylistId = source.targetPlaylistId || null;
+  if (!targetPlaylistId) {
+    targetPlaylistId = await ensurePlaylist(userId, sourceName, {
+      source: kind.startsWith('youtube') ? 'youtube' : 'deezer',
+      sourceRef,
+    });
+    await sources.rememberTarget(userId, sourceId, targetPlaylistId);
+  }
+
+  const job = await one(
+    `INSERT INTO import_jobs (user_id, source, source_ref, source_name, status, total,
+                              target_playlist_id)
+     VALUES ($1, $2, $3, $4, 'running', $5, $6)
+     RETURNING id`,
+    [userId, `source:${kind}`, sourceRef, sourceName, tracks.length, targetPlaylistId]
+  );
+
+  const counts = await processItems(
+    job.id,
+    userId,
+    tracks.map((track) => ({
+      title: track.title,
+      artist: track.artist || null,
+      album: track.album || null,
+      durationMs: track.durationMs || null,
+      deezerId: track.deezerId || null,
+      matchKeyExtra: track.trusted ? null : track.identity,
+    })),
+    {
+      targetPlaylistId,
+      addedVia: `source:${kind}`,
+      // Only where the source's own metadata is a guess. A Deezer record is not.
+      discardUnverifiedMetadata: !tracks.every((track) => track.trusted),
+    }
+  );
+
+  await sources.recordAdded(userId, sourceId, counts.added);
+
+  // A check that found nothing new leaves no trace in the import history.
+  // Otherwise following three playlists would fill that page with a row every
+  // half hour saying nothing happened.
+  if (counts.added === 0 && counts.failed === 0) {
+    await query('DELETE FROM import_jobs WHERE id = $1', [job.id]);
+    return null;
+  }
+
+  return job.id;
 }
 
 // The API gives a video title and an uploader. Turned into the same rough

@@ -939,3 +939,31 @@ code {
 .setup-details summary:hover {
   color: var(--text);
 }
+
+/* --- Sources -------------------------------------------------------------- */
+
+/* A page that opens with a sentence rather than straight into a form, because
+   "source" is a word this application has given a specific meaning to. */
+.page-intro {
+  margin-bottom: var(--space-4);
+}
+
+.page-intro .section-heading {
+  margin-bottom: var(--space-1);
+}
+
+.page-intro p {
+  margin: 0;
+  max-width: 62ch;
+}
+
+/* A card inside a card. Used for the playlist picker, which belongs to the
+   account card above it and should read as part of it rather than as a sibling. */
+.card-inset {
+  box-shadow: none;
+  background: var(--surface-2);
+}
+
+.small.danger {
+  color: var(--danger);
+}

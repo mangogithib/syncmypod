@@ -138,6 +138,14 @@ export const api = {
     request('POST', '/api/import/youtube-playlist', payload),
   importJobs: () => request('GET', '/api/import/jobs'),
 
+  // --- standing sources ---------------------------------------------------
+  sources: () => request('GET', '/api/sources'),
+  addSource: (url) => request('POST', '/api/sources', { url }),
+  checkSource: (sourceId) => request('POST', `/api/sources/${sourceId}/check`),
+  setSourceEnabled: (sourceId, enabled) =>
+    request('PATCH', `/api/sources/${sourceId}`, { enabled }),
+  removeSource: (sourceId) => request('DELETE', `/api/sources/${sourceId}`),
+
   // --- connected YouTube account -----------------------------------------
   youtubeAccount: () => request('GET', '/api/youtube-account'),
   youtubeConnect: () => request('POST', '/api/youtube-account/connect'),
