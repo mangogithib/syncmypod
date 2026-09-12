@@ -6,6 +6,7 @@ import {
   emptyState,
   formatNumber,
   formatRelative,
+  modal,
   notice,
   spinner,
   toast,
@@ -247,13 +248,17 @@ export async function renderSources(view, context) {
     );
   }
 
-  // Not connected. Leads with what the feature is, and keeps the setup steps
-  // folded away - they are five steps in somebody else's console, and putting
-  // them on screen unasked makes the page look like work.
+  // Not connected.
+  //
+  // One button, and nothing else. The five steps for registering a Google
+  // client used to be on this card, folded away but still present, and they
+  // made a page about following playlists look like a page about Google Cloud.
+  // They live in Settings now, next to the two fields they tell you to fill in,
+  // which is where somebody acting on them needs to be anyway.
   function setupCard(state) {
     const connect = h(
       'button.btn.btn-primary',
-      { type: 'button', disabled: !state.configured, onclick: () => startConnect(connect) },
+      { type: 'button', onclick: () => (state.configured ? startConnect(connect) : explainSetup()) },
       icon('link', 15),
       'Connect YouTube account'
     );
@@ -272,68 +277,43 @@ export async function renderSources(view, context) {
           'p.muted',
           'Follow the playlists in your own YouTube account, including liked songs. Read-only: this can list your playlists and what is in them, and nothing else. It cannot change your account and it cannot download.'
         ),
-        state.configured
-          ? h('div', connect)
-          : h(
-              'div',
-              notice(
-                h(
-                  'div',
-                  h('strong', 'This instance needs a Google OAuth client first. '),
-                  h(
-                    'span',
-                    'Google only lets an application read your playlists with credentials issued to that application, and a shipped one would not stay secret. Everything else on the Import page works without this.'
-                  )
-                ),
-                '',
-                'info'
-              ),
-              h(
-                'details.setup-details',
-                h('summary', 'How to create one (about five minutes, once)'),
-                h(
-                  'ol.steps',
-                  h(
-                    'li',
-                    'In the ',
-                    h(
-                      'a',
-                      {
-                        href: 'https://console.cloud.google.com/apis/library/youtube.googleapis.com',
-                        target: '_blank',
-                        rel: 'noreferrer',
-                      },
-                      'Google Cloud console'
-                    ),
-                    ', create a project and enable the ',
-                    h('strong', 'YouTube Data API v3'),
-                    '.'
-                  ),
-                  h('li', 'Under Credentials, create an OAuth client ID of type Web application.'),
-                  h(
-                    'li',
-                    'Add this exact address as an authorised redirect URI:',
-                    h(
-                      'code.copyable',
-                      { title: 'Click to copy', onclick: copySelf },
-                      state.redirectUri
-                    )
-                  ),
-                  h(
-                    'li',
-                    'On the OAuth consent screen, add yourself under Test users. It does not need publishing or review for your own account.'
-                  ),
-                  h(
-                    'li',
-                    'Paste the client ID and secret into ',
-                    h('a', { href: '#/settings' }, 'Settings'),
-                    ', then come back here.'
-                  )
-                )
-              )
-            )
+        h('div', connect)
       )
     );
+  }
+
+  // Pressed before the instance has a Google client. Says what is missing and
+  // sends them to the one page that can fix it, rather than explaining OAuth on
+  // a card they were not asking to read.
+  function explainSetup() {
+    modal({
+      title: 'This instance needs a Google client first',
+      body: [
+        h(
+          'p.muted',
+          'Google only lets an application read your playlists with credentials issued to that application, and a shipped one would not stay secret. So this instance needs its own, created once.'
+        ),
+        h(
+          'p.muted',
+          'Settings has the steps, the exact redirect address to paste into the Google console, and the two boxes for the values it gives you back.'
+        ),
+        notice(
+          'Everything else on this page works without it. A public playlist link needs no account at all.',
+          '',
+          'info'
+        ),
+      ],
+      footer: [
+        h(
+          'a.btn.btn-primary',
+          {
+            href: '#/settings',
+            onclick: () => document.querySelector('.modal-backdrop')?.remove(),
+          },
+          'Open Settings'
+        ),
+      ],
+    });
   }
 
   function connectedCard(state) {
@@ -513,11 +493,4 @@ export async function renderSources(view, context) {
     }
   }
 
-  function copySelf(event) {
-    const text = event.currentTarget.textContent;
-    navigator.clipboard?.writeText(text).then(
-      () => toast('Copied.', 'ok'),
-      () => toast(`Copy it by hand: ${text}`, 'info')
-    );
-  }
 }

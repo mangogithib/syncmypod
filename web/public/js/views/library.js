@@ -317,11 +317,14 @@ export async function renderLibrary(view, context) {
             h(
               'tr',
               sortHeader('Title', 'title'),
-              sortHeader('Artist', 'artist'),
-              sortHeader('Album', 'album'),
-              sortHeader('Year', 'year', '.right'),
-              sortHeader('Time', 'duration', '.right'),
-              h('th', 'Metadata'),
+              sortHeader('Artist', 'artist', '.col-artist'),
+              // Classed so a phone can drop them. Title, artist and the row
+              // actions are what a song list is for; a year and a running time
+              // are not worth a sideways scroll on a 390px screen.
+              sortHeader('Album', 'album', '.col-album'),
+              sortHeader('Year', 'year', '.right.col-year'),
+              sortHeader('Time', 'duration', '.right.col-time'),
+              h('th.col-meta', 'Metadata'),
               h('th.col-actions', { 'aria-label': 'Actions' })
             )
           ),
@@ -343,18 +346,37 @@ export async function renderLibrary(view, context) {
         h(
           'div.track-cell',
           artwork(track.artworkUrl, { size: 36 }),
-          h('div', { style: { minWidth: 0 } },
+          h(
+            'div',
+            { style: { minWidth: 0 } },
             h('div.track-title', track.title),
+            // Shown under the title only on a narrow screen, where the artist
+            // column itself is hidden. A song list without an artist is not a
+            // song list.
+            h(
+              'div.track-sub.only-narrow',
+              track.artistCredit || h('span.subtle', 'Unknown artist')
+            ),
             track.trackNo
-              ? h('div.track-sub', `Track ${track.trackNo}${track.discNo && track.discNo > 1 ? ` - Disc ${track.discNo}` : ''}`)
-              : null)
+              ? h(
+                  'div.track-sub.not-narrow',
+                  `Track ${track.trackNo}${track.discNo && track.discNo > 1 ? ` - Disc ${track.discNo}` : ''}`
+                )
+              : null
+          )
         )
       ),
-      h('td', h('div.cell-truncate', track.artistCredit || h('span.subtle', 'Unknown'))),
-      h('td', h('div.cell-truncate', track.albumName || track.albumCredit || h('span.subtle', '--'))),
-      h('td.num', track.releaseYear || '--'),
-      h('td.num', formatDuration(track.durationMs)),
-      h('td.shrink', metadataBadge(track.metadataState)),
+      h(
+        'td.col-artist',
+        h('div.cell-truncate', track.artistCredit || h('span.subtle', 'Unknown'))
+      ),
+      h(
+        'td.col-album',
+        h('div.cell-truncate', track.albumName || track.albumCredit || h('span.subtle', '--'))
+      ),
+      h('td.num.col-year', track.releaseYear || '--'),
+      h('td.num.col-time', formatDuration(track.durationMs)),
+      h('td.shrink.col-meta', metadataBadge(track.metadataState)),
       h(
         'td.actions.shrink',
         h('div.row', { style: { justifyContent: 'flex-end' } },

@@ -305,13 +305,60 @@ function providerCard(data, reload) {
             h(
               'p.small.muted',
               { style: { marginBottom: '10px' } },
-              'Google only lets an application read your playlists with credentials issued to that application, so this instance needs its own. Create them once at ',
+              h('strong', 'Connecting your own YouTube account needs a Google client. '),
+              'Google only lets an application read your playlists with credentials issued to that application, and a shipped one would not stay secret - so this instance needs its own, created once. Nothing else on this page depends on it.'
+            ),
+            h(
+              'ol.steps',
               h(
-                'a',
-                { href: 'https://console.cloud.google.com/apis/credentials', target: '_blank', rel: 'noreferrer' },
-                'console.cloud.google.com'
+                'li',
+                'In the ',
+                h(
+                  'a',
+                  {
+                    href: 'https://console.cloud.google.com/apis/library/youtube.googleapis.com',
+                    target: '_blank',
+                    rel: 'noreferrer',
+                  },
+                  'Google Cloud console'
+                ),
+                ', create a project and enable the ',
+                h('strong', 'YouTube Data API v3'),
+                '.'
               ),
-              ': enable the YouTube Data API v3, make an OAuth client of type Web application, and add the redirect URI shown on the Sources page.'
+              h(
+                'li',
+                'Under ',
+                h('strong', 'Credentials'),
+                ', create an ',
+                h('strong', 'OAuth client ID'),
+                ' of type ',
+                h('strong', 'Web application'),
+                '.'
+              ),
+              h(
+                'li',
+                'Add this as an authorised redirect URI. It must match character for character:',
+                h(
+                  'code.copyable',
+                  { title: 'Click to copy', onclick: copySelf },
+                  data.youtubeRedirectUri || '(set PUBLIC_URL to see this)'
+                )
+              ),
+              h(
+                'li',
+                'On the ',
+                h('strong', 'OAuth consent screen'),
+                ', add your own Google account under ',
+                h('strong', 'Test users'),
+                '. ',
+                h(
+                  'em',
+                  'This step is the one people miss: youtube.readonly is a sensitive scope, so an account that is not on that list gets "Error 403: access_denied" at sign-in.'
+                ),
+                ' Leave the app in Testing - publishing it would require Google verification.'
+              ),
+              h('li', 'Paste the two values below, then connect the account under Sources.')
             ),
             field('google.client_id', {
               placeholder: '000000000000-xxxxxxxx.apps.googleusercontent.com',
@@ -328,6 +375,16 @@ function providerCard(data, reload) {
         h('div', { style: { marginTop: '4px' } }, save)
       )
     )
+  );
+}
+
+// An exact string somebody has to paste into another website. Clickable because
+// retyping it is how the redirect_uri_mismatch error happens.
+function copySelf(event) {
+  const text = event.currentTarget.textContent;
+  navigator.clipboard?.writeText(text).then(
+    () => toast('Copied.', 'ok'),
+    () => toast(`Copy it by hand: ${text}`, 'info')
   );
 }
 

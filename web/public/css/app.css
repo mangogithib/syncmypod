@@ -947,3 +947,124 @@ code {
 .small.danger {
   color: var(--danger);
 }
+
+/* ---------------------------------------------------------------------------
+   Phones
+   ---------------------------------------------------------------------------
+
+   Mohamed expects this to be the device most people use, which makes the
+   narrow layout the real one rather than a courtesy. The sidebar already
+   becomes a drawer above; what follows is the rest of it.
+
+   The principle throughout: drop what a phone cannot usefully show rather than
+   shrinking everything until none of it is legible. A song list needs a title,
+   an artist and the row actions. A release year does not earn a sideways
+   scroll on a 390px screen. */
+
+.only-narrow { display: none; }
+
+@media (max-width: 720px) {
+  /* Columns a phone does without. The artist moves under the title instead of
+     disappearing - see .only-narrow in views/library.js. */
+  .col-album,
+  .col-year,
+  .col-time,
+  .col-meta,
+  .col-artist {
+    display: none;
+  }
+
+  .only-narrow { display: block; }
+  .not-narrow { display: none; }
+
+  /* Nothing left to scroll sideways for, so the shadow that signalled it goes
+     too - but the table has to be told to fit, or it keeps the intrinsic width
+     of its widest cell and simply hangs off the right of the screen. */
+  .table-wrap { overflow-x: visible; }
+  .table-wrap table { width: 100%; table-layout: fixed; }
+
+  /* Both lines of the title cell truncate. Without this a long credit list
+     pushes the row wider than the screen on its own. */
+  .track-title,
+  .track-sub {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .track-cell { min-width: 0; }
+
+  /* Wide enough for the three icon buttons at a size a finger can hit, so the
+     title gets the rest and stops short of them rather than sliding under. */
+  td.actions,
+  th.col-actions { width: 136px; }
+
+  td.actions .icon-btn { min-width: 36px; min-height: 36px; }
+
+  /* A little air between the longest title and the first button. */
+  .track-cell { padding-right: var(--space-2); }
+
+  /* A toolbar is a row of controls that each want the full width on a phone. */
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .toolbar > * { width: 100%; }
+  .toolbar .search-input { max-width: none; }
+  .toolbar select.select { width: 100% !important; }
+
+  /* A notice with an action beside it squashes the text into a column two words
+     wide. The action goes underneath, full width, where it is also a reachable
+     tap target. */
+  .notice .row-between {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-3);
+  }
+  .notice .row-between .btn { width: 100%; }
+
+  /* Cards lose their side padding rather than their content. */
+  .card-body,
+  .card-head { padding-left: var(--space-4); padding-right: var(--space-4); }
+
+  .grid-2 { grid-template-columns: 1fr; }
+
+  /* A dialog on a phone is the screen, not a box floating in the middle of it. */
+  .modal {
+    width: 100%;
+    max-width: none;
+    max-height: 88vh;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .modal-backdrop { align-items: flex-end; }
+
+  /* Anything that gets tapped needs to be tappable. 44px is the size a finger
+     actually is; the desktop icon buttons are 28. */
+  .icon-btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+  .btn { min-height: 40px; }
+
+  /* Row actions stop being pinned: with three columns gone there is room for
+     them, and a sticky column on a non-scrolling table just covers content. */
+  thead th.col-actions,
+  tbody td.actions {
+    position: static;
+    box-shadow: none;
+  }
+
+  .page-actions { flex-wrap: wrap; }
+  .page-actions .btn { flex: 1 1 auto; }
+}
+
+@media (max-width: 460px) {
+  /* The last things to go. At this width the dashboard's four-across stat row
+     is four unreadable columns. */
+  .stat-grid { grid-template-columns: repeat(2, 1fr); }
+  .tile-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+  .view { padding: var(--space-3); }
+  .pagination { flex-direction: column; gap: var(--space-3); align-items: stretch; }
+  .pagination .row { justify-content: space-between; }
+}
