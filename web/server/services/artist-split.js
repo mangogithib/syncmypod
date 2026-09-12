@@ -26,7 +26,10 @@ import * as deezer from '../providers/deezer.js';
 //      band and is left alone. See the note on that comparison in classify() -
 //      "does the whole name exist" is not enough, because Deezer files
 //      collaborations as artists too.
-//   3. Otherwise split, but only when every part checks out as a real artist.
+//   3. Otherwise split. A part the catalogue confirms is stored with its
+//      identity and picture; one it does not is stored under its plain name,
+//      because an unconfirmed person is still a person and the combined string
+//      never was.
 //
 // That turns a guess into a question with an answer. The cost is a couple of
 // lookups per combined name, paid once per artist rather than once per track.
@@ -157,23 +160,34 @@ export async function classify(name) {
     if ((whole.fans || 0) >= biggestPart) return { verdict: 'single', artist: whole };
   }
 
-  // 3. Every part has to check out.
+  // A part nobody could confirm is still a part.
   //
-  // Strict on purpose. Splitting when only some parts are real leaves the rest
-  // as invented artists, which is the exact failure this exists to prevent -
-  // and a credit this cannot confirm is better left as it was, where it is
-  // visibly one odd row rather than several plausible wrong ones.
-  if (verified.length !== checked.length) {
-    return {
-      verdict: 'leave',
-      reason: `could not confirm ${checked
-        .filter((entry) => !entry.artist)
-        .map((entry) => `"${entry.name}"`)
-        .join(', ')}`,
-    };
-  }
-
-  return { verdict: 'split', artists: verified.map((entry) => entry.artist) };
+  // This used to require every name to check out, and refuse the whole credit
+  // otherwise. That was too cautious and Mohamed said so: five entries were
+  // left naming several people because one name in each - "Aaghaz", "Irine ann"
+  // - is not in any catalogue. They are still people, and "Divyam Sodhi,
+  // Khwaab & Aaghaz" was never an artist.
+  //
+  // So the split happens, and an unconfirmed part is stored under its own name
+  // with no provider identity. That is a smaller error than the one it
+  // replaces: an artist with a name and no picture, rather than an artist who
+  // does not exist. The band guard above is what keeps this safe - it is the
+  // check that matters, and it runs before this.
+  return {
+    verdict: 'split',
+    artists: checked.map(
+      (entry, index) =>
+        entry.artist || {
+          provider: null,
+          deezerId: null,
+          name: entry.name,
+          imageUrl: null,
+          position: index,
+          role: index === 0 ? 'primary' : 'featured',
+        }
+    ),
+    unconfirmed: checked.filter((entry) => !entry.artist).map((entry) => entry.name),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +224,7 @@ export async function repairArtists({ dryRun = false, onProgress } = {}) {
         name: candidate.name,
         verdict: 'split',
         into: outcome.artists.map((artist) => artist.name),
+        unconfirmed: outcome.unconfirmed || [],
       });
       if (!dryRun) await applySplit(candidate.id, outcome.artists);
     } else if (outcome.verdict === 'single') {
@@ -248,7 +263,10 @@ async function applySplit(oldArtistId, artists) {
 
     const newIds = [];
     for (const artist of artists) {
-      const key = matchKey({ deezerId: artist.deezerId, name: artist.name });
+      // A part with no provider id keys on its name alone, which is what
+      // matchKey falls back to - so two tracks crediting the same unconfirmed
+      // person still converge on one row.
+      const key = matchKey({ deezerId: artist.deezerId || null, name: artist.name });
       const { rows } = await tx.query(
         `INSERT INTO artists (match_key, name, deezer_id, image_url)
          VALUES ($1, $2, $3, $4)

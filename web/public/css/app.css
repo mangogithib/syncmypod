@@ -1068,3 +1068,16 @@ code {
   .pagination { flex-direction: column; gap: var(--space-3); align-items: stretch; }
   .pagination .row { justify-content: space-between; }
 }
+
+/* A two-or-three-way switcher. Side by side at any width, because the choice is
+   between them - stacking makes it read as two separate actions. */
+.segmented {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.segmented .btn {
+  flex: 1 1 0;
+  min-width: 0;
+}

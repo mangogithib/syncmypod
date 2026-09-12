@@ -40,8 +40,11 @@ export async function renderDashboard(view, context) {
             icon('warn', 16),
             h(
               'div',
-              h('strong', `${formatNumber(stats.needsAttention)} track${stats.needsAttention === 1 ? '' : 's'} without confirmed metadata. `),
-              h('span', 'These are skipped when syncing. '),
+              h('strong', `${formatNumber(stats.needsAttention)} track${stats.needsAttention === 1 ? '' : 's'} with no artist yet. `),
+              h(
+                'span',
+                'They still sync, but reach the iPod with the artist and album blank. '
+              ),
               h('a', { href: '#/library?state=unresolved' }, 'Review them')
             )
           )
@@ -71,7 +74,7 @@ export async function renderDashboard(view, context) {
           stat('Artists', formatNumber(stats.artistCount), `${formatNumber(stats.followedCount)} followed`),
           stat('Playlists', formatNumber(stats.playlistCount)),
           stats.needsAttention > 0
-            ? stat('Needs attention', formatNumber(stats.needsAttention), 'Not syncable', true)
+            ? stat('Needs attention', formatNumber(stats.needsAttention), 'No artist yet', true)
             : stat('Ready to sync', formatNumber(stats.trackCount - stats.needsAttention))
         )
       );

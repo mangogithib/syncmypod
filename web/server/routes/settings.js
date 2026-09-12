@@ -64,7 +64,7 @@ function providerStatus() {
 
 settingsRoutes.get(
   '/',
-  handler(async (_req, res) => {
+  handler(async (req, res) => {
     // The redirect address belongs with the fields it is pasted alongside.
     // It has to match what is registered in the Google console character for
     // character, so it is shown rather than described.

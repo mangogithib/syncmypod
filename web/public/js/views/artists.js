@@ -40,7 +40,10 @@ export async function renderArtists(view, context) {
     mount(
       view,
       repairSlot,
-      h('div.toolbar', tabButton('library', 'In your library'), tabButton('follows', 'Following')),
+      // A segmented switcher rather than a toolbar: two tabs side by side, not
+      // two full-width buttons stacked, which is what the toolbar rule does to
+      // them on a phone.
+      h('div.segmented', tabButton('library', 'In your library'), tabButton('follows', 'Following')),
       body
     );
     if (tabs.current === 'library') {
