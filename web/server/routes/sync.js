@@ -2,7 +2,13 @@ import { Router } from 'express';
 import { requireDevice } from '../auth/middleware.js';
 import { many, one, query } from '../db/pool.js';
 import { badRequest, handler, id, notFound, str } from '../lib/api.js';
+import { importPushedYouTubePlaylist } from '../services/import.js';
 import { buildManifest, recordSyncResults } from '../services/manifest.js';
+import {
+  markSynced,
+  replaceLocalAppPlaylists,
+  selectedPlaylists,
+} from '../services/youtube-account.js';
 
 export const syncRoutes = Router();
 
@@ -194,5 +200,83 @@ syncRoutes.get(
       [req.device.id]
     );
     res.json({ tracks, count: tracks.length });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// The YouTube library, read by the local app
+// ---------------------------------------------------------------------------
+//
+// Reading somebody's own YouTube playlists needs their YouTube session, and the
+// local app already has one - it signs in with the browser's cookies to fetch
+// higher-quality audio. So the local app reads the library and posts it here,
+// and no YouTube credential ever reaches this server.
+//
+// The alternative is an OAuth grant held here, which also exists and needs the
+// instance owner to register a Google client first. This route is the one that
+// needs nothing set up, so it is the one most people will use.
+//
+// Three steps, deliberately separate:
+//
+//   POST /youtube/library   the list of playlists, to fill the picker
+//   GET  /youtube/selected  which of them the user ticked
+//   POST /youtube/playlist  the contents of one ticked playlist
+//
+// Split that way because the user chooses in between. Sending every track of
+// every playlist would mean reading a whole account to import two playlists.
+
+syncRoutes.post(
+  '/youtube/library',
+  handler(async (req, res) => {
+    const playlists = Array.isArray(req.body?.playlists) ? req.body.playlists : null;
+    if (!playlists) throw badRequest('Expected a list of playlists.');
+    if (playlists.length > 500) {
+      throw badRequest('That is more playlists than this expects to see.');
+    }
+
+    const stored = await replaceLocalAppPlaylists(req.user.id, playlists);
+    res.json({
+      stored: stored.length,
+      // Returned so a single call can both push the list and learn what to
+      // fetch next, which is the whole of a routine sync.
+      selected: stored.filter((entry) => entry.selected).map((entry) => entry.youtubeId),
+    });
+  })
+);
+
+syncRoutes.get(
+  '/youtube/selected',
+  handler(async (req, res) => {
+    res.json({ playlists: await selectedPlaylists(req.user.id) });
+  })
+);
+
+syncRoutes.post(
+  '/youtube/playlist',
+  handler(async (req, res) => {
+    const youtubeId = str(req.body?.youtubeId, 'youtubeId', { required: true, max: 100 });
+    const entries = Array.isArray(req.body?.entries) ? req.body.entries : null;
+    if (!entries) throw badRequest('Expected the playlist entries.');
+    if (entries.length > 5000) throw badRequest('That playlist is too long to import.');
+
+    const playlist = await one(
+      `SELECT youtube_id AS "youtubeId", title,
+              target_playlist_id AS "targetPlaylistId"
+         FROM youtube_playlists
+        WHERE user_id = $1 AND youtube_id = $2 AND selected`,
+      [req.user.id, youtubeId]
+    );
+    // Not selected means the user unticked it between the local app asking and
+    // sending. Refusing is right: importing it anyway would override a choice
+    // made more recently than the request.
+    if (!playlist) throw notFound('That playlist is not one you have chosen to follow.');
+
+    if (entries.length === 0) {
+      await markSynced(req.user.id, youtubeId, { itemCount: 0 });
+      return res.json({ jobId: null, imported: 0 });
+    }
+
+    const jobId = await importPushedYouTubePlaylist(req.user.id, playlist, entries);
+    res.status(202).json({ jobId, total: entries.length });
   })
 );

@@ -34,7 +34,8 @@ from .. import device as device_module
 from .. import ffmpeg as ffmpeg_finder
 from .. import sync as sync_engine
 from .. import youtube as youtube_module
-from ..api import ApiError, claim_pairing_code
+from .. import ytlibrary, ytsync
+from ..api import ApiError, DeviceApi, claim_pairing_code
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +250,49 @@ class GuiServer:
 
     def youtube_sign_out(self) -> dict[str, Any]:
         return {"signedOut": youtube_module.forget()}
+
+    def youtube_library_push(self) -> dict[str, Any]:
+        """Read the account's playlists and hand them to the server.
+
+        Runs inside the request rather than in the background. A library read is
+        seconds, not the minutes a sync takes, and it is the one thing on this
+        page the user is actively waiting on - so the answer comes back with the
+        response instead of through the event stream.
+        """
+        stored = config_module.load()
+        if not stored.is_paired:
+            return {"ok": False, "error": "Pair with your server first."}
+        if not youtube_module.is_signed_in():
+            return {
+                "ok": False,
+                "error": (
+                    "Sign in to YouTube first. The same sign-in that fetches "
+                    "higher-quality audio is what reads your playlists."
+                ),
+            }
+
+        try:
+            with DeviceApi(stored.server_url, stored.token) as api:
+                report = ytsync.push_library(
+                    api,
+                    on_progress=lambda message: self.session.add("youtube", label=message),
+                )
+        except ytlibrary.LibraryError as err:
+            return {"ok": False, "error": str(err)}
+        except ApiError as err:
+            return {"ok": False, "error": str(err)}
+
+        return {
+            "ok": True,
+            "playlistsFound": report.playlists_found,
+            "playlistsFollowed": report.playlists_followed,
+            "tracksSent": report.tracks_sent,
+            "needsChoosing": report.needs_choosing,
+            "detail": report.describe(),
+            "warnings": report.warnings,
+            "failures": report.failures,
+            "serverUrl": stored.server_url,
+        }
 
     def cancel(self) -> dict[str, Any]:
         """Ask the run to stop at the next track boundary.
@@ -499,6 +543,8 @@ def _make_handler(gui: GuiServer):
                 self._json(200, gui.youtube_check())
             elif path == "/api/youtube/sign-in":
                 self._json(200, gui.youtube_sign_in(str(body.get("browser") or "firefox")))
+            elif path == "/api/youtube/library":
+                self._json(200, gui.youtube_library_push())
             elif path == "/api/youtube/sign-out":
                 self._json(200, gui.youtube_sign_out())
             else:

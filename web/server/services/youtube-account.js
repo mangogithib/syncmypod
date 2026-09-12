@@ -344,11 +344,75 @@ export async function status(userId) {
     [userId]
   );
 
+  // A library pushed by the local app is the other way in, and the commoner
+  // one, because it needs nothing set up. Its presence is what the UI checks
+  // before deciding there is nothing to show.
+  const pushed = await one(
+    `SELECT count(*)::int AS "playlistCount", max(pushed_at) AS "pushedAt"
+       FROM youtube_playlists
+      WHERE user_id = $1 AND source = 'local-app'`,
+    [userId]
+  );
+
   return {
     configured: isConfigured(),
     connected: Boolean(account),
     account: account || null,
+    localApp: {
+      // Zero playlists means the local app has never pushed, which is a
+      // different state from "pushed and found none" only in that the second
+      // cannot happen - read_library refuses an empty result.
+      available: (pushed?.playlistCount || 0) > 0,
+      playlistCount: pushed?.playlistCount || 0,
+      pushedAt: pushed?.pushedAt || null,
+    },
   };
+}
+
+// Replaces the playlist list read by the local app.
+//
+// Whole-list replacement rather than an upsert-and-keep, because the local app
+// sends everything it can see: a playlist missing from the push has been
+// deleted in the account, and leaving it behind would offer the user something
+// that no longer exists. Selections survive, because those are the user's
+// choices and not YouTube's data.
+export async function replaceLocalAppPlaylists(userId, playlists) {
+  const seen = [];
+
+  for (const entry of playlists) {
+    const youtubeId = String(entry?.youtubeId || '').trim();
+    const title = String(entry?.title || '').trim();
+    if (!youtubeId || !title) continue;
+
+    seen.push(youtubeId);
+    await query(
+      `INSERT INTO youtube_playlists
+         (user_id, youtube_id, title, item_count, thumbnail_url, source, pushed_at)
+       VALUES ($1, $2, $3, $4, $5, 'local-app', now())
+       ON CONFLICT (user_id, youtube_id) DO UPDATE
+          SET title = EXCLUDED.title,
+              item_count = EXCLUDED.item_count,
+              thumbnail_url = EXCLUDED.thumbnail_url,
+              source = 'local-app',
+              pushed_at = now()`,
+      [
+        userId,
+        youtubeId,
+        title.slice(0, 300),
+        Number.isFinite(Number(entry?.itemCount)) ? Number(entry.itemCount) : null,
+        entry?.thumbnailUrl ? String(entry.thumbnailUrl).slice(0, 1000) : null,
+      ]
+    );
+  }
+
+  await query(
+    `DELETE FROM youtube_playlists
+      WHERE user_id = $1 AND source = 'local-app' AND NOT selected
+        AND NOT (youtube_id = ANY($2::text[]))`,
+    [userId, seen]
+  );
+
+  return listPlaylists(userId);
 }
 
 // Refreshes the stored list of playlists from YouTube.
@@ -446,12 +510,25 @@ function thumbnail(snippet) {
 export async function listPlaylists(userId) {
   const { rows } = await query(
     `SELECT youtube_id AS "youtubeId", title, item_count AS "itemCount",
-            thumbnail_url AS "thumbnailUrl", selected,
+            thumbnail_url AS "thumbnailUrl", selected, source,
             target_playlist_id AS "targetPlaylistId",
             last_synced_at AS "lastSyncedAt"
        FROM youtube_playlists
       WHERE user_id = $1
    ORDER BY selected DESC, (youtube_id = 'LL') DESC, lower(title)`,
+    [userId]
+  );
+  return rows;
+}
+
+// Which playlists the local app should read on its next pass.
+export async function selectedPlaylists(userId) {
+  const { rows } = await query(
+    `SELECT youtube_id AS "youtubeId", title, last_synced_at AS "lastSyncedAt",
+            last_item_count AS "lastItemCount"
+       FROM youtube_playlists
+      WHERE user_id = $1 AND selected
+   ORDER BY (youtube_id = 'LL') DESC, lower(title)`,
     [userId]
   );
   return rows;

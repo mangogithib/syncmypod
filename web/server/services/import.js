@@ -214,6 +214,60 @@ async function syncYouTubeAccount(jobId, userId, followed) {
   }
 }
 
+// Imports one playlist that the local app read and pushed here.
+//
+// The local app has the YouTube session, so it does the reading; this does the
+// resolving, which is the half that has to happen server-side because it is the
+// server that owns the catalogue and the library.
+//
+// Identical treatment to every other YouTube route: the video title is a
+// search, the catalogue is the metadata, and a track nothing recognises keeps
+// its title and nothing else.
+export async function importPushedYouTubePlaylist(userId, playlist, entries) {
+  const job = await one(
+    `INSERT INTO import_jobs (user_id, source, source_ref, source_name, status, total)
+     VALUES ($1, 'youtube-account', $2, $3, 'queued', $4)
+     RETURNING id`,
+    [userId, playlist.youtubeId, playlist.title, entries.length]
+  );
+
+  runJob(job.id, async () => {
+    await query(`UPDATE import_jobs SET status = 'running' WHERE id = $1`, [job.id]);
+
+    let targetPlaylistId = playlist.targetPlaylistId || null;
+    if (!targetPlaylistId) {
+      targetPlaylistId = await ensurePlaylist(userId, playlist.title, {
+        source: 'youtube',
+        sourceRef: playlist.youtubeId,
+      });
+    }
+
+    await processItems(
+      job.id,
+      userId,
+      entries.map((entry) => ({
+        ...splitYouTubeTitle(entry),
+        durationMs: entry.durationMs || null,
+        matchKeyExtra: entry.videoId
+          ? `https://www.youtube.com/watch?v=${entry.videoId}`
+          : null,
+      })),
+      {
+        targetPlaylistId,
+        addedVia: 'youtube-account',
+        discardUnverifiedMetadata: true,
+      }
+    );
+
+    await youtubeAccount.markSynced(userId, playlist.youtubeId, {
+      itemCount: entries.length,
+      targetPlaylistId,
+    });
+  }).catch((err) => console.error(`[import] job ${job.id} crashed:`, err.message));
+
+  return job.id;
+}
+
 // The API gives a video title and an uploader. Turned into the same rough
 // {title, artist} guess the scraped-playlist path produces, using the same
 // splitter, so both routes resolve identically.

@@ -69,64 +69,91 @@ export async function renderImport(view, context) {
     }
     if (!context.isCurrent()) return;
 
+    // Two ways a YouTube library gets here, and the order of these checks is
+    // the recommendation.
+    //
+    // The local app needs nothing set up: it already holds a YouTube session
+    // for fetching audio, so it reads the playlists and pushes them. If it has
+    // done that, its list is what to show.
+    //
+    // The OAuth grant is the alternative. It lets this server refresh the
+    // library on its own, including from a phone, at the cost of registering a
+    // Google client first. Offered, not pushed.
     mount(
       accountSlot,
-      !state.configured
-        ? setupNeededCard(state.redirectUri)
-        : !state.connected
-          ? connectCard()
-          : connectedCard(state)
+      state.localApp?.available
+        ? localAppCard(state)
+        : state.connected
+          ? connectedCard(state)
+          : state.configured
+            ? connectCard()
+            : notConnectedCard(state)
     );
   }
 
-  // Shown when the instance has no Google client yet. The steps are here rather
-  // than in a wiki because this is where somebody hits the wall, and because
-  // the redirect URI has to be copied exactly - so it is on screen, not
-  // described.
-  function setupNeededCard(redirectUri) {
+  // The library the local app read and sent.
+  function localAppCard(state) {
+    const card = connectedCard(state, {
+      heading: 'Your YouTube library',
+      badgeText: 'From the local app',
+      intro: state.localApp.pushedAt
+        ? `Read by the local app ${formatRelative(state.localApp.pushedAt)}. Tick what to follow; the local app imports them next time it runs.`
+        : 'Tick the playlists to follow. The local app imports them next time it runs.',
+      // Nothing here can reach YouTube - the session is on the other machine -
+      // so the buttons that would do that are not offered.
+      canReachYouTube: false,
+    });
+    return card;
+  }
+
+  // Nothing connected, and no Google client registered either. This is the
+  // first thing a new instance sees, so it leads with the route that needs no
+  // setup rather than the one that does.
+  function notConnectedCard(state) {
     return h(
       'div.card',
-      h(
-        'div.card-head',
-        h('h2', 'Connect a YouTube account'),
-        h('div.spacer'),
-        badge('Setup needed', 'warn')
-      ),
+      h('div.card-head', h('h2', 'Follow your YouTube playlists'), h('div.spacer')),
       h(
         'div.card-body',
         h(
           'p.muted',
-          'Following your own YouTube playlists means reading your account, and Google only lets an application do that with credentials registered to it. Everything else on this page works without any of this.'
+          'Your own playlists and liked songs can be followed here, so new music arrives without pasting anything.'
         ),
         h(
-          'ol.steps',
+          'div.field',
+          h('label', 'The easy way'),
           h(
-            'li',
-            'Open the Google Cloud console, create a project, and enable the ',
-            h('strong', 'YouTube Data API v3'),
-            '.'
-          ),
-          h('li', 'Under Credentials, create an OAuth client ID of type Web application.'),
-          h(
-            'li',
-            'Add this exact address as an authorised redirect URI:',
-            h('code.copyable', { title: 'Click to copy', onclick: copySelf }, redirectUri)
-          ),
-          h(
-            'li',
-            'On the OAuth consent screen, add yourself under Test users. The app does not need to be published or reviewed for your own account.'
-          ),
-          h(
-            'li',
-            'Paste the client ID and secret into ',
-            h('a', { href: '#/settings' }, 'Settings'),
-            '.'
+            'span.hint',
+            'Open the local app, sign in to YouTube on the Audio source card if you have not already, and press "Send playlists to server". Your playlists appear here to choose from. Nothing else to set up, and no YouTube credential is ever stored on this server.'
           )
         ),
-        notice(
-          'Read-only, and only YouTube. The permission asked for lets this list your playlists and what is in them. It cannot change anything in your account, and it cannot download - the local app does that with its own separate sign-in.',
-          '',
-          'info'
+        h(
+          'details.setup-details',
+          h('summary', 'Or connect an account to this server instead'),
+          h(
+            'p.muted',
+            'Lets this server refresh the library on its own, including when you open this page on a phone. It needs a Google OAuth client registering first, because Google only lets an application read your playlists with credentials issued to it.'
+          ),
+          h(
+            'ol.steps',
+            h(
+              'li',
+              'Open the Google Cloud console, create a project, and enable the ',
+              h('strong', 'YouTube Data API v3'),
+              '.'
+            ),
+            h('li', 'Under Credentials, create an OAuth client ID of type Web application.'),
+            h(
+              'li',
+              'Add this exact address as an authorised redirect URI:',
+              h('code.copyable', { title: 'Click to copy', onclick: copySelf }, state.redirectUri)
+            ),
+            h(
+              'li',
+              'On the OAuth consent screen, add yourself under Test users. The app does not need to be published or reviewed for your own account.'
+            ),
+            h('li', 'Paste the client ID and secret into ', h('a', { href: '#/settings' }, 'Settings'), '.')
+          )
         )
       )
     );
@@ -159,7 +186,14 @@ export async function renderImport(view, context) {
     );
   }
 
-  function connectedCard(state) {
+  function connectedCard(state, options = {}) {
+    const {
+      heading = 'YouTube account',
+      badgeText = state.account?.channelTitle || 'Connected',
+      intro = null,
+      canReachYouTube = true,
+    } = options;
+
     const listSlot = h('div');
     let playlists = state.playlists;
 
@@ -287,28 +321,29 @@ export async function renderImport(view, context) {
 
     return h(
       'div.card',
-      h(
-        'div.card-head',
-        h('h2', 'YouTube account'),
-        h('div.spacer'),
-        badge(state.account?.channelTitle || 'Connected', 'ok')
-      ),
+      h('div.card-head', h('h2', heading), h('div.spacer'), badge(badgeText, 'ok')),
       h(
         'div.card-body',
         state.account?.lastError ? notice(state.account.lastError, 'warn', 'warn') : null,
         h(
           'p.muted',
-          state.account?.lastSyncedAt
-            ? `Last synced ${formatRelative(state.account.lastSyncedAt)}. Ticked playlists are re-checked when you open this page.`
-            : 'Tick the playlists to follow. They are re-checked whenever you open this page.'
+          intro ||
+            (state.account?.lastSyncedAt
+              ? `Last synced ${formatRelative(state.account.lastSyncedAt)}. Ticked playlists are re-checked when you open this page.`
+              : 'Tick the playlists to follow. They are re-checked whenever you open this page.')
         ),
         listSlot,
         notice(
-          'Albums saved to a YouTube Music library are not listed here, because Google does not expose them to applications. Import one with its playlist link instead - YouTube Music gives you that from the album\u2019s share menu.',
+          'Albums saved to a YouTube Music library are not listed here, because neither YouTube\u2019s API nor its pages expose them as playlists. Import one with its playlist link instead - YouTube Music gives you that from the album\u2019s share menu.',
           '',
           'info'
         ),
-        h('div.row', syncNow, refresh, h('div.spacer'), disconnect)
+        // The buttons that talk to YouTube only make sense where the session
+        // is. For a library pushed from the local app, that is the other
+        // machine, so this side offers the choosing and nothing else.
+        canReachYouTube
+          ? h('div.row', syncNow, refresh, h('div.spacer'), disconnect)
+          : null
       )
     );
   }

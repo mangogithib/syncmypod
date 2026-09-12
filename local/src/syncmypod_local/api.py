@@ -198,6 +198,33 @@ class DeviceApi:
 
     # -- plumbing -----------------------------------------------------------
 
+    # --- the YouTube library ------------------------------------------------
+    #
+    # Reading the account's playlists happens here rather than on the server,
+    # because the YouTube session is here. The server gets names and video ids;
+    # it never gets a credential.
+
+    def push_youtube_library(self, playlists: list[dict[str, Any]]) -> dict[str, Any]:
+        """Send the list of playlists, and learn which ones are wanted.
+
+        One call does both so a routine sync is a single round trip before any
+        contents are read.
+        """
+        return self._post("/api/sync/youtube/library", {"playlists": playlists})
+
+    def selected_youtube_playlists(self) -> list[dict[str, Any]]:
+        """The playlists the user ticked in the web interface."""
+        return list(self._get("/api/sync/youtube/selected").get("playlists") or [])
+
+    def push_youtube_playlist(
+        self, youtube_id: str, entries: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Send one playlist's contents for the server to resolve and import."""
+        return self._post(
+            "/api/sync/youtube/playlist",
+            {"youtubeId": youtube_id, "entries": entries},
+        )
+
     def _get(self, path: str) -> dict[str, Any]:
         return self._request("GET", path)
 

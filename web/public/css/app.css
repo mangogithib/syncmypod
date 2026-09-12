@@ -921,3 +921,21 @@ code {
 .copyable:hover {
   border-color: var(--accent);
 }
+
+/* The OAuth route, offered without being pushed. Collapsed because it is the
+   alternative to the easy path, not a step on it. */
+.setup-details {
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+
+.setup-details summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.setup-details summary:hover {
+  color: var(--text);
+}

@@ -291,6 +291,23 @@ function renderYouTube(data) {
     check.addEventListener("click", () => youtubeCall(check, "/api/youtube/check"));
     actions.append(check);
 
+    /*
+      The same session, doing a second job.
+
+      It was saved to fetch better audio. It can also list the account's own
+      playlists and liked songs, which is the only way to follow a YouTube
+      Music library without the server holding a Google credential - and the
+      only way that asks the user for nothing but this sign-in they have
+      already done.
+
+      Reading happens here because the session is here. What goes to the server
+      is names and video ids; the credential never leaves this machine.
+    */
+    const send = node("button", "button button-small", "Send playlists to server");
+    send.type = "button";
+    send.addEventListener("click", () => pushLibrary(send));
+    actions.append(send);
+
     const out = node("button", "button button-small", "Sign out");
     out.type = "button";
     out.addEventListener("click", async () => {
@@ -324,6 +341,8 @@ function renderYouTube(data) {
 
   body.append(actions);
 
+  body.append(libraryResultSlot);
+
   if (youtubeState.error) {
     body.append(node("p", "notice notice-warn", youtubeState.error));
   }
@@ -335,6 +354,56 @@ function renderYouTube(data) {
         "256kbps needs an active YouTube Music Premium subscription on that account."
       )
     );
+  }
+}
+
+/*
+  Kept outside renderYouTube so a result survives the re-render that follows it.
+  Rebuilding the card would otherwise wipe the message the user just asked for.
+*/
+const libraryResultSlot = node("div", null, "");
+
+async function pushLibrary(button) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Reading...";
+  clear(libraryResultSlot);
+
+  try {
+    const result = await api("/api/youtube/library", { method: "POST", body: "{}" });
+
+    if (!result.ok) {
+      libraryResultSlot.append(node("p", "notice notice-warn", result.error));
+      return;
+    }
+
+    libraryResultSlot.append(
+      node("p", result.failures.length ? "notice notice-warn" : "notice notice-ok", result.detail)
+    );
+
+    // A first run always lands here: nothing can be ticked before the list
+    // exists. Saying where to go next turns a dead end into a step.
+    if (result.needsChoosing && result.serverUrl) {
+      const line = node("p", "subtle", "");
+      const link = node("a", null, "Choose them in the web interface");
+      link.href = result.serverUrl.replace(/\/$/, "") + "/#/import";
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      line.append(link);
+      libraryResultSlot.append(line);
+    }
+
+    for (const warning of result.warnings || []) {
+      libraryResultSlot.append(node("p", "subtle", warning));
+    }
+    for (const failure of result.failures || []) {
+      libraryResultSlot.append(node("p", "track-error", failure));
+    }
+  } catch (err) {
+    libraryResultSlot.append(node("p", "notice notice-danger", err.message));
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
   }
 }
 
