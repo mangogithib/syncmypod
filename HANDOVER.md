@@ -13,7 +13,7 @@ state of play, what was built most recently, and the eight things that were
 tried and got wrong before they were got right. Then come back to section 3,
 which is the one rule the whole design rests on.
 
-**Last updated:** 12 September 2026, end of day.
+**Last updated:** 12 September 2026, late evening.
 
 ---
 
@@ -38,8 +38,8 @@ which is the one rule the whole design rests on.
 | YouTube Premium sign-in (local) | Working — no browser picker, tries them all |
 | Local app: GUI | Working — nothing needs a terminal |
 | Downloadable build | **Published** — 0.1.1 |
-| Phone layout | Working — verified at 375px |
-| CI | Green. Parses every file, checks for undefined references, runs migrations |
+| Phone layout | Working — measured at 375px, list rows included |
+| CI | Green. Parses every file, checks for undefined references, checks the api client, runs migrations |
 | Connected YouTube account | **Removed.** Needed a per-instance Google client *and* a Test users entry |
 | **A web test suite** | **Still none. The biggest gap — see section 6** |
 
@@ -57,17 +57,21 @@ About 18,000 lines: 56 JavaScript files, 16 Python modules, 8 SQL migrations.
 | Containers | `syncmypod-app-1`, `syncmypod-db-1`, `syncmypod-caddy-1` |
 | Certificate | Let's Encrypt, expires 10 Dec 2026, auto-renews |
 
-**Library contents, end of 12 September** — this is Mohamed's own music now, not
-test data. Do not clear it.
+**Library contents, late on 12 September** — this is Mohamed's own music now,
+not test data. Do not clear it. These are the app's own numbers, from the same
+query the sidebar uses (`libraryStats`); an earlier version of this table gave
+579 artists and 407 albums, which were whole-catalogue counts rather than his
+library.
 
 | | |
 |---|---|
-| Songs | 395 |
-| Artists / albums | 579 / 407 |
+| Songs | 414 |
+| Artists / albums | 486 / 314 |
 | Playlists | 1 ("Liked") |
-| Songs with no artist | 20 — they sync, with the fields blank |
+| Songs with no artist | 15 — they sync, with the fields blank |
 | Combined artist rows | 0 |
 | Paired devices | 5, most from testing |
+| Followed artists | 2 (M.H.R, Dabzee) |
 | Followed sources | 0 |
 
 Where the songs came from: 290 from YouTube playlist imports, 72 from the
@@ -863,22 +867,31 @@ Roughly in the order it is worth doing.
 
 ### 1. A web-side test suite, and a route smoke test first
 
-Still none, and it is now the clearest gap. Three bugs reached the user's screen
-in two days and every one would have been caught by the simplest possible test:
+Still none, and it is now the clearest gap. Four bugs reached the user's screen
+in three days and every one would have been caught by the simplest possible
+test:
 
 - the Import page threw `loadJobs is not defined`;
 - a route used `rateLimit` its file never imported, and the container
   restart-looped;
 - Settings returned 500 on every load because a handler's parameter is named
-  `_req` and the new line said `req`.
+  `_req` and the new line said `req`;
+- `api.importJob` was called by two views and was never on the api client, so
+  every import and every re-match died at "Lost track of the import" the
+  instant it started.
 
-`scripts/check-references.mjs` now catches the first two. It did **not** catch
-the third, and cannot: it flags identifiers *called* as functions, and `req`
-there is an argument.
+`scripts/check-references.mjs` now catches the first two and the fourth. It did
+**not** catch the third, and cannot: it flags identifiers *called* as functions,
+and `req` there is an argument.
 
 **Start with a route smoke test.** CI already runs Postgres for the migrations
 job. Boot the app against it, request every GET route, and assert nothing
-returns 500. That is perhaps forty lines and would have caught all three.
+returns 500. That is perhaps forty lines and would have caught the first three.
+
+A smoke test would **not** have caught the fourth, and that is the point worth
+taking from it: the route was fine and the server finished every job correctly.
+What was broken was the browser's ability to read its own progress. A web test
+suite has to run the page, not only the routes.
 
 Then unit tests, which need no new dependency - Node has `node --test`. The
 resolver, `lib/normalise.js` (`matchKey`, `scoreCandidate`, `titleOverlap`,
@@ -986,11 +999,23 @@ node scripts/check-references.mjs .
 ```
 
 The second needs the dependencies installed. Without a local Node, run it the
-way CI does, in a container:
+way CI does, in a container - but against a staging copy rather than the deploy
+directory, so a tree that fails the check never becomes the live one:
 
 ```bash
-ssh root@100.96.249.123 'cd /root/syncmypod && docker run --rm -v /root/syncmypod:/src:ro -w /work node:22-alpine sh -c "cp -r /src/server /src/public /src/scripts /src/package.json /work/; npm install --silent >/dev/null 2>&1; DATABASE_URL=postgres://unused@localhost:5432/unused SESSION_SECRET=ci node scripts/check-references.mjs ."'
+tar -czf - -C web --exclude=node_modules --exclude=.env . \
+  | ssh root@100.96.249.123 'rm -rf /root/staging && mkdir -p /root/staging && tar -xzf - -C /root/staging'
+
+ssh root@100.96.249.123 'docker run --rm -v /root/staging:/src:ro -w /work node:22-alpine sh -c "
+  cp -r /src/server /src/public /src/scripts /src/package.json /work/
+  find server public scripts -name \"*.js\" -o -name \"*.mjs\" | while read f; do node --check \$f || echo \"FAIL \$f\"; done
+  npm install --silent >/dev/null 2>&1
+  DATABASE_URL=postgres://unused@localhost:5432/unused SESSION_SECRET=ci node scripts/check-references.mjs .
+"'
 ```
+
+Both checks in one pass, on the exact bytes about to be deployed, on a machine
+that has Node. The Windows box does not.
 
 ### Deploying a change to the web tool
 
@@ -1105,8 +1130,12 @@ will come from and where the next work should go.
 | Phone layout | Mohamed expects a phone to be the device most used |
 | Reference checker in CI | Two undefined-reference bugs shipped in one day |
 | Connected YouTube account removed | It could not work until somebody edited a Google console |
+| `api.importJob` added | Two views called it and it did not exist, so no import could report its own progress |
+| The api client checked in CI | The scan ignores anything after a dot; `api` is one literal in one file and worth the exception |
+| List rows wrap on a phone | `.list-main` may shrink to nothing and `.list-actions` may not, so every card list read one word per line |
+| Metadata column dropped from Songs | It was blank on almost every row by design; the marker now sits against the title |
 
-### Eight things that were got wrong first
+### Ten things that were got wrong first
 
 Every one of these was written, deployed, and then corrected. They are the
 cheapest thing in this file.
@@ -1133,22 +1162,39 @@ cheapest thing in this file.
 8. **Trusting that a deploy removes deleted files.** The tar deploy only
    extracts. A module deleted locally kept being imported on the server until it
    was deleted there too.
+9. **Adding a method to two callers and not to the client.** `api.importJob`
+   was written into the import dialog and the re-match dialog and never onto
+   the `api` object. Nothing caught it, because the reference scan stops at a
+   dot. Every import looked broken while the server was finishing every one of
+   them correctly.
+10. **Moving a badge out of a dropped column without measuring the phone.**
+   Removing the Metadata column and putting the marker beside the title is
+   right on a desktop. On a 375px screen the title cell is about 200px and the
+   badge is 73 of them, which left a title two characters long - worse than
+   what was replaced. Measured, not seen: the number is what showed it.
 
-### Three habits that paid for themselves
+### Four habits that paid for themselves
 
 - **Measure on the real library rather than reasoning about the code.** The
   YouTube Music guards took four passes and every correction came from looking
   at what it actually matched, not from thinking harder.
 - **Run the reference check before deploying.** It has caught a missing import
-  three times, including one introduced while fixing something else.
+  three times, including one introduced while fixing something else. Stage the
+  tree in `/root/staging` and run it there rather than over `/root/syncmypod`,
+  so a failure never reaches the deploy directory.
+- **Prove a new check fails before trusting that it passes.** The api-client
+  check was verified by deleting the fix from the staging copy and watching it
+  name both callers by line. A check that has only ever been seen to pass has
+  not been seen to work.
 - **Clean up test data immediately.** Two imports of 50 tracks each went into
   Mohamed's real library during testing; both would have reached the iPod on the
   next sync.
 
 ### The one thing to do next
 
-A route smoke test. CI already runs Postgres for the migrations job - boot the
-app against it, request every GET route, assert nothing returns 500. Three bugs
-reached the user's screen in two days and that would have caught all three,
-including the one `check-references.mjs` structurally cannot catch. Section 6
-has the detail.
+A route smoke test, then something that runs the page. CI already runs Postgres
+for the migrations job - boot the app against it, request every GET route,
+assert nothing returns 500. That covers three of the four bugs that reached the
+user's screen, including the one `check-references.mjs` structurally cannot
+catch. It does not cover the fourth: the routes were fine and the browser could
+not read them. Section 6 has the detail.
