@@ -1,9 +1,10 @@
 import { Router } from 'express';
-import { requireUser } from '../auth/middleware.js';
+import { rateLimit, requireUser } from '../auth/middleware.js';
 import { many, one, query } from '../db/pool.js';
 import { bool, handler, id, notFound, str } from '../lib/api.js';
 import { matchKey } from '../lib/normalise.js';
 import * as deezer from '../providers/deezer.js';
+import { countCombined, repairArtists } from '../services/artist-split.js';
 import { checkFollowedArtist } from '../services/follows.js';
 
 export const artistRoutes = Router();
@@ -253,3 +254,29 @@ artistRoutes.get(
   })
 );
 
+// ---------------------------------------------------------------------------
+// Credits that name more than one artist
+// ---------------------------------------------------------------------------
+//
+// iTunes reports every credited artist as one string, so a track only it knew
+// leaves a row on this page naming several people. Splitting those is checked
+// against Deezer rather than guessed - see services/artist-split.js, and the
+// note there about why "Earth, Wind & Fire" survives it.
+
+artistRoutes.get(
+  '/combined/count',
+  handler(async (_req, res) => {
+    res.json({ count: await countCombined() });
+  })
+);
+
+artistRoutes.post(
+  '/combined/repair',
+  // Each one is a couple of outbound lookups, so this is not something to run
+  // in a loop.
+  rateLimit({ windowMs: 300_000, max: 3, key: (req) => `artistsplit:${req.user?.id}` }),
+  handler(async (_req, res) => {
+    const report = await repairArtists({ dryRun: false });
+    res.json(report);
+  })
+);

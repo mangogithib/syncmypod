@@ -21,6 +21,7 @@ import {
 export async function renderArtists(view, context) {
   const tabs = { current: 'library' };
   const body = h('div');
+  const repairSlot = h('div');
 
   const tabButton = (key, label) =>
     h(
@@ -38,11 +39,86 @@ export async function renderArtists(view, context) {
   function render() {
     mount(
       view,
+      repairSlot,
       h('div.toolbar', tabButton('library', 'In your library'), tabButton('follows', 'Following')),
       body
     );
-    if (tabs.current === 'library') renderLibraryArtists();
-    else renderFollows();
+    if (tabs.current === 'library') {
+      renderLibraryArtists();
+      offerRepair();
+    } else {
+      renderFollows();
+    }
+  }
+
+  // Rows that name several people rather than one artist.
+  //
+  // iTunes reports every credited artist as one string and gives no structured
+  // list, so a track only it knew leaves "Kailash Kher, Naresh Kamath & Paresh
+  // Kamath" sitting here as though it were a person. New tracks are expanded as
+  // they arrive; this is for anything already stored, or added while Deezer was
+  // unreachable.
+  //
+  // Not a blind split. Each one is checked against a real catalogue, which is
+  // why "Earth, Wind & Fire" is still one artist on this page - see
+  // services/artist-split.js.
+  async function offerRepair() {
+    let count = 0;
+    try {
+      ({ count } = await api.combinedArtistCount());
+    } catch {
+      return; // Informational; never break the page over it.
+    }
+    if (!context.isCurrent() || count === 0) {
+      mount(repairSlot);
+      return;
+    }
+
+    const run = h(
+      'button.btn.btn-sm.btn-primary',
+      {
+        type: 'button',
+        onclick: async () => {
+          run.disabled = true;
+          run.textContent = 'Checking...';
+          try {
+            const report = await api.repairCombinedArtists();
+            toast(
+              report.split > 0
+                ? `Separated ${report.split}. ${report.left} could not be confirmed and were left alone.`
+                : 'Nothing could be confirmed, so nothing was changed.',
+              report.split > 0 ? 'ok' : 'info'
+            );
+            render();
+          } catch (err) {
+            toast(err.message, 'error');
+            run.disabled = false;
+            run.textContent = 'Separate them';
+          }
+        },
+      },
+      'Separate them'
+    );
+
+    mount(
+      repairSlot,
+      notice(
+        h(
+          'div.row-between',
+          h(
+            'div',
+            h('strong', `${count} entr${count === 1 ? 'y names' : 'ies name'} more than one artist. `),
+            h(
+              'span',
+              'They came from a source that reports every credit as one string. Each one is checked against a real catalogue before being separated, so a band with an ampersand in its name is left alone.'
+            )
+          ),
+          run
+        ),
+        '',
+        'info'
+      )
+    );
   }
 
   // --- artists in the library ---------------------------------------------

@@ -139,6 +139,8 @@ export const api = {
   importJobs: () => request('GET', '/api/import/jobs'),
 
   unresolvedCount: () => request('GET', '/api/library/unresolved/count'),
+  combinedArtistCount: () => request('GET', '/api/artists/combined/count'),
+  repairCombinedArtists: () => request('POST', '/api/artists/combined/repair'),
   rematchUnresolved: () => request('POST', '/api/library/unresolved/rematch'),
 
   // --- standing sources ---------------------------------------------------

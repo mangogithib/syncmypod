@@ -1,5 +1,6 @@
 import { transaction } from '../db/pool.js';
 import { joinArtists, matchKey, scoreCandidate, stripDecorations } from '../lib/normalise.js';
+import { expandCredit } from './artist-split.js';
 import * as deezer from '../providers/deezer.js';
 import * as itunes from '../providers/itunes.js';
 import * as musicbrainz from '../providers/musicbrainz.js';
@@ -398,6 +399,20 @@ async function upsertAlbum(client, album) {
 // Writes a resolved track and everything it references. Runs in one transaction
 // so a track never exists without its artists.
 export async function saveResolvedTrack(resolved, { client } = {}) {
+  // Before the transaction, deliberately: this may call out to Deezer, and
+  // holding a database transaction open across a network request is how a pool
+  // runs dry under load.
+  //
+  // iTunes reports every credited artist as one string, so a track it resolved
+  // arrives with a single artist named "Kailash Kher, Naresh Kamath & Paresh
+  // Kamath". Left alone that becomes an artist who does not exist. Expanded
+  // here - and only when each part checks out - the catalogue stays right
+  // without a repair pass having to be run afterwards.
+  resolved = {
+    ...resolved,
+    track: { ...resolved.track, artists: await expandCredit(resolved.track?.artists) },
+  };
+
   const run = async (tx) => {
     const track = resolved.track;
     const albumId = await upsertAlbum(tx, track.album);

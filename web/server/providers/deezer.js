@@ -86,6 +86,11 @@ function toArtist(artist, index = 0) {
     deezerId: artist.id ? String(artist.id) : null,
     name: artist.name,
     imageUrl: artistArtwork(artist),
+    // Returned by /search/artist and not by a track's contributor list, so it
+    // is often absent. Where present it is the only signal that separates a
+    // band whose name contains "&" from a one-off collaboration filed under
+    // the same shape - see services/artist-split.js.
+    fans: Number.isFinite(artist.nb_fan) ? artist.nb_fan : null,
     position: index,
     role: index === 0 ? 'primary' : 'featured',
   };
