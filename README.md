@@ -77,18 +77,21 @@ syncmypod pair https://your-server:8444 ABCD1234
 | | |
 |---|---|
 | Library, search, playlists, artists | Working |
-| Metadata resolution (Deezer → iTunes → MusicBrainz, no API keys) | Working |
-| Bulk import (pasted list, Deezer playlist) | Working |
-| YouTube search, on request | Working — for music the catalogues do not have |
-| Combined search, artist and album pages | Working — browse before adding |
+| Metadata resolution (Deezer → iTunes → MusicBrainz → YouTube Music) | Working — no API keys anywhere |
+| Import a playlist link | Working — Deezer, Spotify, Apple Music, YouTube, YouTube Music in one box |
+| Import a pasted list | Working — dash, tab and CSV shapes |
 | Follow an artist, with back catalogue | Working — optional, imported in the background |
+| Combined search, artist and album pages | Working — browse before adding |
+| Tracks the sync could not fetch | Shown on the overview and filterable in the library |
 | Device pairing and the sync API | Working |
 | Public HTTPS with an automatic certificate | Working |
-| Local app: pairing, device detection | Working |
-| Local app: the sync engine | Working, verified on a real iPod Classic |
+| Local app: pairing, device detection | Working — nothing needs a terminal |
+| Local app: the sync engine | Working on real hardware, including a blank restored iPod |
+| Local app: four downloads at a time | Working — the device write stays serialised |
+| Local app: playlists on the device | Working — written to the dataset the iPod reads |
 | Local app: album art on the device | Working — tags and the iPod's own artwork database |
-| Local app: YouTube Premium sign-in | Working — 256kbps instead of 128 |
-| Local app: GUI | First version — device status, sync, live progress |
+| Local app: YouTube sign-in | Working — opens a browser of its own where reading one is impossible |
+| Local app: cancel and eject | Working — stops at a track boundary, then unmounts safely |
 | Packaging to a downloadable app | Working — Windows, built and released by CI |
 
 ---

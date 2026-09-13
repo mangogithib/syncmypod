@@ -246,6 +246,14 @@ export async function repairArtists({ dryRun = false, onProgress } = {}) {
     onProgress?.(report);
   }
 
+  // Splitting is the operation that orphaned albums in the first place, so the
+  // repair for that runs here rather than sitting behind a button nobody knows
+  // about. It is a no-op when there is nothing to fix.
+  report.albumsReattached = dryRun ? await countOrphanedAlbums() : await repairOrphanedAlbums();
+  if (report.albumsReattached > 0 && !dryRun) {
+    console.log(`[artists] gave ${report.albumsReattached} album(s) their artist back`);
+  }
+
   return report;
 }
 
@@ -378,7 +386,7 @@ export async function expandCredit(artists) {
 // DELETE SET NULL rather than RESTRICT - so the loss was silent. Kept as a
 // repair rather than quietly fixed, because an album with no artist is visible
 // on the Albums page and somebody has to be able to put it right.
-export async function repairOrphanedAlbums() {
+async function repairOrphanedAlbums() {
   const { rowCount } = await query(
     `UPDATE albums al
         SET album_artist_id = primary_artist.artist_id
@@ -395,7 +403,7 @@ export async function repairOrphanedAlbums() {
   return rowCount;
 }
 
-export async function countOrphanedAlbums() {
+async function countOrphanedAlbums() {
   const row = await one('SELECT count(*)::int AS n FROM albums WHERE album_artist_id IS NULL');
   return row?.n || 0;
 }

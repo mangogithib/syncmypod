@@ -253,10 +253,6 @@ body {
 /* Keyboard focus has to be visible on every control, not only the ones that
    happen to be inputs. */
 .button:focus-visible,
-.select-small:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
 
 .button-danger {
   background: var(--surface);
@@ -467,15 +463,6 @@ body {
   font-size: var(--text-sm);
 }
 
-.select-small {
-  font: inherit;
-  font-size: var(--text-sm);
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
-}
 
 /* The bitrate is the number the whole feature is about, so it gets to be the
    one thing on this card the eye lands on first. */

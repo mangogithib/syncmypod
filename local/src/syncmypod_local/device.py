@@ -707,15 +707,6 @@ def create_virtual(
     return open_at(root)
 
 
-def virtual_models() -> list[dict[str, str]]:
-    """Every model that can be simulated, for `syncmypod devices --list-models`."""
-    lib = _pypodlib()
-    try:
-        return list(lib.device.available_virtual_ipod_models())
-    except Exception as err:
-        raise DeviceError(f"Could not list models: {err}") from err
-
-
 def _describe(handle: Any) -> IpodDevice:
     """Normalise a pypodlib IPod into our own shape.
 
