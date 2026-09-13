@@ -667,3 +667,56 @@ class TestOneBadFileDoesNotEndTheRun:
         assert report.status == "done"
         assert report.synced == 3
         assert [r.track_id for r in report.failed] == [2]
+
+
+class TestWhenYouTubeRefusesTheMachine:
+    """ "Sign in to confirm you're not a bot" is not "track not found".
+
+    Measured on 13 September, after a 399-track sync: every search from this
+    machine came back with six bot-check errors and no results - including
+    "Queen - Bohemian Rhapsody". The search runs with `ignoreerrors`, so those
+    errors were swallowed and every track was recorded as "No audio could be
+    found", which sent everyone looking at the metadata rather than at YouTube.
+    """
+
+    @respx.mock
+    def test_the_run_stops_instead_of_failing_every_track(self, ipod, paired, monkeypatch):
+        def blocked(track_dict, destination):
+            raise downloader.BlockedError(
+                "YouTube is asking this computer to prove it is not a robot."
+            )
+
+        monkeypatch.setattr(downloader, "fetch", blocked)
+        mock_server(manifest([track(n) for n in range(1, 41)]))
+
+        report = sync.run(paired, mount=str(ipod.mount_path), concurrency=4)
+
+        assert report.status == "error"
+        assert "robot" in (report.message or "")
+        # Four in flight when the first came back blocked, so a handful are
+        # reported and the other thirty-odd are not even attempted.
+        assert len(report.failed) <= 4, "it kept going after YouTube said no"
+        assert "left" in (report.message or "")
+
+    @respx.mock
+    def test_what_was_already_downloaded_is_still_written(self, ipod, paired, monkeypatch):
+        """Stopping early must not throw away work already paid for."""
+        calls = {"n": 0}
+
+        def fail_after_a_few(track_dict, destination):
+            calls["n"] += 1
+            if calls["n"] > 6:
+                raise downloader.BlockedError("not a bot")
+            destination.mkdir(parents=True, exist_ok=True)
+            landed = destination / "source.m4a"
+            shutil.copy(FIXTURES / "tagged.m4a", landed)
+            return downloader.Download(landed, "youtube", "https://x", 268.0, 128)
+
+        monkeypatch.setattr(downloader, "fetch", fail_after_a_few)
+        mock_server(manifest([track(n) for n in range(1, 41)]))
+
+        report = sync.run(paired, mount=str(ipod.mount_path), concurrency=1)
+
+        assert report.status == "error"
+        assert report.synced == 6
+        assert len(ipod.tracks(reload=True)) == 6

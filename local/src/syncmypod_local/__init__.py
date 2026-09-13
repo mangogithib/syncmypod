@@ -6,4 +6,4 @@ missing, tags it from the server's resolved metadata, writes it to the device,
 and deletes every downloaded file once the transfer is confirmed.
 """
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"

@@ -200,7 +200,9 @@ def _search_raw(query: str) -> list[dict[str, Any]]:
     # in the page, so one age-restricted or withdrawn video among six would
     # otherwise abort the whole search and lose the five good candidates with
     # it. On a download, an error is the answer and must not be swallowed.
+    watcher = _YtDlpLogger()
     options = _base_options() | {
+        "logger": watcher,
         "skip_download": True,
         "extract_flat": False,
         "ignoreerrors": True,
@@ -218,7 +220,16 @@ def _search_raw(query: str) -> list[dict[str, Any]]:
     except Exception as err:  # pragma: no cover - yt-dlp raises broadly
         logger.warning("Search failed for %r: %s", query, err)
         return []
-    return [e for e in (info or {}).get("entries") or [] if e]
+
+    found = [e for e in (info or {}).get("entries") or [] if e]
+    if not found and watcher.blocked:
+        raise BlockedError(
+            "YouTube is asking this computer to prove it is not a robot, so "
+            "nothing can be downloaded at the moment. Press Sign in to YouTube "
+            "on this page - a signed-in session is not subject to this - and "
+            "then run the sync again."
+        )
+    return found
 
 
 def _download(url: str, destination: Path, *, source: str) -> Download:
@@ -319,8 +330,33 @@ def _base_options() -> dict[str, Any]:
     }
 
 
+# What YouTube says when it has decided this machine is a robot. It stops
+# serving *everything* - a search for "Queen - Bohemian Rhapsody" comes back
+# with six of these and no results - so it must never be reported as the track
+# being unfindable.
+_BOT_CHECK = ("not a bot", "sign in to confirm")
+
+
+class BlockedError(DownloadError):
+    """YouTube refused to serve this machine at all."""
+
+
 class _YtDlpLogger:
-    """Routes yt-dlp's chatter into the application's log instead of stdout."""
+    """Routes yt-dlp's chatter into the application's log instead of stdout.
+
+    Also watches for the bot check. A search runs with ``ignoreerrors``, so
+    per-video failures are swallowed and the caller sees an empty result list -
+    indistinguishable from "this track does not exist". Recording it here is
+    what lets the difference be reported.
+    """
+
+    def __init__(self) -> None:
+        self.blocked = False
+
+    def _watch(self, message: str) -> None:
+        lowered = message.lower()
+        if any(marker in lowered for marker in _BOT_CHECK):
+            self.blocked = True
 
     def debug(self, message: str) -> None:
         if not message.startswith("[debug]"):
@@ -330,9 +366,11 @@ class _YtDlpLogger:
         logger.debug("yt-dlp: %s", message)
 
     def warning(self, message: str) -> None:
+        self._watch(message)
         logger.debug("yt-dlp: %s", message)
 
     def error(self, message: str) -> None:
+        self._watch(message)
         logger.warning("yt-dlp: %s", message)
 
 

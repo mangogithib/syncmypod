@@ -431,10 +431,13 @@ def _execute(
         done_count = 0
         cancelled = False
         out_of_space = False
+        blocked: str | None = None
 
         def submit_until_full() -> None:
             nonlocal cancelled, out_of_space
             while queue and len(in_flight) < max(1, concurrency):
+                if blocked:
+                    return
                 if stop():
                     cancelled = True
                     return
@@ -459,6 +462,24 @@ def _execute(
                 say("track", {"index": done_count, "total": total, "item": item})
                 try:
                     prepared, result = future.result()
+                except downloader.BlockedError as err:
+                    # Not this track's problem: YouTube has stopped serving this
+                    # machine entirely, so every remaining track would fail the
+                    # same way and take an hour doing it. Stop and say so, and
+                    # keep what already downloaded.
+                    blocked = str(err)
+                    logger.warning("YouTube is refusing this machine: %s", err)
+                    pending.append(
+                        Result(
+                            track_id=item.id,
+                            state="failed",
+                            label=item.label,
+                            error=str(err)[:500],
+                        )
+                    )
+                    work.discard(item.id)
+                    say("track-failed", {"item": item, "error": str(err)})
+                    continue
                 except Exception as err:  # a failed track must not end the run
                     logger.warning("%s failed: %s", item.label, err)
                     pending.append(
@@ -484,7 +505,10 @@ def _execute(
             submit_until_full()
 
         remaining = len(queue)
-        if cancelled:
+        if blocked:
+            report.status = "error"
+            report.message = f"Stopped with {remaining} track(s) left. {blocked}"
+        elif cancelled:
             report.status = "cancelled"
             report.message = (
                 f"Cancelled with {remaining} track(s) left. "

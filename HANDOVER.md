@@ -371,6 +371,34 @@ Four things that cost time or would have:
   before. Reading the page's address instead breaks the next time Google
   changes a redirect.
 
+### YouTube blocks a machine that syncs a large library
+
+Measured on 13 September, straight after a 399-track sync: **every** search from
+that machine returned six `Sign in to confirm you're not a bot` errors and zero
+results. Not obscure tracks - "Queen - Bohemian Rhapsody" too. Signed out, the
+tool could not download anything at all.
+
+Two consequences.
+
+**The sign-in is no longer about bitrate.** It was built for the 256kbps Premium
+stream; it is now the difference between downloading and not. A signed-in
+session is not subject to the check.
+
+**The reason reached the user wrong.** A search runs with `ignoreerrors` so that
+one withdrawn video does not lose the other five, which meant the bot check was
+swallowed and every track was recorded as "No audio could be found for X" - so
+ten failures looked like a metadata problem and were not. `_YtDlpLogger` now
+watches for the marker, `_search_raw` raises `BlockedError`, and the run stops
+rather than spending an hour failing every remaining track the same way.
+
+The ten failures from the 13 September run were this, not the scoring guards:
+six came from playlist imports, three from the follow backfill, one from
+browsing, and eight of the ten had good Deezer metadata.
+
+Whether four-at-a-time makes the block likelier is untested. The run that
+triggered it was sequential, so volume rather than concurrency is the cause,
+but it is the obvious thing to look at if it recurs.
+
 ### One unwritable file used to end the whole run
 
 Sync run 10, on the night of 12 September, stopped after 45 of 431 tracks with
@@ -1324,6 +1352,8 @@ will come from and where the next work should go.
 | An Eject button in the local app | Cancel already tidied up, but nothing told the user when Windows had finished writing |
 | One bad file fails alone | A single missing download ended a 431-track run after 45 |
 | The progress line says when a run has stopped | It held the last step's text forever, so a finished sync still read as one in progress |
+| YouTube's bot check is recognised | It was being reported as the track not existing, which is a different problem with a different fix |
+| Failed tracks on the Overview | Asked for on 13 September; the Songs filter alone was not where anyone looks |
 
 ### Eleven things that were got wrong first
 

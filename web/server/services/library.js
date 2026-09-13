@@ -301,7 +301,15 @@ export async function libraryStats(userId) {
        (SELECT count(*)::int
           FROM library_tracks lt JOIN tracks t ON t.id = lt.track_id
          WHERE lt.user_id = $1 AND t.metadata_state IN ('pending', 'unresolved'))
-         AS "needsAttention"`,
+         AS "needsAttention",
+       -- Tracks the local app could not put on a paired iPod. Counted here so
+       -- the overview can say so: the sync knows, the server has always stored
+       -- it, and until now the only way to find out was to look in the database.
+       (SELECT count(DISTINCT dt.track_id)::int
+          FROM device_tracks dt
+          JOIN devices d ON d.id = dt.device_id
+         WHERE d.user_id = $1 AND d.revoked_at IS NULL AND dt.state = 'failed')
+         AS "syncFailed"`,
     [userId]
   );
   return row;

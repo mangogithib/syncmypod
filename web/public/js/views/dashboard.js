@@ -51,6 +51,31 @@ export async function renderDashboard(view, context) {
         );
       }
 
+      // Tracks the local app could not fetch. Distinct from the row above:
+      // those are in the library and sync with blank fields, these never
+      // reached the iPod at all, and the fix is different - a source URL rather
+      // than an artist name.
+      if (stats.syncFailed > 0) {
+        blocks.push(
+          h(
+            'div.notice.notice-danger',
+            icon('warn', 16),
+            h(
+              'div',
+              h(
+                'strong',
+                `${formatNumber(stats.syncFailed)} track${stats.syncFailed === 1 ? '' : 's'} did not reach the iPod. `
+              ),
+              h(
+                'span',
+                'The last sync could not find audio for them. Paste a source URL on each one and they will go across next time. '
+              ),
+              h('a', { href: '#/library?state=sync-failed' }, 'See which')
+            )
+          )
+        );
+      }
+
       if (devices.devices.length === 0) {
         blocks.push(
           notice(
