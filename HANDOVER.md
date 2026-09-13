@@ -371,6 +371,32 @@ Four things that cost time or would have:
   before. Reading the page's address instead breaks the next time Google
   changes a redirect.
 
+### One unwritable file used to end the whole run
+
+Sync run 10, on the night of 12 September, stopped after 45 of 431 tracks with
+`Could not write to the iPod: ...\syncmypod-run-632y7yvw\198\source.m4a`. The
+message is the bare path because that is all pypodlib raises; reproduced against
+a virtual device, a source file that is missing when `add_tracks` runs produces
+exactly that string and nothing else.
+
+`add_files` writes a batch and commits the database in one call, so anything the
+device refuses took the batch and the run with it. An hour of downloading thrown
+away over one track is the wrong trade, especially now the web tool can show a
+failed track. `_commit_batch` therefore checks the files still exist before
+handing them over, and `_write_batch` falls back to writing one at a time when a
+batch is refused, so whatever is wrong fails alone.
+
+**What made the file vanish is not established.** The workspace is under the
+system temp directory, the run was the only one going, and `purge_abandoned`
+will not touch a directory younger than six hours. Antivirus is the likeliest
+candidate on Windows and is unproven. The run the next morning did all 399 with
+no repeat. Worth re-opening only if it happens again - the handling is now
+right whatever the cause.
+
+That crashed run is also what left `syncmypod-run-632y7yvw` behind, which is
+what `test_nothing_downloaded_is_left_behind` then tripped over. An earlier note
+in this file blamed concurrent test runs for that; it was wrong.
+
 ### An iPod can only ever show one artist per track
 
 Asked on 13 September, and the answer is the file format rather than a choice.
@@ -1296,6 +1322,8 @@ will come from and where the next work should go.
 | Four downloads at a time | The slow part of a sync is the network and it parallelises cleanly; the device write does not and stays serialised |
 | Failed syncs surfaced on the web | The local app has always reported them and the server has always stored them; nothing showed them |
 | An Eject button in the local app | Cancel already tidied up, but nothing told the user when Windows had finished writing |
+| One bad file fails alone | A single missing download ended a 431-track run after 45 |
+| The progress line says when a run has stopped | It held the last step's text forever, so a finished sync still read as one in progress |
 
 ### Eleven things that were got wrong first
 

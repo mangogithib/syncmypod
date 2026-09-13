@@ -600,3 +600,70 @@ class TestFetchingSeveralAtOnce:
         sync.run(paired, mount=str(ipod.mount_path), concurrency=4)
 
         assert not (workspaces_now() - before), "this run left its downloads behind"
+
+
+class TestOneBadFileDoesNotEndTheRun:
+    """What stopped a 431-track sync after 45 on 12 September.
+
+    `add_files` writes the batch and commits the database in one call, so a file
+    the device will not take used to take the whole batch - and the whole run -
+    with it. An hour of downloading thrown away over one track is the wrong
+    trade, especially when the web tool already knows how to show a failed one.
+    """
+
+    @respx.mock
+    def test_a_download_that_vanished_fails_alone(
+        self, ipod, paired, audio_source, monkeypatch
+    ):
+        """The exact failure seen: the file is gone by the time it is written.
+
+        pypodlib reports it as the bare path with no word about what is wrong
+        with it, which is why it is checked before the handover rather than
+        after.
+        """
+        original = sync._commit_batch
+
+        def delete_track_two_first(ipod_arg, record, staged, work, say):
+            for item, path, _result in staged:
+                if item.id == 2 and path.exists():
+                    path.unlink()
+            return original(ipod_arg, record, staged, work, say)
+
+        monkeypatch.setattr(sync, "_commit_batch", delete_track_two_first)
+        mock_server(manifest([track(n) for n in range(1, 5)]))
+
+        report = sync.run(paired, mount=str(ipod.mount_path))
+
+        assert report.status == "done", "the run ended instead of failing one track"
+        assert report.synced == 3
+        assert [r.track_id for r in report.failed] == [2]
+        assert "disappeared" in (report.failed[0].error or "")
+        assert len(ipod.tracks(reload=True)) == 3
+
+    @respx.mock
+    def test_a_file_the_device_refuses_fails_alone(
+        self, ipod, paired, audio_source, monkeypatch
+    ):
+        """Anything else the device will not take, found by retrying singly."""
+        real_add = device.IpodDevice.add_files
+        seen = {"batches": 0}
+
+        def add_files(self, paths):
+            if len(paths) > 1:
+                seen["batches"] += 1
+                raise device.DeviceError("the whole batch was refused")
+            if any(Path(p).parent.name == "2" for p in paths):
+                raise device.DeviceError("this one file was refused")
+            return real_add(self, paths)
+
+        # The class, not the instance: IpodDevice uses __slots__, so an
+        # attribute cannot be attached to one.
+        monkeypatch.setattr(device.IpodDevice, "add_files", add_files)
+        mock_server(manifest([track(n) for n in range(1, 5)]))
+
+        report = sync.run(paired, mount=str(ipod.mount_path))
+
+        assert seen["batches"] >= 1, "the batch path was never taken"
+        assert report.status == "done"
+        assert report.synced == 3
+        assert [r.track_id for r in report.failed] == [2]

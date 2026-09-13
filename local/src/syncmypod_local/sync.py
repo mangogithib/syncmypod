@@ -582,12 +582,42 @@ def _commit_batch(
     work: workspace.Workspace,
     say: Progress,
 ) -> list[Result]:
-    """Write a batch to the device, then delete what it was written from."""
-    say("writing", {"count": len(staged)})
-    landed = ipod.add_files([path for _item, path, _result in staged])
+    """Write a batch to the device, then delete what it was written from.
 
+    **One bad file must not end the run.** `add_files` writes the batch and
+    commits the database in a single call, so anything it refuses takes the
+    whole batch with it - and on 12 September that ended a 431-track sync after
+    45, because one downloaded file was no longer on disk when its turn came.
+    An hour of downloading thrown away over one track is the wrong trade.
+
+    So the batch is tried, and if it fails the files are written one at a time:
+    whatever is wrong then fails alone and is reported as a failed track, which
+    is what the web tool already knows how to show.
+    """
+    say("writing", {"count": len(staged)})
+
+    # Checked first because it is the failure that actually happened, it is
+    # cheap, and it gives a better message than the library's - which is the
+    # bare path with no word about what is wrong with it.
+    usable: list[tuple[TrackPlan, Path, Result]] = []
     results: list[Result] = []
     for item, path, result in staged:
+        if path.exists():
+            usable.append((item, path, result))
+            continue
+        logger.warning("%s: the downloaded file is gone before writing", item.label)
+        results.append(
+            Result(
+                track_id=item.id,
+                state="failed",
+                label=item.label,
+                error="The downloaded file disappeared before it could be written.",
+            )
+        )
+
+    landed = _write_batch(ipod, usable, say)
+
+    for item, path, result in usable:
         location = landed.get(str(path.resolve()))
         if not location:
             # The file was handed over and the device did not report taking it.
@@ -618,6 +648,42 @@ def _commit_batch(
         work.discard(item.id)
 
     return results
+
+
+def _write_batch(
+    ipod: device_module.IpodDevice,
+    staged: list[tuple[TrackPlan, Path, Result]],
+    say: Progress,
+) -> dict[str, str]:
+    """Hand the batch to the device, falling back to one file at a time.
+
+    Returns the source-path to device-location map, with anything the device
+    would not take simply absent - the caller already treats a missing entry as
+    a failed track.
+    """
+    if not staged:
+        return {}
+
+    paths = [path for _item, path, _result in staged]
+    try:
+        return ipod.add_files(paths)
+    except device_module.DeviceError as err:
+        if len(paths) == 1:
+            logger.warning("%s: %s", staged[0][0].label, err)
+            return {}
+        logger.warning(
+            "Writing %d track(s) together failed (%s); trying them one at a time",
+            len(paths),
+            err,
+        )
+
+    landed: dict[str, str] = {}
+    for item, path, _result in staged:
+        try:
+            landed.update(ipod.add_files([path]))
+        except device_module.DeviceError as err:
+            logger.warning("%s could not be written: %s", item.label, err)
+    return landed
 
 
 def _write_playlists(ipod: device_module.IpodDevice, plan: Plan, record: ledger.Ledger) -> int:

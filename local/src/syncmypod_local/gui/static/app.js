@@ -485,6 +485,11 @@ function poll() {
     }
 
     setRunning(false);
+    // The progress line held whatever the last step said - "Building cover art
+    // for 423 track(s)..." - and nothing ever replaced it, so a finished run
+    // still read as one in progress and the only way to tell was to notice the
+    // Result card underneath. Say plainly that it has stopped.
+    finishProgress(data.summary, data.error);
     if (data.error) showSummary({ status: "error", message: data.error, failed: [] });
     else if (data.summary) showSummary(data.summary);
     refreshState();
@@ -613,6 +618,29 @@ function markFailed(id, message) {
 
 function note(text) {
   el("progress-count").textContent = text;
+}
+
+// What the progress line says once there is nothing left to do.
+function finishProgress(summary, error) {
+  el("progress-fill").style.width = "100%";
+  if (error) {
+    note("Stopped with an error.");
+    return;
+  }
+  if (!summary) {
+    note("Finished.");
+    return;
+  }
+  if (summary.dryRun) {
+    note("Check finished - nothing was written.");
+    return;
+  }
+  const failed = (summary.failed || []).length;
+  const parts = [`${summary.synced} synced`];
+  if (failed) parts.push(`${failed} failed`);
+  if (summary.removed) parts.push(`${summary.removed} removed`);
+  const stopped = summary.status === "cancelled" ? "Stopped" : "Finished";
+  note(`${stopped}: ${parts.join(", ")}. Safe to eject.`);
 }
 
 function showSummary(summary) {
