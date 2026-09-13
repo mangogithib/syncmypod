@@ -228,18 +228,34 @@ class IpodDevice:
         application identifies a track by and the numeric ids are reassigned
         every time the database is written. Used to answer "has anything about
         the playlists changed" without writing anything.
+
+        **A playlist counts as being on the device only if it is in both
+        datasets.** The iPod reads MHSD 3 and this library's playlist list is
+        MHSD 2 - see `_mirror_into_dataset_three`. Reporting a playlist that
+        exists only in dataset 2 would make the sync decide nothing had changed
+        and skip the write, leaving a device already in that state broken for
+        good. Omitting it instead means the next sync repairs it.
         """
         if not self.has_database:
             return {}
         library = self._library()
         by_id = {t.db_track_id: t.location for t in library.tracks if t.location}
+        mirrored = _dataset_three_counts(library)
+
         contents: dict[str, list[str]] = {}
         for playlist in library.playlists:
             if playlist.master:
                 continue
-            contents[playlist.name] = [
+            locations = [
                 by_id[track_id] for track_id in playlist.track_ids if track_id in by_id
             ]
+            if mirrored.get(playlist.name) != len(playlist.track_ids):
+                logger.info(
+                    "%r is missing from the dataset the iPod reads; it will be rewritten",
+                    playlist.name,
+                )
+                continue
+            contents[playlist.name] = locations
         return contents
 
     def playlist_names(self) -> list[str]:
@@ -331,6 +347,7 @@ class IpodDevice:
                 )
             ordered = [by_location[loc].db_track_id for loc in locations if loc in by_location]
             playlist.track_ids = ordered
+            _mirror_into_dataset_three(library, playlist, ordered)
 
         self._commit()
 
@@ -538,6 +555,57 @@ def _file_for(mount: Path, location: str) -> Path:
     """``:iPod_Control:Music:F00:ABCD.m4a`` to a real path on this machine."""
     parts = [p for p in location.split(":") if p]
     return Path(mount).joinpath(*parts)
+
+
+def _dataset_three_counts(library: Any) -> dict[str, int]:
+    """How many tracks each playlist has in the dataset the iPod reads."""
+    inner = getattr(library, "_library", library)
+    rows = getattr(inner, "_ds3", None) or []
+    return {
+        str(row.get("Title")): len(row.get("items") or [])
+        for row in rows
+        if not row.get("master_flag")
+    }
+
+
+def _mirror_into_dataset_three(library: Any, playlist: Any, ordered: list[int]) -> None:
+    """Put a user playlist in the dataset the iPod actually reads.
+
+    An iTunesDB carries its playlists twice. MHSD type 2 is the original list;
+    type 3 is the one added for the 5th generation and read in preference to it
+    by everything since. pypodlib's `create_playlist` appends only to type 2 -
+    its own name for type 3 is "podcast playlists", which is what the field was
+    first used for and not what it means now.
+
+    The symptom is precise and was reported as "the playlist is not on the
+    iPod": the database holds it, `playlist_names()` lists it, the music is all
+    there, and the device's Playlists menu is empty. Measured on the real
+    device, MHSD 3 held one entry - the master playlist - while MHSD 2 held
+    three.
+
+    So each user playlist is copied across by hand. The master is left alone:
+    the database writer maintains it in both already.
+    """
+    inner = getattr(library, "_library", library)
+    dataset_three = getattr(inner, "_ds3", None)
+    if dataset_three is None or playlist.master:
+        return
+
+    name = playlist.name
+    for row in dataset_three:
+        if row.get("Title") == name:
+            row["items"] = [{"db_track_id": int(v)} for v in ordered]
+            row["mhip_child_count"] = len(ordered)
+            return
+
+    # Copied from the type 2 row rather than built fresh, so every field the
+    # writer expects - the ids, the flags, the preferences blob - comes along
+    # and only the dataset marker differs.
+    mirrored = dict(playlist.data)
+    mirrored["_mhsd_dataset_type"] = 3
+    mirrored["items"] = [{"db_track_id": int(v)} for v in ordered]
+    mirrored["mhip_child_count"] = len(ordered)
+    dataset_three.append(mirrored)
 
 
 # Every audio container an iPod will play. Used only to answer "is there music

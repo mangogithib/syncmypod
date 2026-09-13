@@ -24,19 +24,29 @@ from syncmypod_local import config, device, downloader, ledger, sync, transcode,
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def workspaces_now() -> set:
-    """Download folders in the system temp directory, right now.
+@pytest.fixture
+def workspace_paths(monkeypatch):
+    """The workspace directories the run under test actually created.
 
-    Compared before and after rather than asserted to be empty. The workspace
-    lives in the shared system temp, so "there are none at all" is a claim about
-    every process on the machine - a second test run, or the installed
+    Not a before-and-after scan of the system temp directory. The workspace
+    lives in the shared temp, so any claim about what is in there is a claim
+    about every process on the machine - a second test run, or the installed
     application doing a real sync - and it fails for reasons that have nothing
-    to do with the code under test. What matters is that *this* run left nothing
-    of its own.
-    """
-    import tempfile
+    to do with the code under test. That produced two false alarms and an hour
+    chasing a leak that was never there.
 
-    return set(Path(tempfile.gettempdir()).glob(f"{workspace._PREFIX}*"))
+    Recording the paths as they are created is exact and immune to both.
+    """
+    created: list[Path] = []
+    original = workspace.Workspace.__enter__
+
+    def remember(self):
+        entered = original(self)
+        created.append(entered.path)
+        return entered
+
+    monkeypatch.setattr(workspace.Workspace, "__enter__", remember)
+    return created
 
 
 @pytest.fixture
@@ -111,13 +121,14 @@ class TestAFullRun:
         assert written.album == "Longer Days"
 
     @respx.mock
-    def test_nothing_downloaded_is_left_behind(self, ipod, paired, audio_source, tmp_path):
+    def test_nothing_downloaded_is_left_behind(
+        self, ipod, paired, audio_source, workspace_paths
+    ):
         mock_server(manifest())
-
-        before = workspaces_now()
         sync.run(paired, mount=str(ipod.mount_path))
 
-        assert not (workspaces_now() - before), "this run left its downloads behind"
+        assert workspace_paths, "no workspace was created, so nothing was proved"
+        assert not [p for p in workspace_paths if p.exists()], "downloads were left behind"
 
     @respx.mock
     def test_a_backup_is_taken_before_anything_is_written(self, ipod, paired, audio_source):
@@ -592,14 +603,13 @@ class TestFetchingSeveralAtOnce:
 
     @respx.mock
     def test_nothing_is_left_on_disk_when_several_ran_at_once(
-        self, ipod, paired, slow_source, tmp_path
+        self, ipod, paired, slow_source, workspace_paths
     ):
         mock_server(manifest([track(n) for n in range(1, 9)]))
-
-        before = workspaces_now()
         sync.run(paired, mount=str(ipod.mount_path), concurrency=4)
 
-        assert not (workspaces_now() - before), "this run left its downloads behind"
+        assert workspace_paths, "no workspace was created, so nothing was proved"
+        assert not [p for p in workspace_paths if p.exists()], "downloads were left behind"
 
 
 class TestOneBadFileDoesNotEndTheRun:
@@ -801,3 +811,48 @@ class TestPlaylistsAreReconciledEverySync:
 
         assert report.plan.playlists_differ is False
         assert not report.plan.to_download
+
+
+class TestADeviceAlreadyMissingTheMirrorIsRepaired:
+    """The self-healing half of the MHSD 3 fix.
+
+    Every playlist written before 13 September went into dataset 2 only, so
+    every device synced by this tool is in that state. The repair has to happen
+    on its own: if "have the playlists changed?" only looked at dataset 2 it
+    would answer "no" and skip the write, and the iPod would stay wrong for
+    good.
+    """
+
+    @respx.mock
+    def test_the_next_sync_puts_it_back(self, ipod, paired, audio_source):
+        payload = manifest(
+            tracks=[track(1), track(2)],
+            playlists=[{"id": 1, "name": "Liked", "trackIds": [1, 2]}],
+        )
+        mock_server(payload)
+        sync.run(paired, mount=str(ipod.mount_path))
+
+        # Put the device into the pre-fix state: present in dataset 2, absent
+        # from the one the iPod reads.
+        pod = device.open_at(ipod.mount_path)
+        library = pod._handle.library()
+        inner = getattr(library, "_library", library)
+        inner._ds3[:] = [r for r in inner._ds3 if r.get("master_flag")]
+        pod._handle.save(raise_on_error=True)
+
+        broken = device.open_at(ipod.mount_path)
+        assert "Liked" in broken.playlist_names(), "dataset 2 should still list it"
+        assert "Liked" not in broken.playlist_contents(), (
+            "a playlist the iPod cannot see must not count as present"
+        )
+
+        respx.mock.reset()
+        mock_server(payload)
+        report = sync.run(paired, mount=str(ipod.mount_path))
+
+        assert report.plan.playlists_differ is True, "the repair was not planned"
+        repaired = device.open_at(ipod.mount_path)
+        library = repaired._handle.library()
+        inner = getattr(library, "_library", library)
+        assert [r.get("Title") for r in inner._ds3 if not r.get("master_flag")] == ["Liked"]
+        assert "Liked" in repaired.playlist_contents()

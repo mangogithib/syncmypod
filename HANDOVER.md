@@ -406,25 +406,48 @@ Whether four-at-a-time makes the block likelier is untested. The run that
 triggered it was sequential, so volume rather than concurrency is the cause,
 but it is the obvious thing to look at if it recurs.
 
-### A playlist can be in the database and not on the iPod
+### An iTunesDB holds its playlists twice, and only one copy counts
 
-Reported on 13 September: "Liked" was written, the run said so, and the device
-did not show it. Reading the iTunesDB off the device confirmed it was there with
-92 of its 94 tracks. So the write worked and the display did not.
+Reported as "the playlist is not on the iPod", and it was exactly that: the
+database held "Liked" with 92 of its 94 tracks, `playlist_names()` listed it,
+all 436 songs played, and the device's Playlists menu was empty.
 
-The suspect is the playlist's persistent id. pypodlib generates it with
-`random.getrandbits(64)` - a full *unsigned* 64-bit value - and the one on the
-device was 10071174128858904937, above 2^63. If the firmware reads that field as
-signed it is a negative id. That fits: present in the database, absent from the
-menu, and a coin flip on every playlist created, which is why testing never saw
-it.
+**MHSD type 2 is the original playlist list. MHSD type 3 was added for the 5th
+generation and is the one everything since reads.** pypodlib's
+`create_playlist` appends only to type 2 - it calls type 3 "podcast playlists",
+which is what the field was first used for and not what it means now. Parsed
+straight off the real device:
 
-**Not proven.** An A/B test was written to the real device rather than another
-guess: "Liked" was given an id below 2^63, and a control playlist
-"ZZ High Id Test" created with one above it. Liked visible and the control not
-means the id is the cause and `create_playlist` must mask the value to 63 bits.
-Neither visible means it is something else. Settle this before changing anything
-else about playlists.
+```
+mhsd type=1 child_count=436   <- tracks
+mhsd type=3 child_count=1     <- playlists the iPod reads: the master, only
+mhsd type=2 child_count=3     <- master, Liked, and a test playlist
+```
+
+`_mirror_into_dataset_three` in `device.py` copies each user playlist across
+after it is written, taking the whole type 2 row so every field the writer
+expects comes with it and only the dataset marker differs. The master is left
+alone; the database writer already maintains it in both.
+
+**It repairs itself, and that took a second change.** Every playlist this tool
+wrote before 13 September went into dataset 2 only, so every device it has ever
+synced is in the broken state. `playlist_contents()` - which answers "have the
+playlists changed?" - read dataset 2, so it would have answered "no" and
+skipped the write, leaving those devices wrong for good. It now counts a
+playlist as present only when both datasets agree; one that exists only in
+dataset 2 is reported as absent, because as far as the iPod is concerned it is.
+The next sync then rewrites it.
+
+Confirmed working on the real 5.5th gen on 13 September: "Liked" appears under
+Music > Playlists with its 92 tracks.
+
+**One wrong guess before this, worth keeping.** The first suspect was the
+playlist's persistent id: pypodlib generates it with `random.getrandbits(64)`
+and the one on the device was above 2^63, which a signed read would make
+negative. Plausible, wrong, and disproved by writing an A/B pair to the real
+device rather than reasoning about it - the low-id playlist did not appear
+either. The id is still unsigned-64 and still probably worth masking one day,
+but it is not this.
 
 ### Playlists are reconciled on every sync
 
@@ -1223,6 +1246,27 @@ available static macOS build is GPL and this project is MIT —
 - **Report failures plainly.** If a test fails, say so with the output.
 - **No secrets in the repository.** `.env` and `config.json` are gitignored.
 
+### Two test runs at once will fail, and not for a real reason
+
+pypodlib's device write guard is a machine-wide lock keyed by the *volume*, and
+every virtual iPod the suite creates lives under `tmp_path` - which is the same
+volume for all of them. So a second `pytest` started while one is running
+contends for that lock, and the losing run fails in `IpodDevice.backup` with
+
+```
+Could not back up the iPod database: Another iOpenPod process is using this
+backup location.
+WARNING pypodlib.device.write_guard: Could not release iPod writer lock
+cleanly: [Errno 13] Permission denied
+```
+
+Nothing is wrong with the code. **Run one suite at a time.** This wasted time
+on three separate occasions on 13 September, twice sending the search after a
+"leak" of download folders that was the other run's.
+
+Stale lock files accumulate at `%TEMP%\pypodlib-device-locks` - one per device
+path, so hundreds after a few runs. Harmless, and safe to delete.
+
 ### Tests
 
 The Windows machine has Python 3.13. The venv is kept outside the project
@@ -1422,6 +1466,7 @@ will come from and where the next work should go.
 | The progress line says when a run has stopped | It held the last step's text forever, so a finished sync still read as one in progress |
 | YouTube's bot check is recognised | It was being reported as the track not existing, which is a different problem with a different fix |
 | Failed tracks on the Overview | Asked for on 13 September; the Songs filter alone was not where anyone looks |
+| Playlists written to MHSD 3 | The iPod reads dataset 3 for playlists; pypodlib only ever wrote dataset 2 |
 | Playlists reconciled every sync | A playlist edit is work even when every song is already on the device |
 | A relaxed 40s pass for longer uploads | The catalogue's duration is the release's; YouTube often has only the video, with an intro |
 

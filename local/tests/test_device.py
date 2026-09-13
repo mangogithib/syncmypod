@@ -9,9 +9,13 @@ that actually matter here are both covered without hardware.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from syncmypod_local import device
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 # The two targets this project cares about, and the one difference between them
 # that changes what the sync must do.
@@ -317,3 +321,72 @@ class TestAnIpodWithNoDatabase:
         (music / "notes.txt").write_bytes(b"x")
 
         assert device._count_audio_files(video.mount_path) == 2
+
+
+class TestPlaylistsReachTheDatasetTheIpodReads:
+    """An iTunesDB carries its playlists twice, and only one of them counts.
+
+    MHSD type 2 is the original playlist list; type 3 was added for the 5th
+    generation and is what everything since reads. pypodlib's `create_playlist`
+    appends only to type 2 - it calls type 3 "podcast playlists", which is what
+    the field was first used for and not what it means now.
+
+    The symptom is exact, and was reported as "the playlist is not on the iPod":
+    the database holds it, `playlist_names()` lists it, all the music is there,
+    and the device's Playlists menu is empty. Measured on the real 5.5th gen,
+    MHSD 3 held one entry - the master - while MHSD 2 held three.
+    """
+
+    @staticmethod
+    def datasets(pod):
+        library = pod._handle.library()
+        inner = getattr(library, "_library", library)
+        return getattr(inner, "_ds2", []), getattr(inner, "_ds3", [])
+
+    @staticmethod
+    def names(rows):
+        return [r.get("Title") for r in rows]
+
+    def test_a_written_playlist_is_in_both_datasets(self, video, tmp_path):
+        source = tmp_path / "song.m4a"
+        source.write_bytes((FIXTURES / "tagged.m4a").read_bytes())
+        landed = video.add_files([source])
+        location = next(iter(landed.values()))
+
+        video.write_playlists([("Road Trip", [location])])
+
+        reopened = device.open_at(video.mount_path)
+        ds2, ds3 = self.datasets(reopened)
+        assert "Road Trip" in self.names(ds2)
+        assert "Road Trip" in self.names(ds3), "the iPod reads dataset 3 and it is not there"
+
+    def test_the_two_datasets_agree_on_the_tracks(self, video, tmp_path):
+        sources = []
+        for index in range(2):
+            path = tmp_path / f"song{index}.m4a"
+            path.write_bytes((FIXTURES / "tagged.m4a").read_bytes())
+            sources.append(path)
+        landed = video.add_files(sources)
+        locations = list(landed.values())
+
+        video.write_playlists([("Both", locations)])
+
+        reopened = device.open_at(video.mount_path)
+        ds2, ds3 = self.datasets(reopened)
+        in_two = next(r for r in ds2 if r.get("Title") == "Both")
+        in_three = next(r for r in ds3 if r.get("Title") == "Both")
+        assert len(in_two["items"]) == len(locations)
+        assert len(in_three["items"]) == len(in_two["items"])
+
+    def test_rewriting_updates_dataset_three_rather_than_duplicating(self, video, tmp_path):
+        source = tmp_path / "song.m4a"
+        source.write_bytes((FIXTURES / "tagged.m4a").read_bytes())
+        landed = video.add_files([source])
+        location = next(iter(landed.values()))
+
+        video.write_playlists([("Twice", [location])])
+        video.write_playlists([("Twice", [location])])
+
+        reopened = device.open_at(video.mount_path)
+        _, ds3 = self.datasets(reopened)
+        assert self.names(ds3).count("Twice") == 1
