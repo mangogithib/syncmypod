@@ -13,7 +13,7 @@ state of play, what was built most recently, and the eight things that were
 tried and got wrong before they were got right. Then come back to section 3,
 which is the one rule the whole design rests on.
 
-**Last updated:** 13 September 2026.
+**Last updated:** 13 September 2026, end of day.
 
 ---
 
@@ -34,17 +34,23 @@ which is the one rule the whole design rests on.
 | Followed artists | Working — future releases, optionally the back catalogue |
 | Device pairing + sync API | Working, verified end to end. Failed tracks now show in the web library |
 | Local app: the sync engine | Working, verified on real hardware — a blank restored iPod included. **Four downloads at a time** |
+| Playlists on the device | Working — **written to MHSD 3, the dataset the iPod reads.** Reconciled every sync |
 | Album art on the device | Working — verified by decoding it back off the iPod |
 | YouTube Premium sign-in (local) | Reads a browser where it can, else **opens one of its own** and takes the session from it |
 | Local app: GUI | Working — nothing needs a terminal |
-| Downloadable build | Published — 0.1.1. **0.1.2 is built and unpublished** |
+| Downloadable build | **Published — 0.1.6**, built and attached by CI from the `local-v0.1.6` tag |
 | Phone layout | Working — measured at 375px, list rows included |
 | CI | Green. Parses every file, checks for undefined references, checks the api client, runs migrations |
 | Connected YouTube account | **Removed.** Needed a per-instance Google client *and* a Test users entry |
 | **A web test suite** | **Still none. The biggest gap — see section 6** |
 
-About 18,000 lines: 56 JavaScript files, 16 Python modules, 8 SQL migrations.
-**203 Python tests, all passing. Zero JavaScript tests.**
+About 23,900 lines: 55 JavaScript files, 17 Python modules, 8 SQL migrations.
+**247 Python tests, all passing. Zero JavaScript tests.**
+
+Swept for dead code on 13 September across all three languages - unused Python
+defs, JS exports nothing imports, CSS classes no markup carries. Three things
+were removed and the rest of the list was false positives worth keeping; the
+reasoning is in the commit for `d7a5dce`.
 
 ### Live instance
 
@@ -57,7 +63,7 @@ About 18,000 lines: 56 JavaScript files, 16 Python modules, 8 SQL migrations.
 | Containers | `syncmypod-app-1`, `syncmypod-db-1`, `syncmypod-caddy-1` |
 | Certificate | Let's Encrypt, expires 10 Dec 2026, auto-renews |
 
-**Library contents, late on 12 September** — this is Mohamed's own music now,
+**Library contents, end of 13 September** — this is Mohamed's own music now,
 not test data. Do not clear it. These are the app's own numbers, from the same
 query the sidebar uses (`libraryStats`); an earlier version of this table gave
 579 artists and 407 albums, which were whole-catalogue counts rather than his
@@ -65,13 +71,14 @@ library.
 
 | | |
 |---|---|
-| Songs | 414 |
-| Artists / albums | 486 / 314 |
-| Playlists | 1 ("Liked") |
+| Songs | 447 |
+| Artists / albums | 499 / 333 |
+| Playlists | 1 ("Liked", 94 tracks) |
 | Songs with no artist | 15 — they sync, with the fields blank |
+| Tracks the sync could not fetch | 7 — shown on the Overview and filterable |
 | Combined artist rows | 0 |
-| Paired devices | 5, most from testing |
-| Followed artists | 2 (M.H.R, Dabzee) |
+| Paired devices | 1 active (MANR-LT001); four older ones revoked |
+| Followed artists | 3 |
 | Followed sources | 0 |
 
 Where the songs came from: 290 from YouTube playlist imports, 72 from the
@@ -90,14 +97,24 @@ tracks themselves are all still in the library.
 
 <https://github.com/mangogithib/syncmypod/releases/latest>
 
-`SyncMyPod-0.1.1-windows-x64.zip`, 183MB. Unpack anywhere and run
+`SyncMyPod-0.1.6-windows-x64.zip`, 175MB. Unpack anywhere and run
 `syncmypod.exe`. Everything — pairing included — happens in the window that
 opens.
 
-**Creating a release through the API also creates the tag**, which fires
-`release.yml`, which builds its own copy and would replace a hand-verified asset
-mid-upload. Both releases so far were published by hand with that run cancelled.
-Pick one route or the other, not half of each.
+**Cut a release by pushing a tag, and nothing else.**
+
+```bash
+git tag -a local-v0.1.6 -m "..." && git push origin local-v0.1.6
+```
+
+`release.yml` then runs the full suite on a Windows runner, builds with
+PyInstaller and attaches the zip to a published release, so the download is the
+build the tests passed against. 0.1.6 was cut this way and it worked cleanly.
+
+The trap is doing both: **creating a release through the API also creates the
+tag**, which fires the same workflow, which builds its own copy and replaces a
+hand-uploaded asset mid-upload. 0.1.0 and 0.1.1 were published by hand with that
+run cancelled. Pick one route; the tag is the better one.
 
 **Credentials are deliberately not in this file.** It is in a git repository,
 and repositories get cloned and shared. The account is `mo`; reset the password
@@ -1157,6 +1174,28 @@ resolver, `lib/normalise.js` (`matchKey`, `scoreCandidate`, `titleOverlap`,
 `answerExplains`) and `services/artist-split.js` are pure logic with real
 regression history; the band list in section 5 is ready-made fixtures.
 
+### 1a. Backfill the source URLs for the older imports
+
+**The highest-value unfinished thing, and the mechanism already exists.** A
+track with a `sourceHint` skips the YouTube search entirely and downloads from
+the address it was imported from - no scoring, no duration guard, no exposure to
+the bot check. The YouTube playlist reader stores it, and it works:
+
+| Added via | Tracks | With a source URL |
+|---|---|---|
+| `youtube-import` | 286 | **0** |
+| `youtube-music-import` | 3 | 3 |
+
+The 286 came from a bulk import that ran before `sourceHint` was wired up. Their
+original playlist ids are all still in `import_jobs` - five YouTube playlists,
+listed by `SELECT source, source_ref, source_name FROM import_jobs` - so the
+playlists can be re-read and matched back by title to fill `source_hint` in.
+
+Mohamed's idea, on 13 September, and a good one: it takes the bulk of the
+library out of the search path permanently. Matching by title is the only
+awkward part - a title that appears twice in one playlist needs a decision, and
+"skip it and leave the hint null" is the safe one.
+
 ### 1b. Work out what else the simulated iPod is hiding
 
 `create_virtual` is the right tool and it is how the sync path gets tested
@@ -1194,15 +1233,19 @@ already has every piece it needs.
 
 ### 3. A "needs attention" view
 
-20 songs have a title and no artist. They *do* sync now - with the fields blank,
+15 songs have a title and no artist. They *do* sync now - with the fields blank,
 so they arrive on the iPod under Unknown Artist - which makes this untidy rather
-than blocking.
+than blocking. A further 7 could not be fetched at all and are a different
+problem with a different fix: a source URL rather than an artist name.
 
-Re-matching has taken everything YouTube Music could identify; what is left
-genuinely needs a human. Editing them one at a time from the Songs list is the
-only way to do that at the moment. A filtered view with inline artist entry is
-the obvious next step, and both halves already exist: the filter is
-`#/library?state=unresolved` and the field already autocompletes.
+Both are visible now, which they were not before 13 September: the Overview
+carries a banner for each, and the Songs filter has `state=unresolved` and
+`state=sync-failed`. What is still missing is a way to *act* on them in bulk.
+Re-matching has taken everything YouTube Music could identify, so the remaining
+15 genuinely need a human, and editing them one at a time from the Songs list is
+the only way at the moment. A filtered view with inline artist entry is the
+obvious next step, and both halves already exist: the filter, and a field that
+autocompletes against the library.
 
 ### 4. macOS and Linux builds of the local app
 
@@ -1371,31 +1414,35 @@ cd local/dist && unzip -p SyncMyPod-*.zip '*/_internal/**/app.js' | grep -c rend
 - **The library is Mohamed's own music.** Earlier versions of this file called
   it test data; that stopped being true on 12 September. Do not clear it. The
   numbers are in section 1.
-- **20 songs have a title and no artist.** They *do* sync now, with the fields
-  blank, so this is untidy rather than broken. Re-matching has already taken
-  everything YouTube Music could identify; the rest need a human. See "A
-  needs-attention view" in section 6.
-- **Five devices are paired**, most from testing. "Mo Desktop" is the real
-  Windows machine; "Dev container", "Test PC", "Push test" and "MANR-LT001" can
-  be revoked from the web interface.
+- **15 songs have a title and no artist**, and **7 could not be fetched at
+  all.** Both are visible now - the first on the Overview and under
+  `#/library?state=unresolved`, the second under `#/library?state=sync-failed`.
+  The first needs a human to type an artist; the second needs a source URL
+  pasted on each, or the backfill in section 6.
+- **One device is paired**: MANR-LT001. The four older rows were revoked on
+  12 September and are only of historical interest.
 - **Two different iPods have been used, and the current one is blank.** The
   earlier device was "Nihal's ipod", a Classic 6.5th gen (MB562, `HASH58`) with
   184 tracks already on it; there is a full backup in
   `%LOCALAPPDATA%\SyncMyPod\backups` taken before the first write, so restoring
   it exactly is `IPod.restore(snapshot_id)`.
 
-  What is attached now is a **5.5th gen 80GB (MA450, serial 8K719QF4V9R,
-  `ChecksumType.NONE`)** at `D:`, restored and never synced. It had no database
-  at all, which is what produced the "iTunesDB was not found" failure - see
-  section 5. It now has one, plus two tracks and the "Liked" playlist written
-  during verification. 433 tracks are still to sync.
-- **The paired-device config on disk is stale.** `%LOCALAPPDATA%\SyncMyPod\config.json`
-  names device "Mo Desktop", whose token was revoked on 12 September, while the
-  running GUI reports itself as "MANR-LT001" (device 5, valid). The running
-  process and the file disagree, and the file was not rewritten when the
-  MANR-LT001 pairing was made. **Anyone restarting the app should expect it to
-  come back unpaired** and should re-pair from the GUI. Not chased further: the
-  cause is unknown and it is one button to fix.
+  The one in use now is a **5.5th gen 80GB (MA450, serial 8K719QF4V9R,
+  `ChecksumType.NONE`)**, mounted at `D:` when plugged in. It arrived restored
+  and never synced, with no database at all - which is what produced the
+  "iTunesDB was not found" failure, see section 5. It now holds **436 tracks and
+  the "Liked" playlist with 92 of its 94**, and Mohamed has confirmed the
+  playlist shows on the device under Music > Playlists.
+- **The paired-device config on disk may be stale.** On 13 September
+  `%LOCALAPPDATA%\SyncMyPod\config.json` named device "Mo Desktop", whose token
+  had been revoked, while the running GUI reported itself as "MANR-LT001" and
+  worked. The running process and the file disagreed and the cause was never
+  established. **If the app starts up unpaired, that is why** - re-pair from the
+  GUI and it is fixed.
+- **Mohamed was running 0.1.3 while 0.1.6 was being built.** Anything synced
+  from a build older than 0.1.6 writes playlists to MHSD 2 only, which undoes
+  the playlist on the device. Worth checking `syncmypod.exe --version` before
+  debugging a playlist that has gone missing again.
 - **`local/src/syncmypod_local/_bin` holds ~149MB of ffmpeg** and `local/dist` the
   built zips. Both gitignored, both inside a OneDrive-synced folder, so they sync
   anyway. Moving the project out of OneDrive was offered and never answered;
@@ -1433,10 +1480,19 @@ Read sections 2 and 3 first - the premise, and the metadata rule. Then this.
 ### The state of play in three sentences
 
 The web tool and the local app both work end to end, and the local app is
-published as a download. Metadata comes from four sources in a fixed order and
-needs no keys; playlists can be imported or followed from five services, also
-with no keys. The web half has no tests at all, which is where the next bugs
-will come from and where the next work should go.
+published as **0.1.6** with the Windows build attached to the release by CI.
+Metadata comes from four sources in a fixed order and needs no keys; playlists
+can be imported or followed from five services, also with no keys. The web half
+still has no tests at all, which is where the next bugs will come from and where
+the next work should go.
+
+**If you are picking this up after 13 September**, the four things most likely
+to matter are: playlists go in MHSD 3 or the iPod cannot see them; YouTube will
+block a machine that syncs a large library and that is not the same as a track
+being missing; the duration guard is unsatisfiable for artists with no
+"- Topic" upload, which is why the relaxed 40-second pass exists; and a
+`sourceHint` skips the search entirely, which is the unfinished work in
+section 6.
 
 ### What was built on 12 September, and why
 
@@ -1451,6 +1507,14 @@ will come from and where the next work should go.
 | Phone layout | Mohamed expects a phone to be the device most used |
 | Reference checker in CI | Two undefined-reference bugs shipped in one day |
 | Connected YouTube account removed | It could not work until somebody edited a Google console |
+
+### What was built on 13 September, and why
+
+Three bugs Mohamed reported from his own screen, then everything that came out
+of chasing them.
+
+| Change | Why |
+|---|---|
 | `api.importJob` added | Two views called it and it did not exist, so no import could report its own progress |
 | The api client checked in CI | The scan ignores anything after a dot; `api` is one literal in one file and worth the exception |
 | List rows wrap on a phone | `.list-main` may shrink to nothing and `.list-actions` may not, so every card list read one word per line |
@@ -1470,7 +1534,7 @@ will come from and where the next work should go.
 | Playlists reconciled every sync | A playlist edit is work even when every song is already on the device |
 | A relaxed 40s pass for longer uploads | The catalogue's duration is the release's; YouTube often has only the video, with an intro |
 
-### Eleven things that were got wrong first
+### Fourteen things that were got wrong first
 
 Every one of these was written, deployed, and then corrected. They are the
 cheapest thing in this file.
@@ -1512,8 +1576,24 @@ cheapest thing in this file.
    right on a desktop. On a 375px screen the title cell is about 200px and the
    badge is 73 of them, which left a title two characters long - worse than
    what was replaced. Measured, not seen: the number is what showed it.
+12. **Explaining a failure with a measurement taken afterwards.** Ten tracks
+   failed a sync; a bot check was found on that machine hours later and blamed
+   for them. Mohamed asked why the ten were scattered through 399 rather than
+   in a block - which a mid-run block would produce - and the explanation fell
+   apart. The real cause was the duration guard. The block was real, but it was
+   a *consequence* of the sync, not a cause of anything in it.
+13. **Three explanations for the same bug, two of them from the API.** The
+   playlist that would not appear on the iPod was blamed on the bot check, then
+   on the persistent id exceeding 2^63. Both were reasoned from what pypodlib
+   exposes. The answer came from parsing the iTunesDB bytes and counting the
+   MHSD datasets, which took ten minutes and should have been first.
+14. **Running two test suites at once, three times.** pypodlib's write guard is
+   a machine-wide lock keyed by volume, so the second run fails in `backup()`
+   with a permission error that reads like a real bug. Twice it sent the search
+   after a "leak" of download folders that belonged to the other run. See
+   section 7.
 
-### Four habits that paid for themselves
+### Five habits that paid for themselves
 
 - **Measure on the real library rather than reasoning about the code.** The
   YouTube Music guards took four passes and every correction came from looking
@@ -1530,11 +1610,22 @@ cheapest thing in this file.
   Mohamed's real library during testing; both would have reached the iPod on the
   next sync.
 
+- **Ask the device, not the library.** Two of the three wrong answers above
+  came from reasoning about pypodlib's API. Reading the raw iTunesDB, and
+  writing an A/B pair to the real iPod to test a theory, is what actually
+  settled both the playlist bug and the one before it.
+
 ### The one thing to do next
 
-A route smoke test, then something that runs the page. CI already runs Postgres
-for the migrations job - boot the app against it, request every GET route,
-assert nothing returns 500. That covers three of the four bugs that reached the
-user's screen, including the one `check-references.mjs` structurally cannot
-catch. It does not cover the fourth: the routes were fine and the browser could
-not read them. Section 6 has the detail.
+**Backfill the source URLs** - section 6, item 1a. It is Mohamed's idea, the
+mechanism is already built and proven on three tracks, and it removes 286 of his
+447 songs from the search path entirely. Everything that went wrong with
+downloads on 13 September - the duration guard, the bot check - stops applying
+to those tracks the moment they have an address to fetch from.
+
+After that, the web test suite: a route smoke test first, then something that
+runs the page. CI already runs Postgres for the migrations job, so booting the
+app against it and asserting no GET route returns 500 is perhaps forty lines. It
+covers three of the four bugs that reached the user's screen. It does not cover
+the fourth - `api.importJob`, where every route was fine and the browser could
+not read them - which is the argument for the second half.
