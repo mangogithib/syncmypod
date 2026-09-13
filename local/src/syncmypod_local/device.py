@@ -221,6 +221,27 @@ class IpodDevice:
                 continue
         return found
 
+    def playlist_contents(self) -> dict[str, list[str]]:
+        """Each user playlist on the device, as name to track locations.
+
+        Locations rather than ids, because that is what the rest of this
+        application identifies a track by and the numeric ids are reassigned
+        every time the database is written. Used to answer "has anything about
+        the playlists changed" without writing anything.
+        """
+        if not self.has_database:
+            return {}
+        library = self._library()
+        by_id = {t.db_track_id: t.location for t in library.tracks if t.location}
+        contents: dict[str, list[str]] = {}
+        for playlist in library.playlists:
+            if playlist.master:
+                continue
+            contents[playlist.name] = [
+                by_id[track_id] for track_id in playlist.track_ids if track_id in by_id
+            ]
+        return contents
+
     def playlist_names(self) -> list[str]:
         """User playlists, excluding the master playlist and the smart ones.
 

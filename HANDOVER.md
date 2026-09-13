@@ -406,6 +406,38 @@ Whether four-at-a-time makes the block likelier is untested. The run that
 triggered it was sequential, so volume rather than concurrency is the cause,
 but it is the obvious thing to look at if it recurs.
 
+### A playlist can be in the database and not on the iPod
+
+Reported on 13 September: "Liked" was written, the run said so, and the device
+did not show it. Reading the iTunesDB off the device confirmed it was there with
+92 of its 94 tracks. So the write worked and the display did not.
+
+The suspect is the playlist's persistent id. pypodlib generates it with
+`random.getrandbits(64)` - a full *unsigned* 64-bit value - and the one on the
+device was 10071174128858904937, above 2^63. If the firmware reads that field as
+signed it is a negative id. That fits: present in the database, absent from the
+menu, and a coin flip on every playlist created, which is why testing never saw
+it.
+
+**Not proven.** An A/B test was written to the real device rather than another
+guess: "Liked" was given an id below 2^63, and a control playlist
+"ZZ High Id Test" created with one above it. Liked visible and the control not
+means the id is the cause and `create_playlist` must mask the value to 63 bits.
+Neither visible means it is something else. Settle this before changing anything
+else about playlists.
+
+### Playlists are reconciled on every sync
+
+`Plan.nothing_to_do` looked only at downloads, removals and artwork, so a run
+where every song was already present reported "Already up to date" and never
+touched the playlists - precisely the state somebody who has only reorganised a
+playlist is in. `build_plan` now compares the device's playlists against the
+library's, by name and by order, and a difference counts as work.
+
+Noticed while testing it: the fixture audio carries no embedded cover, so
+`artwork_missing` is non-empty on every run and "Already up to date" is
+unreachable in the suite. A separate quirk, left alone.
+
 ### The duration guard is what actually failed those ten tracks
 
 Re-run on 13 September with the block gone, all six results present and zero bot
@@ -424,11 +456,16 @@ normally matches a release exactly.
 
 So the guard is not wrong, it is *unsatisfiable* for regional and independent
 artists whose catalogue entry and YouTube presence are different recordings.
-Widening the tolerance would let a live take or an extended mix win on other
-tracks, which is the failure the guard exists to prevent. The options are a
-relaxed second pass gated on a strong title-and-artist match, or the source-URL
-paste that already exists. Not decided - it is a judgement about the metadata
-rule and belongs to Mohamed.
+
+**Resolved: a relaxed second pass, 40 seconds, longer only.** Mohamed chose 40
+over the 60 that was offered. It runs only when the strict pass has found
+nothing, so it can never displace a tight match; it allows longer but never
+shorter, because longer is an intro and shorter is a clip; and it requires the
+title *and* an artist to match with no barred word, having given up the length
+signal that would otherwise carry the decision. Measured against the real
+failures: Dooron Dooron and its Unplugged cut now match, while Saadgi (77s over)
+and Maand X Jhol (barred "cover") still do not, which is right.
+
 
 ### One unwritable file used to end the whole run
 
@@ -1385,6 +1422,8 @@ will come from and where the next work should go.
 | The progress line says when a run has stopped | It held the last step's text forever, so a finished sync still read as one in progress |
 | YouTube's bot check is recognised | It was being reported as the track not existing, which is a different problem with a different fix |
 | Failed tracks on the Overview | Asked for on 13 September; the Songs filter alone was not where anyone looks |
+| Playlists reconciled every sync | A playlist edit is work even when every song is already on the device |
+| A relaxed 40s pass for longer uploads | The catalogue's duration is the release's; YouTube often has only the video, with an intro |
 
 ### Eleven things that were got wrong first
 

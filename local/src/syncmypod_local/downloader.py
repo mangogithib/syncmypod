@@ -49,6 +49,19 @@ DOWNLOAD_ATTEMPTS = 3
 # album" upload - regardless of how well its title matches.
 MAX_DURATION_DRIFT_SECONDS = 12.0
 
+# How much *longer* than the catalogue a result may be on a second pass.
+#
+# Deezer's duration is the release's; what YouTube has for many regional and
+# independent artists is the official video, which carries an intro the release
+# does not. That is a systematic offset rather than noise - measured on the ten
+# tracks that failed the 13 September sync, the closest upload was 15, 25, 31
+# and 39 seconds long, all of them the right recording and all rejected.
+#
+# Asymmetric on purpose. Longer is explainable: an intro, an outro, a few
+# seconds of applause. Shorter is not - a shorter upload is a clip, a snippet or
+# an edit, so the strict limit still applies below the catalogue's length.
+RELAXED_LONGER_SECONDS = 40.0
+
 # Words that mean "not the recording the library asked for". Checked against the
 # candidate's title only when the manifest's own title does not contain them,
 # so a track genuinely called "... (Live)" can still be found.
@@ -112,6 +125,15 @@ class Candidate:
     duration: float | None
     score: float
     reason: str
+    # Whether the title *and* an artist were both found. The relaxed pass turns
+    # the length rule down, so it leans entirely on these two: without them a
+    # longer upload could be any song at all by anybody.
+    title_matched: bool = False
+    artist_matched: bool = False
+
+    @property
+    def confident(self) -> bool:
+        return self.title_matched and self.artist_matched
 
 
 def fetch(track: dict[str, Any], destination: Path) -> Download:
@@ -175,8 +197,11 @@ def search(track: dict[str, Any]) -> list[Candidate]:
         queries = [" - ".join(filter(None, [track.get("artist"), track.get("title")]))]
 
     seen: dict[str, Candidate] = {}
+    raw_by_query: list[list[dict[str, Any]]] = []
     for index, query in enumerate(queries):
-        for entry in _search_raw(query):
+        entries = _search_raw(query)
+        raw_by_query.append(entries)
+        for entry in entries:
             url = entry.get("webpage_url") or entry.get("url") or ""
             if not url or url in seen:
                 continue
@@ -189,7 +214,26 @@ def search(track: dict[str, Any]) -> list[Candidate]:
         if index == 0 and any(c.score >= 0.75 for c in seen.values()):
             break
 
-    return sorted(seen.values(), key=lambda c: c.score, reverse=True)
+    if seen:
+        return sorted(seen.values(), key=lambda c: c.score, reverse=True)
+
+    # Nothing survived the strict pass. Try again allowing a result to run
+    # longer than the catalogue says, but only where the title and an artist
+    # both match and no barred word applies - so this widens the length rule and
+    # nothing else. It can only ever turn a failure into a match; a track that
+    # already had a candidate never reaches here.
+    relaxed: dict[str, Candidate] = {}
+    for entries in raw_by_query:
+        for entry in entries:
+            url = entry.get("webpage_url") or entry.get("url") or ""
+            if not url or url in relaxed:
+                continue
+            scored = _score(entry, track, url, longer_allowance=RELAXED_LONGER_SECONDS)
+            if scored is not None and scored.confident:
+                relaxed[url] = scored
+    if relaxed:
+        logger.info("Nothing matched %s on length; accepting a longer upload", _describe(track))
+    return sorted(relaxed.values(), key=lambda c: c.score, reverse=True)
 
 
 def _search_raw(query: str) -> list[dict[str, Any]]:
@@ -379,7 +423,13 @@ class _YtDlpLogger:
 # ---------------------------------------------------------------------------
 
 
-def _score(entry: dict[str, Any], track: dict[str, Any], url: str) -> Candidate | None:
+def _score(
+    entry: dict[str, Any],
+    track: dict[str, Any],
+    url: str,
+    *,
+    longer_allowance: float = 0.0,
+) -> Candidate | None:
     """Rate one search result, or reject it outright.
 
     Returns None for a candidate that is disqualified rather than merely poor -
@@ -403,7 +453,12 @@ def _score(entry: dict[str, Any], track: dict[str, Any], url: str) -> Candidate 
     # separates a studio take from a live one, so it both gates and scores.
     if wanted_seconds and duration:
         drift = abs(duration - wanted_seconds)
-        if drift > MAX_DURATION_DRIFT_SECONDS:
+        # A result longer than the catalogue is allowed more room on the
+        # relaxed pass; a shorter one never is.
+        allowed = MAX_DURATION_DRIFT_SECONDS
+        if duration > wanted_seconds:
+            allowed = max(allowed, longer_allowance)
+        if drift > allowed:
             return None
         score += 0.40 * (1.0 - min(drift / MAX_DURATION_DRIFT_SECONDS, 1.0))
         reasons.append(f"{drift:.0f}s off")
@@ -419,16 +474,21 @@ def _score(entry: dict[str, Any], track: dict[str, Any], url: str) -> Candidate 
         reasons.append("topic channel")
 
     normalised_title = _normalise(title)
-    if _normalise(wanted_title) and _normalise(wanted_title) in normalised_title:
+    title_matched = bool(
+        _normalise(wanted_title) and _normalise(wanted_title) in normalised_title
+    )
+    if title_matched:
         score += 0.20
         reasons.append("title match")
 
     haystack = f"{normalised_title} {_normalise(uploader)}"
+    artist_matched = False
     if wanted_artist:
         # Any one of the credited artists appearing is enough. The manifest
         # joins them into one string, but a source rarely names them all.
         parts = [_normalise(p) for p in re.split(r"[,&]| and ", wanted_artist) if p.strip()]
-        if any(p and p in haystack for p in parts):
+        artist_matched = any(p and p in haystack for p in parts)
+        if artist_matched:
             score += 0.15
             reasons.append("artist match")
 
@@ -443,6 +503,8 @@ def _score(entry: dict[str, Any], track: dict[str, Any], url: str) -> Candidate 
         duration=duration,
         score=round(score, 4),
         reason=", ".join(reasons) or "no signals",
+        title_matched=title_matched,
+        artist_matched=artist_matched,
     )
 
 

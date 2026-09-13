@@ -116,10 +116,20 @@ class Plan:
     # as work: a library synced before artwork was implemented should pick it up
     # without having to be downloaded again.
     artwork_missing: list[str] = field(default_factory=list)
+    # Whether the device's playlists already match the library's. Adding or
+    # removing a song from a playlist is a change worth syncing even when every
+    # track involved is already on the iPod, and before this was worked out a
+    # run in that state reported "Already up to date" and wrote nothing.
+    playlists_differ: bool = False
 
     @property
     def nothing_to_do(self) -> bool:
-        return not self.to_download and not self.removals and not self.artwork_missing
+        return (
+            not self.to_download
+            and not self.removals
+            and not self.artwork_missing
+            and not self.playlists_differ
+        )
 
 
 @dataclass(slots=True)
@@ -266,6 +276,28 @@ def build_plan(
         (str(p.get("name") or "Untitled"), [int(t) for t in p.get("trackIds") or []])
         for p in manifest.get("playlists") or []
     ]
+
+    # Whether the playlists on the device already say what the library says.
+    #
+    # A song added to or removed from a playlist is a real change even when
+    # every track involved is already on the iPod, and without this the run
+    # reported "Already up to date" and wrote nothing - which is exactly the
+    # state somebody reorganising playlists is in.
+    #
+    # Compared by name and by the order of the locations, because order is part
+    # of what a playlist is.
+    if plan.playlists:
+        try:
+            on_device = ipod.playlist_contents()
+        except device_module.DeviceError:
+            # Never fail planning over this; assume a write is needed.
+            plan.playlists_differ = True
+        else:
+            for name, locations in _playlist_specs(plan, record):
+                if on_device.get(name) != locations:
+                    plan.playlists_differ = True
+                    break
+
     return plan
 
 
@@ -710,12 +742,12 @@ def _write_batch(
     return landed
 
 
-def _write_playlists(ipod: device_module.IpodDevice, plan: Plan, record: ledger.Ledger) -> int:
-    """Write the library's playlists in the order the manifest gives them.
+def _playlist_specs(plan: Plan, record: ledger.Ledger) -> list[tuple[str, list[str]]]:
+    """The playlists the library wants, as names and device locations.
 
     Tracks that are not on the device - a download that failed, or one excluded
-    for unresolved metadata - are dropped from the playlist rather than leaving
-    a gap the iPod would skip over.
+    for unresolved metadata - are dropped rather than leaving a gap the iPod
+    would skip over.
     """
     specs: list[tuple[str, list[str]]] = []
     for name, track_ids in plan.playlists:
@@ -725,7 +757,17 @@ def _write_playlists(ipod: device_module.IpodDevice, plan: Plan, record: ledger.
             if track_id in record.entries
         ]
         specs.append((name, locations))
+    return specs
 
+
+def _write_playlists(ipod: device_module.IpodDevice, plan: Plan, record: ledger.Ledger) -> int:
+    """Write the library's playlists in the order the manifest gives them.
+
+    Tracks that are not on the device - a download that failed, or one excluded
+    for unresolved metadata - are dropped from the playlist rather than leaving
+    a gap the iPod would skip over.
+    """
+    specs = _playlist_specs(plan, record)
     if not specs:
         return 0
     ipod.write_playlists(specs)

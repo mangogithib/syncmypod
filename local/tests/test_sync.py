@@ -720,3 +720,84 @@ class TestWhenYouTubeRefusesTheMachine:
         assert report.status == "error"
         assert report.synced == 6
         assert len(ipod.tracks(reload=True)) == 6
+
+
+class TestPlaylistsAreReconciledEverySync:
+    """A playlist edit is work, even when every song is already on the iPod.
+
+    Asked for on 13 September: "even if all songs are already there, check if
+    there is any update in the playlist". Before this, `nothing_to_do` looked
+    only at downloads, removals and artwork, so a run in that state reported
+    "Already up to date" and never touched the playlists.
+    """
+
+    @respx.mock
+    def test_a_song_added_to_a_playlist_is_picked_up(self, ipod, paired, audio_source):
+        first = manifest(
+            tracks=[track(1), track(2)],
+            playlists=[{"id": 1, "name": "Liked", "trackIds": [1]}],
+        )
+        mock_server(first)
+        sync.run(paired, mount=str(ipod.mount_path))
+
+        library = device.open_at(ipod.mount_path)._handle.library()
+        assert len(library.get_playlist("Liked").track_ids) == 1
+
+        # Nothing new to download - both tracks are already there - but the
+        # playlist now names both.
+        respx.mock.reset()
+        mock_server(
+            manifest(
+                tracks=[track(1), track(2)],
+                playlists=[{"id": 1, "name": "Liked", "trackIds": [1, 2]}],
+            )
+        )
+        report = sync.run(paired, mount=str(ipod.mount_path))
+
+        assert report.message != "Already up to date."
+        library = device.open_at(ipod.mount_path)._handle.library()
+        assert len(library.get_playlist("Liked").track_ids) == 2
+
+    @respx.mock
+    def test_a_song_removed_from_a_playlist_is_picked_up(self, ipod, paired, audio_source):
+        mock_server(
+            manifest(
+                tracks=[track(1), track(2)],
+                playlists=[{"id": 1, "name": "Liked", "trackIds": [1, 2]}],
+            )
+        )
+        sync.run(paired, mount=str(ipod.mount_path))
+
+        respx.mock.reset()
+        mock_server(
+            manifest(
+                tracks=[track(1), track(2)],
+                playlists=[{"id": 1, "name": "Liked", "trackIds": [2]}],
+            )
+        )
+        sync.run(paired, mount=str(ipod.mount_path))
+
+        library = device.open_at(ipod.mount_path)._handle.library()
+        assert len(library.get_playlist("Liked").track_ids) == 1
+
+    @respx.mock
+    def test_an_unchanged_playlist_is_not_counted_as_work(self, ipod, paired, audio_source):
+        """The other half: this must not make every run look like work.
+
+        Asserted on the flag rather than on "Already up to date", because the
+        fixture's audio carries no embedded cover and so every run legitimately
+        finds artwork to build. That is a separate quirk and not this one.
+        """
+        payload = manifest(
+            tracks=[track(1), track(2)],
+            playlists=[{"id": 1, "name": "Liked", "trackIds": [1, 2]}],
+        )
+        mock_server(payload)
+        sync.run(paired, mount=str(ipod.mount_path))
+
+        respx.mock.reset()
+        mock_server(payload)
+        report = sync.run(paired, mount=str(ipod.mount_path))
+
+        assert report.plan.playlists_differ is False
+        assert not report.plan.to_download

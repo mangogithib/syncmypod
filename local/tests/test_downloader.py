@@ -137,3 +137,98 @@ class TestNormalising:
     )
     def test_strips_decoration_and_punctuation(self, raw, expected):
         assert downloader._normalise(raw) == expected
+
+
+class TestAcceptingALongerUpload:
+    """The relaxed second pass, added 13 September.
+
+    Deezer's duration is the release's. For many regional and independent
+    artists what YouTube has is the official *video*, which carries an intro the
+    release does not - measured on ten real failures, the closest upload was 15,
+    25, 31 and 39 seconds longer, every one the right recording and every one
+    rejected by the 12-second rule.
+
+    So a second pass allows longer, never shorter, and leans entirely on the
+    title and artist to make up for the length signal it gave up.
+    """
+
+    @staticmethod
+    def entry(title, uploader, duration, url="https://y/1"):
+        return {"title": title, "uploader": uploader, "duration": duration, "webpage_url": url}
+
+    @staticmethod
+    def wanted(**over):
+        base = {
+            "id": 1,
+            "title": "Dooron Dooron",
+            "artist": "Paresh Pahuja",
+            "durationMs": 215000,
+        }
+        return base | over
+
+    def search_over(self, monkeypatch, entries):
+        monkeypatch.setattr(downloader, "_search_raw", lambda _q: entries)
+        return downloader.search(self.wanted())
+
+    def test_the_strict_pass_still_wins_when_it_can(self, monkeypatch):
+        """A tight match must not be passed over for a longer one."""
+        found = self.search_over(
+            monkeypatch,
+            [
+                self.entry(
+                    "Dooron Dooron - Paresh Pahuja", "Label - Topic", 217, "https://y/exact"
+                ),
+                self.entry(
+                    "Dooron Dooron (Official Video) - Paresh Pahuja", "P", 246, "https://y/long"
+                ),
+            ],
+        )
+        assert found[0].url == "https://y/exact"
+
+    def test_a_longer_official_video_is_taken_when_nothing_else_fits(self, monkeypatch):
+        found = self.search_over(
+            monkeypatch,
+            [
+                self.entry(
+                    "Dooron Dooron (Official Video) - Paresh Pahuja", "Paresh Pahuja", 246
+                )
+            ],
+        )
+        assert len(found) == 1
+        assert found[0].duration == 246
+
+    def test_forty_seconds_is_the_limit(self, monkeypatch):
+        assert downloader.RELAXED_LONGER_SECONDS == 40.0
+        found = self.search_over(
+            monkeypatch,
+            [self.entry("Dooron Dooron - Paresh Pahuja", "Paresh Pahuja", 215 + 41)],
+        )
+        assert found == []
+
+    def test_shorter_is_never_relaxed(self, monkeypatch):
+        """A shorter upload is a clip or an edit, not the track with an intro."""
+        found = self.search_over(
+            monkeypatch,
+            [self.entry("Dooron Dooron - Paresh Pahuja", "Paresh Pahuja", 215 - 30)],
+        )
+        assert found == []
+
+    def test_a_longer_result_still_needs_the_title_and_the_artist(self, monkeypatch):
+        """Without the length signal these are all that is left."""
+        no_artist = self.search_over(
+            monkeypatch, [self.entry("Dooron Dooron (Video)", "Some Random Channel", 246)]
+        )
+        assert no_artist == []
+
+        wrong_title = self.search_over(
+            monkeypatch, [self.entry("A Different Song", "Paresh Pahuja", 246)]
+        )
+        assert wrong_title == []
+
+    def test_a_barred_word_is_still_barred(self, monkeypatch):
+        """The relaxed pass widens the length rule and nothing else."""
+        found = self.search_over(
+            monkeypatch,
+            [self.entry("Dooron Dooron (Live) - Paresh Pahuja", "Paresh Pahuja", 246)],
+        )
+        assert found == []
