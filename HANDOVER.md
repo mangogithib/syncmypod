@@ -218,6 +218,12 @@ fine, but start from the reasoning rather than from scratch.
   256kbps with Premium, and lossless from a file the user already owns - which
   is the real argument for the local-files source in section 6, and the only
   thing that would beat what the tool does today.
+- **Two ideas raised on 13 September and turned down.** Writing only the primary
+  artist to the device, so the iPod's Artists menu reads "Arijit Singh" rather
+  than the full credit - Mohamed wants the full credit. And backfilling the
+  source URLs of the 286 older YouTube imports so they skip the search - not
+  wanted, and the relaxed 40-second pass covers the failure it was aimed at.
+  Both are recorded here so they are not proposed a second time.
 - **No audio quality setting, deliberately.** One was built on 11 September and
   removed the same day at Mohamed's request, and he was right: signed out,
   YouTube offers exactly one AAC stream at ~128kbps, and a Premium account is
@@ -547,10 +553,12 @@ full credit, so a soundtrack fills the Artists menu with entries like "Pritam,
 Arijit Singh, Amitabh Bhattacharya". Writing only the primary artist would make
 the menu browsable at the cost of losing the other names on the device; the
 manifest already carries the structured `artists` list with roles and
-positions, so either is a small change in `tagging.py`. Not done, because it is
-taste and it changes what is on the device.
+positions, so either is a small change in `tagging.py`. **Offered on
+13 September and declined** - Mohamed wants the full credit on the device. Do
+not re-open it.
 
-Related and still open: Deezer's contributor order puts the composer first, so
+Related, and the reason it would have been awkward anyway: Deezer's contributor
+order puts the composer first, so
 the "primary" artist is not the first name in the credit.
 
 ### Chromium on Windows cannot hand over cookies, and never will
@@ -1174,29 +1182,7 @@ resolver, `lib/normalise.js` (`matchKey`, `scoreCandidate`, `titleOverlap`,
 `answerExplains`) and `services/artist-split.js` are pure logic with real
 regression history; the band list in section 5 is ready-made fixtures.
 
-### 1a. Backfill the source URLs for the older imports
-
-**The highest-value unfinished thing, and the mechanism already exists.** A
-track with a `sourceHint` skips the YouTube search entirely and downloads from
-the address it was imported from - no scoring, no duration guard, no exposure to
-the bot check. The YouTube playlist reader stores it, and it works:
-
-| Added via | Tracks | With a source URL |
-|---|---|---|
-| `youtube-import` | 286 | **0** |
-| `youtube-music-import` | 3 | 3 |
-
-The 286 came from a bulk import that ran before `sourceHint` was wired up. Their
-original playlist ids are all still in `import_jobs` - five YouTube playlists,
-listed by `SELECT source, source_ref, source_name FROM import_jobs` - so the
-playlists can be re-read and matched back by title to fill `source_hint` in.
-
-Mohamed's idea, on 13 September, and a good one: it takes the bulk of the
-library out of the search path permanently. Matching by title is the only
-awkward part - a title that appears twice in one playlist needs a decision, and
-"skip it and leave the hint null" is the safe one.
-
-### 1b. Work out what else the simulated iPod is hiding
+### 1a. Work out what else the simulated iPod is hiding
 
 `create_virtual` is the right tool and it is how the sync path gets tested
 without hardware. But it is not a real device, and one difference had been
@@ -1210,7 +1196,7 @@ whether a virtual device ever reports the artwork store as absent the way a
 restored one does, and whether free space behaves the same when it is reported
 by `shutil.disk_usage` on a simulated folder rather than a FAT32 volume.
 
-### 1c. Watch what four-at-a-time does to YouTube
+### 1b. Watch what four-at-a-time does to YouTube
 
 The sync fetches `DEFAULT_CONCURRENCY` tracks at once now, which is the
 difference between about an hour and about twenty minutes on a 433-track
@@ -1418,7 +1404,7 @@ cd local/dist && unzip -p SyncMyPod-*.zip '*/_internal/**/app.js' | grep -c rend
   all.** Both are visible now - the first on the Overview and under
   `#/library?state=unresolved`, the second under `#/library?state=sync-failed`.
   The first needs a human to type an artist; the second needs a source URL
-  pasted on each, or the backfill in section 6.
+  pasted on each.
 - **One device is paired**: MANR-LT001. The four older rows were revoked on
   12 September and are only of historical interest.
 - **Two different iPods have been used, and the current one is blank.** The
@@ -1486,13 +1472,11 @@ can be imported or followed from five services, also with no keys. The web half
 still has no tests at all, which is where the next bugs will come from and where
 the next work should go.
 
-**If you are picking this up after 13 September**, the four things most likely
+**If you are picking this up after 13 September**, the three things most likely
 to matter are: playlists go in MHSD 3 or the iPod cannot see them; YouTube will
-block a machine that syncs a large library and that is not the same as a track
-being missing; the duration guard is unsatisfiable for artists with no
-"- Topic" upload, which is why the relaxed 40-second pass exists; and a
-`sourceHint` skips the search entirely, which is the unfinished work in
-section 6.
+block a machine that syncs a large library, and that is not the same as a track
+being missing; and the duration guard is unsatisfiable for artists with no
+"- Topic" upload, which is why the relaxed 40-second pass exists.
 
 ### What was built on 12 September, and why
 
@@ -1617,15 +1601,12 @@ cheapest thing in this file.
 
 ### The one thing to do next
 
-**Backfill the source URLs** - section 6, item 1a. It is Mohamed's idea, the
-mechanism is already built and proven on three tracks, and it removes 286 of his
-447 songs from the search path entirely. Everything that went wrong with
-downloads on 13 September - the duration guard, the bot check - stops applying
-to those tracks the moment they have an address to fetch from.
+**A web test suite**: a route smoke test first, then something that runs the
+page. CI already runs Postgres for the migrations job, so booting the app
+against it and asserting no GET route returns 500 is perhaps forty lines. It
+covers three of the four bugs that have reached the user's screen. It does not
+cover the fourth - `api.importJob`, where every route was fine and the browser
+could not read them - which is the argument for the second half.
 
-After that, the web test suite: a route smoke test first, then something that
-runs the page. CI already runs Postgres for the migrations job, so booting the
-app against it and asserting no GET route returns 500 is perhaps forty lines. It
-covers three of the four bugs that reached the user's screen. It does not cover
-the fourth - `api.importJob`, where every route was fine and the browser could
-not read them - which is the argument for the second half.
+The web half is about 8,000 lines with no tests at all, and it is where every
+bug a user has actually seen has come from.
