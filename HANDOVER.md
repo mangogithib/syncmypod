@@ -391,13 +391,44 @@ ten failures looked like a metadata problem and were not. `_YtDlpLogger` now
 watches for the marker, `_search_raw` raises `BlockedError`, and the run stops
 rather than spending an hour failing every remaining track the same way.
 
-The ten failures from the 13 September run were this, not the scoring guards:
-six came from playlist imports, three from the follow backfill, one from
-browsing, and eight of the ten had good Deezer metadata.
+**The ten failures from that run were NOT this, and saying they were was a
+mistake worth recording.** The block was measured *after* the sync and was very
+likely caused by it; that was then used to explain failures that happened
+during it. Mohamed spotted the hole: a block that had started mid-run would
+fail every track after it, and these ten were scattered through a run of 399.
+
+Re-running the real searches once the block lifted gives the actual answer, and
+it is the duration guard - see the next section. The lesson is the older one in
+this file: measure the thing, at the time, rather than explaining it with
+something measured later.
 
 Whether four-at-a-time makes the block likelier is untested. The run that
 triggered it was sequential, so volume rather than concurrency is the cause,
 but it is the obvious thing to look at if it recurs.
+
+### The duration guard is what actually failed those ten tracks
+
+Re-run on 13 September with the block gone, all six results present and zero bot
+errors:
+
+| Track | Deezer says | What YouTube has | Verdict |
+|---|---|---|---|
+| M.H.R - Paapi | 174s | "MHR - PAAPI (Official Video)" 205s | 31s off |
+| Zeeshan Ali - Saadgi | 132s | four uploads, 209-501s | 77-369s off |
+
+`MAX_DURATION_DRIFT_SECONDS` is 12, and it is rejecting correctly: an official
+*video* carries an intro the release does not, so its length genuinely differs
+from the catalogue's. The gap is that for these artists no matching-length
+upload exists at all - no "- Topic" auto-upload, which is the thing that
+normally matches a release exactly.
+
+So the guard is not wrong, it is *unsatisfiable* for regional and independent
+artists whose catalogue entry and YouTube presence are different recordings.
+Widening the tolerance would let a live take or an extended mix win on other
+tracks, which is the failure the guard exists to prevent. The options are a
+relaxed second pass gated on a strong title-and-artist match, or the source-URL
+paste that already exists. Not decided - it is a judgement about the metadata
+rule and belongs to Mohamed.
 
 ### One unwritable file used to end the whole run
 
