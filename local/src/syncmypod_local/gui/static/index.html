@@ -51,10 +51,22 @@
         <button class="button" id="btn-check" disabled>Check what is needed</button>
         <button class="button button-danger" id="btn-cancel" hidden>Cancel</button>
         <button class="button" id="btn-eject" disabled>Eject</button>
-        <label class="toggle">
-          <input type="checkbox" id="opt-remove" />
-          <span>Also remove tracks that left the library</span>
-        </label>
+        <div class="toggles">
+          <label class="toggle">
+            <input type="checkbox" id="opt-remove" />
+            <span>Also remove tracks that left the library</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="opt-backup" checked />
+            <span>
+              Back up the iPod before syncing
+              <em class="toggle-note"
+                >Off is faster and uses no disk, but leaves nothing to restore
+                from</em
+              >
+            </span>
+          </label>
+        </div>
       </section>
 
       <section class="panel" id="plan-panel" hidden>

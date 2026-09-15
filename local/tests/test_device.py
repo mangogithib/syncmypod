@@ -390,3 +390,132 @@ class TestPlaylistsReachTheDatasetTheIpodReads:
         reopened = device.open_at(video.mount_path)
         _, ds3 = self.datasets(reopened)
         assert self.names(ds3).count("Twice") == 1
+
+
+class TestRecordedTrackFormat:
+    """The four-character code the iPod reads to choose a decoder.
+
+    pypodlib 0.1.0 wrote "MP3 " for every AAC file - `add_tracks` stages the
+    format in lower case and the writer matches it against capitalised needles,
+    so nothing matched and its MP3 default won. A real Classic held 453 AAC
+    files, all of them recorded as MP3s, and played them with bursts of noise
+    where the firmware resynced an MP4 container as an MPEG frame stream.
+
+    These assert the bytes that reach the database rather than anything this
+    application returns, because the value is only worth what the iPod reads.
+    """
+
+    @staticmethod
+    def codes(pod):
+        """Every ``filetype`` code in the on-disk database, as it is stored."""
+        import struct
+
+        from pypodlib.device.info import resolve_itdb_path
+
+        data = Path(resolve_itdb_path(str(pod.mount_path))).read_bytes()
+        found = []
+        at = 0
+        while (at := data.find(b"mhit", at)) >= 0:
+            header = struct.unpack("<I", data[at + 4 : at + 8])[0]
+            if 0x20 <= header <= 0x400:
+                found.append(
+                    (
+                        data[at + 0x18 : at + 0x1C][::-1].decode("latin1"),
+                        data[at + 0x1D],  # mp3_flag
+                    )
+                )
+            at += 4
+        return found
+
+    @staticmethod
+    def copy_in(tmp_path, fixture, name):
+        path = tmp_path / name
+        path.write_bytes((FIXTURES / fixture).read_bytes())
+        return path
+
+    def test_an_aac_file_is_recorded_as_aac(self, video, tmp_path):
+        """The bug. An AAC file written as "MP3 " is what made the iPod screech."""
+        video.add_files([self.copy_in(tmp_path, "tagged.m4a", "song.m4a")])
+
+        assert self.codes(video) == [("M4A ", 0)]
+
+    def test_an_mp3_is_still_recorded_as_an_mp3(self, video, tmp_path):
+        """The half that was always right, so the fix cannot break it."""
+        video.add_files([self.copy_in(tmp_path, "tagged.mp3", "song.mp3")])
+
+        assert self.codes(video) == [("MP3 ", 1)]
+
+    def test_a_mixed_library_gets_one_code_each(self, video, tmp_path):
+        video.add_files(
+            [
+                self.copy_in(tmp_path, "tagged.m4a", "song.m4a"),
+                self.copy_in(tmp_path, "tagged.mp3", "song.mp3"),
+            ]
+        )
+
+        assert sorted(self.codes(video)) == [("M4A ", 0), ("MP3 ", 1)]
+
+    def test_a_device_written_by_an_older_version_is_repaired(self, video, tmp_path):
+        """The 453 tracks already on the real iPod.
+
+        They read back as "MP3" and are re-serialised on every save, so they
+        stay wrong until something rewrites them. Any commit does - here a
+        playlist write, which is what an ordinary sync ends with.
+        """
+        landed = video.add_files([self.copy_in(tmp_path, "tagged.m4a", "song.m4a")])
+
+        # Put the device back into the state the old code left it in.
+        library = video._handle.library()
+        for track in library.tracks:
+            track["filetype"] = "MP3"
+        video._handle.save(raise_on_error=True)
+        assert self.codes(video) == [("MP3 ", 1)], "the broken state was not reproduced"
+
+        device.open_at(video.mount_path).write_playlists([("Anything", list(landed.values()))])
+
+        assert self.codes(video) == [("M4A ", 0)]
+
+    def test_repairing_twice_changes_nothing_the_second_time(self, video, tmp_path):
+        """So a healed device does not pay for a rewrite it does not need."""
+        video.add_files([self.copy_in(tmp_path, "tagged.m4a", "song.m4a")])
+
+        library = video._handle.library()
+        assert device.repair_filetypes(library) == 0
+
+    def test_every_container_maps_to_the_code_it_should(self):
+        """Guards the one thing this fix depends on and does not own.
+
+        The values in ``_FILETYPE_BY_SUFFIX`` are matched against pypodlib's own
+        list of needles. If a later version changes those spellings the map goes
+        silently back to writing "MP3 " for everything, so it is asserted here
+        rather than discovered on a device.
+        """
+        from pypodlib.itunesdb_shared.constants import FILETYPE_CODES
+        from pypodlib.sync._track_conversion import track_dict_to_info
+
+        expected = {
+            ".mp3": "MP3 ",
+            ".m4a": "M4A ",
+            ".aac": "M4A ",
+            ".alac": "M4A ",
+            ".m4b": "M4B ",
+            ".m4p": "M4P ",
+            ".m4v": "M4V ",
+            ".mov": "M4V ",
+            ".mp4": "MP4 ",
+            ".wav": "WAV ",
+            ".aif": "AIFF",
+            ".aiff": "AIFF",
+        }
+        assert set(device._FILETYPE_BY_SUFFIX) == set(expected)
+
+        for suffix, token in device._FILETYPE_BY_SUFFIX.items():
+            resolved = track_dict_to_info({"filetype": token}).filetype
+            code = FILETYPE_CODES.get(resolved, FILETYPE_CODES["mp3"])
+            assert code.to_bytes(4, "big").decode() == expected[suffix], suffix
+
+    def test_an_unknown_container_is_left_alone(self, video, tmp_path):
+        """Guessing at a format nobody listed is worse than whatever is recorded."""
+        library = video._handle.library()
+        assert device._filetype_for(":iPod_Control:Music:F00:ABCD.flac") is None
+        assert device.repair_filetypes(library) == 0

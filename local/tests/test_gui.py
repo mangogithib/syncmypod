@@ -209,3 +209,59 @@ class TestEvents:
         for index in range(2200):
             server.session.add("track", label=str(index))
         assert len(server.session.events) <= 2000
+
+
+class TestTheBackupSetting:
+    """Turning off the snapshot taken before a sync writes anything.
+
+    Saved as soon as it is changed rather than only when a sync starts, because
+    the page presents it as a setting and closing the window must not discard it.
+    """
+
+    @pytest.fixture
+    def fresh(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SYNCMYPOD_CONFIG_DIR", str(tmp_path))
+        return tmp_path
+
+    def test_it_is_on_by_default(self, server, fresh):
+        _status, body = call(server, "/api/state", token=server.session.token)
+        assert body["backupBeforeSync"] is True
+
+    def test_turning_it_off_is_remembered(self, server, fresh):
+        from syncmypod_local import config
+
+        call(
+            server,
+            "/api/settings",
+            token=server.session.token,
+            method="POST",
+            body={"backupBeforeSync": False},
+        )
+
+        assert config.load().backup_before_sync is False
+        _status, body = call(server, "/api/state", token=server.session.token)
+        assert body["backupBeforeSync"] is False
+
+    def test_turning_it_back_on_is_remembered(self, server, fresh):
+        from syncmypod_local import config
+
+        for enabled in (False, True):
+            call(
+                server,
+                "/api/settings",
+                token=server.session.token,
+                method="POST",
+                body={"backupBeforeSync": enabled},
+            )
+        assert config.load().backup_before_sync is True
+
+    def test_it_needs_the_token(self, server, fresh):
+        """It writes to the config file, so it is not an open endpoint."""
+        with pytest.raises(HTTPError) as raised:
+            call(
+                server,
+                "/api/settings",
+                method="POST",
+                body={"backupBeforeSync": False},
+            )
+        assert raised.value.code == 401

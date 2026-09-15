@@ -66,6 +66,15 @@ class Config:
     # last used with, without needing the device present.
     last_ipod_name: str | None = None
     last_ipod_model: str | None = None
+    # Whether to snapshot the iPod before a sync writes to it.
+    #
+    # On by default, and it should stay on: pypodlib is alpha and rewriting the
+    # iTunesDB is the one operation here that can leave a device unusable. But a
+    # snapshot is a full copy of the music on the iPod, so on a full 160GB
+    # Classic the first one is slow and the disk it lands on may not have room.
+    # That is a real reason to turn it off and it is the user's call to make,
+    # so it is a setting rather than a rule.
+    backup_before_sync: bool = True
 
     @property
     def is_paired(self) -> bool:
@@ -84,6 +93,7 @@ class Config:
             "token": f"{self.token[:10]}..." if self.token else "",
             "last_ipod_name": self.last_ipod_name,
             "last_ipod_model": self.last_ipod_model,
+            "backup_before_sync": self.backup_before_sync,
         }
 
 
@@ -109,6 +119,9 @@ def load() -> Config:
         device_name=str(raw.get("device_name") or ""),
         last_ipod_name=raw.get("last_ipod_name"),
         last_ipod_model=raw.get("last_ipod_model"),
+        # Absent means a config written before the setting existed, and the
+        # safe reading of that is the default rather than "switched off".
+        backup_before_sync=bool(raw.get("backup_before_sync", True)),
     )
 
 
@@ -129,6 +142,7 @@ def save(config: Config) -> Path:
         "device_name": config.device_name,
         "last_ipod_name": config.last_ipod_name,
         "last_ipod_model": config.last_ipod_model,
+        "backup_before_sync": config.backup_before_sync,
     }
 
     # Written to a temporary file and moved into place, so an interrupted write

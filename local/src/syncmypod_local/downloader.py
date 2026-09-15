@@ -14,11 +14,23 @@ which is the one signal that separates them reliably, and YouTube's
 auto-generated "- Topic" channels are the official audio rather than a
 re-upload. Both are weighted heavily below.
 
-**The format chosen avoids work later.** YouTube offers the same audio as Opus
-and as AAC. An iPod cannot play Opus, so taking the Opus stream means a
-re-encode - a lossy source encoded lossily a second time. Asking for the AAC
-stream first means the file is usually iPod-ready as downloaded and never gets
-re-encoded at all.
+**The stream chosen is the one that sounds best on the device, not the one
+that avoids work.** YouTube serves the same audio as AAC and as Opus, and an
+iPod plays only the AAC - so taking AAC means no re-encode, which is why this
+module asked for it first until 15 September. Measuring the two settled it the
+other way.
+
+Signed out, YouTube's AAC stream is brickwalled at **15.8kHz**: everything above
+it is gone, at -90dB or lower. Measured on three unrelated tracks, the figure was
+15.8kHz every time - it is a property of YouTube's encoding ladder, not of any
+one upload. The Opus stream of the same video carries to **20kHz** at full level.
+
+Re-encoding that Opus to 256kbps AAC reproduces its spectrum to within 0.2dB in
+every band (`transcode.py` has the settings and why). So the re-encode this
+module used to avoid buys back more than 4kHz of treble that the AAC stream
+never had, and the second lossy generation costs far less than the bandwidth it
+recovers. The one case where AAC is still taken directly is a Premium account's
+256kbps stream, which needs no re-encode at all and should beat both.
 """
 
 from __future__ import annotations
@@ -91,6 +103,52 @@ _DECORATION = re.compile(r"[\(\[][^)\]]*[)\]]|feat\.?.*$|ft\.?.*$", re.IGNORECAS
 _APOSTROPHE_CHARS = "'`" + chr(0x2018) + chr(0x2019) + chr(0x02BC)
 _APOSTROPHES = re.compile(f"[{re.escape(_APOSTROPHE_CHARS)}]")
 _NON_WORD = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+# Which audio stream to ask YouTube for, best first. The order is the one that
+# was measured rather than the one that is least work - the module docstring has
+# the numbers.
+#
+#  1. AAC at 192kbps or better. Only a Premium account is offered one (itag 141,
+#     256kbps), and it is the best case of all: full bandwidth, no re-encode.
+#  2. Opus. What everyone else should take - 20kHz against the AAC stream's
+#     15.8kHz - at the cost of a convert on the way to the iPod.
+#  3. AAC at any bitrate, then anything at all. A track in the wrong format can
+#     be converted; a missing one cannot.
+_BEST = (
+    "bestaudio[acodec^=mp4a][abr>=192]"
+    "/bestaudio[acodec^=opus]"
+    "/bestaudio[acodec^=mp4a]"
+    "/bestaudio/best"
+)
+
+# What to ask for when there is no ffmpeg. Opus has to be remuxed on the way out
+# and converted on the way to the iPod, and both need it - where the AAC stream
+# needs nothing at all. Asking for Opus without ffmpeg would fail every track
+# rather than one, and a quieter top octave is by far the better failure.
+_WITHOUT_FFMPEG = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best"
+
+
+def format_selector(*, has_ffmpeg: bool) -> str:
+    """The yt-dlp format expression this application downloads with."""
+    return _BEST if has_ffmpeg else _WITHOUT_FFMPEG
+
+
+def _postprocessors(*, has_ffmpeg: bool) -> list[dict[str, Any]]:
+    """Put the audio in a container named after its codec.
+
+    A stream copy, not a re-encode - verified bit-identical in both directions.
+    It is here for one specific reason: yt-dlp saves an Opus stream as `.webm`,
+    and pypodlib classifies `.webm` as *video*, so it would set about making an
+    iPod video file out of an audio-only download. `.opus` is classified as
+    lossy audio and converts to AAC as it should.
+
+    The AAC path is untouched by this - yt-dlp skips the step entirely when the
+    container already suits the codec.
+    """
+    if not has_ffmpeg:
+        return []
+    return [{"key": "FFmpegExtractAudio", "preferredcodec": "best", "preferredquality": None}]
 
 
 class DownloadError(Exception):
@@ -281,25 +339,20 @@ def _download(url: str, destination: Path, *, source: str) -> Download:
     from yt_dlp.utils import DownloadError as YtDlpError
 
     destination.mkdir(parents=True, exist_ok=True)
+    # Whether the better stream can be used at all - see `_WITHOUT_FFMPEG`.
+    found = ffmpeg_finder.find()
     options = _base_options() | {
-        # The best AAC available, and no setting to get in the way of that.
-        #
-        # AAC first because an iPod plays it untouched, so the common case needs
-        # no re-encode at all. "best" within AAC because a signed-in Premium
-        # account is offered 256kbps where everyone else gets 128 - the same
-        # expression picks up whichever the account is entitled to. The
-        # fallbacks run down to "whatever audio exists" rather than failing: a
-        # track in the wrong format can be converted, a missing one cannot.
-        "format": "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best",
+        "format": format_selector(has_ffmpeg=found is not None),
+        "postprocessors": _postprocessors(has_ffmpeg=found is not None),
         "outtmpl": str(destination / "source.%(ext)s"),
         "noplaylist": True,
         "overwrites": True,
-        # The saved YouTube session, when there is one. This is the whole
-        # difference between 128kbps and 256kbps.
+        # The saved YouTube session, when there is one. What it buys is the
+        # 256kbps AAC stream, which is the only case where nothing has to be
+        # converted at all.
         **youtube.cookie_options(),
     }
 
-    found = ffmpeg_finder.find()
     if found is not None:
         options["ffmpeg_location"] = str(found.directory)
 

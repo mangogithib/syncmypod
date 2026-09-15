@@ -70,6 +70,11 @@ async function refreshState() {
   }
 
   el("server-label").textContent = data.paired ? data.server : "Not paired";
+  // Reflected from the stored setting rather than left at the markup's default,
+  // so a box the user unticked last time is still unticked.
+  if (typeof data.backupBeforeSync === "boolean") {
+    el("opt-backup").checked = data.backupBeforeSync;
+  }
   renderIpod(data);
   renderLibrary(data);
   renderYouTube(data);
@@ -273,7 +278,7 @@ function renderYouTube(data) {
     ? youtubeState.detail
     : youtubeState.signedIn
       ? "Signed in"
-      : "128kbps AAC";
+      : "Opus, converted to 256kbps AAC";
   body.append(node("p", "headline", headline));
 
   body.append(
@@ -282,7 +287,7 @@ function renderYouTube(data) {
       "subtle",
       youtubeState.signedIn
         ? "Using your saved YouTube session."
-        : "Sign in with YouTube Music Premium for 256kbps."
+        : "Highest quality YouTube offers for free. Premium adds a 256kbps AAC stream that needs no conversion."
     )
   );
 
@@ -442,6 +447,7 @@ async function start({ dryRun }) {
       body: JSON.stringify({
         dryRun,
         remove: el("opt-remove").checked,
+        backup: el("opt-backup").checked,
       }),
     });
     if (!result.started) throw new Error(result.error || "Could not start.");
@@ -522,6 +528,9 @@ function handle(event) {
       break;
     case "backup":
       note("Backing up the iPod…");
+      break;
+    case "backup-skipped":
+      note("Backup skipped - nothing will be saved to restore from.");
       break;
     case "writing":
       note(`Writing ${event.count} track(s) to the iPod…`);
@@ -718,6 +727,23 @@ function showSummary(summary) {
 
 el("btn-sync").addEventListener("click", () => start({ dryRun: false }));
 el("btn-check").addEventListener("click", () => start({ dryRun: true }));
+// Saved when it changes, not only when a sync starts. It reads as a setting
+// rather than a per-run choice, so closing the window must not discard it.
+el("opt-backup").addEventListener("change", async () => {
+  const enabled = el("opt-backup").checked;
+  try {
+    await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify({ backupBeforeSync: enabled }),
+    });
+    if (!enabled) {
+      note("Backups are off. Nothing will be saved to restore from.");
+    }
+  } catch (error) {
+    note(error.message);
+  }
+});
+
 el("btn-cancel").addEventListener("click", async () => {
   el("btn-cancel").disabled = true;
   await api("/api/cancel", { method: "POST" }).catch(() => {});

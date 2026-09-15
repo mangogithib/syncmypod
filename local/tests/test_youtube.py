@@ -257,8 +257,13 @@ class TestPickingTheStream:
         assert youtube.best_aac_bitrate(entry) == 256
 
     def test_opus_is_ignored_however_high_it_looks(self):
-        """An iPod cannot play Opus, so a higher Opus number is not better - it
-        would be re-encoded and end up worse than the AAC it beat."""
+        """This measures the account, not the download.
+
+        A higher Opus number does not mean Premium - the Opus stream is the same
+        for everybody, and the AAC bitrate is the only one that says which
+        account this is. Which stream a sync actually takes is `downloader.py`'s
+        decision, and since 15 September it is usually the Opus.
+        """
         entry = {
             "formats": [
                 {"acodec": "mp4a.40.2", "vcodec": "none", "abr": 129},
@@ -276,18 +281,17 @@ class TestPickingTheStream:
         assert youtube.best_aac_bitrate({}) is None
 
 
-def test_the_format_chain_takes_the_best_aac(config_home):
-    """One expression covers both accounts.
+def test_the_download_uses_the_saved_session(config_home):
+    """One expression covers both accounts, and the cookies decide which.
 
-    Signed out it resolves to the 128kbps stream; with Premium the same
-    expression picks the 256kbps one, because both are m4a and it asks for the
-    best. That is why there is no quality setting.
+    Signed out it resolves to the Opus stream; with Premium the same expression
+    picks the 256kbps AAC, which needs no conversion. That is why there is no
+    quality setting - what is on offer is a property of the account, not
+    something to choose. `test_downloader.py` asserts the choice itself.
     """
     import inspect
 
-    source = inspect.getsource(downloader._download)
-    assert "bestaudio[ext=m4a]" in source
-    assert "youtube.cookie_options()" in source
+    assert "youtube.cookie_options()" in inspect.getsource(downloader._download)
 
 
 class TestSigningInWithoutBeingAsked:

@@ -173,6 +173,9 @@ class Report:
     artwork_linked: int = 0
     artwork_error: str | None = None
     backup_id: str | None = None
+    # False only when the user turned backups off. Carried so the summary can
+    # say so rather than leaving "no backup id" to be read as a failure.
+    backed_up: bool = True
     run_id: int | None = None
     status: str = "done"
     message: str | None = None
@@ -316,6 +319,7 @@ def run(
     batch_size: int = DEFAULT_BATCH_SIZE,
     concurrency: int = DEFAULT_CONCURRENCY,
     keep_downloads: bool = False,
+    backup: bool | None = None,
     progress: Progress | None = None,
     cancel: Callable[[], bool] | None = None,
 ) -> Report:
@@ -325,6 +329,9 @@ def run(
     would do before letting it. ``limit`` caps how many tracks are downloaded,
     which is how a first run against a large library is kept short enough to
     watch.
+
+    ``backup`` overrides the stored preference for this run only; None uses it.
+    Turning it off is supported and is not recommended - see ``Config``.
 
     ``cancel`` is polled between tracks. Stopping there rather than immediately
     means the database is never interrupted part-written and everything already
@@ -385,9 +392,19 @@ def run(
             ipod.ensure_database()
 
         # Before anything is written. pypodlib is alpha and this is the one
-        # operation that can leave a device unusable.
-        say("backup", {})
-        report.backup_id = _backup(ipod)
+        # operation that can leave a device unusable, so the default is on and
+        # a failed backup stops the run. Turning it off is a deliberate choice
+        # the user has made, and it is recorded in the report and the log rather
+        # than passing silently - "I never turned that off" is exactly the thing
+        # somebody says after losing a device.
+        take_backup = stored.backup_before_sync if backup is None else backup
+        if take_backup:
+            say("backup", {})
+            report.backup_id = _backup(ipod)
+        else:
+            logger.warning("Backups are turned off - nothing was snapshotted before this sync")
+            report.backed_up = False
+            say("backup-skipped", {})
 
         report.run_id = api.start_run(
             planned=len(plan.to_download) + len(plan.removals),

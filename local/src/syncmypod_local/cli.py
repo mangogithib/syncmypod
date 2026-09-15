@@ -318,6 +318,14 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Leave downloaded files on disk for debugging. Prints where they are.",
     )
+    sync.add_argument(
+        "--no-backup",
+        action="store_true",
+        help=(
+            "Skip the snapshot taken before writing. Faster and uses no disk, "
+            "but there is nothing to restore from if the write goes wrong."
+        ),
+    )
     sync.add_argument("--yes", action="store_true", help="Do not ask before removing tracks")
     sync.add_argument(
         "--eject",
@@ -517,6 +525,9 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         batch_size=max(1, args.batch),
         concurrency=max(1, args.at_once),
         keep_downloads=args.keep_downloads,
+        # None rather than True, so the stored preference is what applies when
+        # the flag is not given. The flag only ever turns backups off.
+        backup=False if args.no_backup else None,
         progress=reporter,
     )
 
@@ -665,6 +676,11 @@ class _SyncReporter:
             self._print_plan(data["plan"])
         elif event == "backup":
             self._console.print("Backing up the iPod database...")
+        elif event == "backup-skipped":
+            self._console.print(
+                "[yellow]Skipping the backup.[/yellow] Nothing to restore from "
+                "if this write goes wrong."
+            )
         elif event == "track":
             index, total = data["index"], data["total"]
             self._console.print(f"[dim]{index}/{total}[/dim] {data['item'].label}")

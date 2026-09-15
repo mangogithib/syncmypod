@@ -130,6 +130,7 @@ class GuiServer:
             # server-side rather than to fill in a menu.
             "youtube": {"signedIn": youtube_module.is_signed_in()},
             "running": self.session.running,
+            "backupBeforeSync": stored.backup_before_sync,
             "ipod": None,
             "ipodError": None,
         }
@@ -154,16 +155,33 @@ class GuiServer:
             }
         return payload
 
-    def start(self, *, dry_run: bool, remove: bool, limit: int | None) -> dict[str, Any]:
+    def start(
+        self,
+        *,
+        dry_run: bool,
+        remove: bool,
+        limit: int | None,
+        backup: bool | None = None,
+    ) -> dict[str, Any]:
         """Begin a run on a worker thread, or refuse if one is already going."""
         if self.session.running:
             return {"started": False, "error": "A sync is already running."}
+
+        # Remembered rather than applied to this run alone. The page shows it as
+        # a setting, so it has to still be off the next time the page is opened.
+        if backup is not None:
+            self.set_backup_before_sync(backup)
 
         self.session.reset()
         self.session.running = True
         self._worker = threading.Thread(
             target=self._run,
-            kwargs={"dry_run": dry_run, "remove": remove, "limit": limit},
+            kwargs={
+                "dry_run": dry_run,
+                "remove": remove,
+                "limit": limit,
+                "backup": backup,
+            },
             daemon=True,
         )
         self._worker.start()
@@ -216,6 +234,20 @@ class GuiServer:
     def unpair(self) -> dict[str, Any]:
         """Forget the pairing on this computer only."""
         return {"unpaired": config_module.clear()}
+
+    def set_backup_before_sync(self, enabled: bool) -> dict[str, Any]:
+        """Turn the pre-sync snapshot on or off, and remember the choice.
+
+        Saved the moment it is changed rather than only when a sync starts, so
+        the toggle means what it looks like it means if the window is closed in
+        between.
+        """
+        stored = config_module.load()
+        if stored.backup_before_sync != enabled:
+            stored.backup_before_sync = enabled
+            config_module.save(stored)
+            logger.info("Backup before sync is now %s", "on" if enabled else "off")
+        return {"backupBeforeSync": enabled}
 
     def youtube_check(self) -> dict[str, Any]:
         """Ask YouTube what bitrate this session is offered."""
@@ -337,13 +369,16 @@ class GuiServer:
         self.session.add("cancelling")
         return {"cancelling": True}
 
-    def _run(self, *, dry_run: bool, remove: bool, limit: int | None) -> None:
+    def _run(
+        self, *, dry_run: bool, remove: bool, limit: int | None, backup: bool | None = None
+    ) -> None:
         try:
             report = sync_engine.run(
                 config_module.load(),
                 dry_run=dry_run,
                 remove=remove,
                 limit=limit,
+                backup=backup,
                 progress=self._progress,
                 cancel=lambda: self.session.cancelled,
             )
@@ -395,8 +430,8 @@ class GuiServer:
             )
         elif event == "database":
             self.session.add("database")
-        elif event == "backup":
-            self.session.add("backup")
+        elif event in {"backup", "backup-skipped"}:
+            self.session.add(event)
         elif event == "track":
             self.session.add(
                 "track",
@@ -430,6 +465,7 @@ def _summarise(report: sync_engine.Report, *, dry_run: bool) -> dict[str, Any]:
         "playlists": report.playlists_written,
         "artwork": report.artwork_linked,
         "artworkError": report.artwork_error,
+        "backedUp": report.backed_up,
         "excluded": len(report.plan.excluded),
         "message": report.message,
         "toDownload": len(report.plan.to_download),
@@ -552,12 +588,14 @@ def _make_handler(gui: GuiServer):
 
             if path == "/api/sync":
                 limit = body.get("limit")
+                backup = body.get("backup")
                 self._json(
                     200,
                     gui.start(
                         dry_run=bool(body.get("dryRun")),
                         remove=bool(body.get("remove")),
                         limit=int(limit) if limit else None,
+                        backup=None if backup is None else bool(backup),
                     ),
                 )
             elif path == "/api/cancel":
@@ -572,6 +610,11 @@ def _make_handler(gui: GuiServer):
                         str(body.get("code") or ""),
                         str(body.get("deviceName") or ""),
                     ),
+                )
+            elif path == "/api/settings":
+                self._json(
+                    200,
+                    gui.set_backup_before_sync(bool(body.get("backupBeforeSync", True))),
                 )
             elif path == "/api/unpair":
                 self._json(200, gui.unpair())

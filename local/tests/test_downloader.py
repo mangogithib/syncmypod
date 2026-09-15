@@ -7,6 +7,8 @@ is pure logic over a dict, so it is worth testing exhaustively and cheap to.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
 from syncmypod_local import downloader
@@ -232,3 +234,69 @@ class TestAcceptingALongerUpload:
             [self.entry("Dooron Dooron (Live) - Paresh Pahuja", "Paresh Pahuja", 246)],
         )
         assert found == []
+
+
+class TestWhichStreamIsAskedFor:
+    """The stream chosen is the one measured to sound best, not the cheapest.
+
+    YouTube's AAC stream is brickwalled at 15.8kHz - measured on three unrelated
+    tracks, the same figure every time. The Opus stream of the same video runs to
+    20kHz, and re-encoding it to 256kbps AAC reproduces that spectrum to within
+    0.2dB. So Opus is taken even though it costs a conversion, and the AAC stream
+    is taken only when it is the 256kbps one a Premium account is offered.
+
+    Asserted through yt-dlp's own selector rather than by matching the string, so
+    these say what YouTube would actually be handed rather than what the
+    expression looks like.
+    """
+
+    # The audio-only formats a signed-out request really returns, as measured.
+    HE_AAC: ClassVar = {"format_id": "139", "acodec": "mp4a.40.5", "abr": 48.8, "ext": "m4a"}
+    AAC_128: ClassVar = {"format_id": "140", "acodec": "mp4a.40.2", "abr": 129.5, "ext": "m4a"}
+    OPUS: ClassVar = {"format_id": "251", "acodec": "opus", "abr": 144.6, "ext": "webm"}
+    # What Premium adds.
+    AAC_256: ClassVar = {"format_id": "141", "acodec": "mp4a.40.2", "abr": 256.0, "ext": "m4a"}
+
+    @staticmethod
+    def chosen(formats, *, has_ffmpeg=True):
+        from yt_dlp import YoutubeDL
+
+        offered = [{"vcodec": "none", "url": "https://example/x", **f} for f in formats]
+        with YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+            select = ydl.build_format_selector(
+                downloader.format_selector(has_ffmpeg=has_ffmpeg)
+            )
+            picked = list(select({"formats": offered, "incomplete_formats": False}))
+        return [f["format_id"] for f in picked]
+
+    def test_opus_beats_the_128kbps_aac_everyone_is_offered(self):
+        assert self.chosen([self.HE_AAC, self.AAC_128, self.OPUS]) == ["251"]
+
+    def test_premiums_256kbps_aac_beats_opus(self):
+        """The one case that needs no conversion at all, so it wins outright."""
+        assert self.chosen([self.HE_AAC, self.AAC_128, self.OPUS, self.AAC_256]) == ["141"]
+
+    def test_aac_is_still_taken_when_there_is_no_opus(self):
+        assert self.chosen([self.HE_AAC, self.AAC_128]) == ["140"]
+
+    def test_opus_is_taken_when_there_is_no_aac(self):
+        assert self.chosen([self.OPUS]) == ["251"]
+
+    def test_without_ffmpeg_the_aac_stream_is_taken_instead(self):
+        """Neither the remux nor the conversion can run, so Opus would fail.
+
+        One track short is a bad sync; every track short is a broken one.
+        """
+        assert self.chosen([self.AAC_128, self.OPUS], has_ffmpeg=False) == ["140"]
+
+    def test_the_remux_runs_only_when_ffmpeg_is_there(self):
+        """Opus arrives as `.webm`, which pypodlib would treat as a video."""
+        [step] = downloader._postprocessors(has_ffmpeg=True)
+        assert step["key"] == "FFmpegExtractAudio"
+        # "best" keeps whatever codec was downloaded and only changes the
+        # container. Naming a codec here would re-encode, which is the whole
+        # thing this is trying to avoid.
+        assert step["preferredcodec"] == "best"
+        assert step["preferredquality"] is None
+
+        assert downloader._postprocessors(has_ffmpeg=False) == []

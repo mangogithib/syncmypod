@@ -137,6 +137,61 @@ class TestAFullRun:
         assert report.backup_id
 
 
+class TestTurningTheBackupOff:
+    """A snapshot is a full copy of the music on the iPod.
+
+    On a full Classic that is slow and the disk it lands on may not have room,
+    which is a real reason to turn it off. It stays on by default, because
+    rewriting the iTunesDB is the one operation here that can leave a device
+    unusable.
+    """
+
+    @respx.mock
+    def test_the_setting_is_honoured(self, ipod, paired, audio_source):
+        mock_server(manifest())
+        paired.backup_before_sync = False
+
+        report = sync.run(paired, mount=str(ipod.mount_path))
+
+        assert report.backup_id is None
+        assert report.backed_up is False
+        assert report.synced, "the sync still has to do its job without a backup"
+
+    @respx.mock
+    def test_the_argument_overrides_the_setting(self, ipod, paired, audio_source):
+        """A --no-backup run must not change what the next one does."""
+        mock_server(manifest())
+        assert paired.backup_before_sync is True
+
+        report = sync.run(paired, mount=str(ipod.mount_path), backup=False)
+
+        assert report.backup_id is None
+        assert paired.backup_before_sync is True
+
+    @respx.mock
+    def test_leaving_it_alone_still_backs_up(self, ipod, paired, audio_source):
+        mock_server(manifest())
+        report = sync.run(paired, mount=str(ipod.mount_path), backup=None)
+        assert report.backup_id
+        assert report.backed_up is True
+
+    @respx.mock
+    def test_the_run_says_it_was_skipped(self, ipod, paired, audio_source):
+        """Silence here is how somebody ends up surprised there is no restore."""
+        mock_server(manifest())
+        paired.backup_before_sync = False
+        seen = []
+
+        sync.run(
+            paired,
+            mount=str(ipod.mount_path),
+            progress=lambda event, _data: seen.append(event),
+        )
+
+        assert "backup-skipped" in seen
+        assert "backup" not in seen
+
+
 class TestTheDiff:
     @respx.mock
     def test_a_second_run_does_no_work(self, ipod, paired, audio_source):
@@ -453,6 +508,84 @@ class TestTranscoding:
         mock_server(manifest(tracks=[track(1)]))
         sync.run(paired, mount=str(ipod.mount_path))
         assert device.open_at(ipod.mount_path).tracks()[0].location.lower().endswith(".m4a")
+
+    def test_the_conversion_asks_for_the_high_quality_setting(self, tmp_path, monkeypatch):
+        """Not pypodlib's default.
+
+        Measured against the Opus it is made from, the default of 192kbps rolls
+        the top octave off from 19.5kHz and lands at -28.7dB of error; 256kbps
+        keeps the full 20.1kHz at -32.1dB. Since 15 September the downloader
+        prefers Opus precisely for that top octave, so letting the conversion
+        throw it away would undo the point of taking it.
+        """
+        from pypodlib.sync import transcoder as pypod_transcoder
+
+        seen = {}
+        real = pypod_transcoder.resolve_transcode_plan
+
+        def capture(source, *, options=None, **kwargs):
+            seen["options"] = options
+            return real(source, options=options, **kwargs)
+
+        monkeypatch.setattr(pypod_transcoder, "resolve_transcode_plan", capture)
+
+        source = tmp_path / "source.opus"
+        shutil.copy(FIXTURES / "source.opus", source)
+        transcode.prepare(source, tmp_path / "out")
+
+        assert seen["options"].lossy_quality == "high"
+
+    def test_high_means_256kbps(self):
+        """The one thing this rests on and does not own.
+
+        ``lossy_quality`` is a word, and what it is worth in kilobits is
+        pypodlib's table rather than ours. If a later version re-values it, the
+        setting above quietly starts asking for something else - so it is
+        asserted here rather than discovered by ear.
+        """
+        from pypodlib.sync.transcoder import _QUALITY_MUSIC_KBPS
+
+        assert _QUALITY_MUSIC_KBPS["high"] == 256
+
+    def test_the_converted_file_is_aac_lc_the_ipod_can_play(self, tmp_path):
+        """Every limit a clickwheel iPod has, checked on the real output.
+
+        AAC-LC because the hardware decoder plays nothing else - HE-AAC comes
+        back as silence - and 48kHz stereo because that is its ceiling. No
+        bitrate assertion: the fixture is one second long, which is too short
+        for a measured rate to mean anything.
+        """
+        import subprocess
+
+        from syncmypod_local import ffmpeg as ffmpeg_finder
+
+        source = tmp_path / "source.opus"
+        shutil.copy(FIXTURES / "source.opus", source)
+
+        converted = transcode.prepare(source, tmp_path / "out")
+        assert converted.was_transcoded
+
+        probe = json.loads(
+            subprocess.run(
+                [
+                    str(ffmpeg_finder.require().ffprobe),
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "stream=codec_name,profile,sample_rate,channels",
+                    "-of",
+                    "json",
+                    str(converted.path),
+                ],
+                capture_output=True,
+                check=True,
+            ).stdout
+        )
+        stream = probe["streams"][0]
+        assert stream["codec_name"] == "aac"
+        assert stream["profile"] == "LC"
+        assert int(stream["sample_rate"]) <= 48000
+        assert int(stream["channels"]) <= 2
 
 
 class TestFetchingSeveralAtOnce:

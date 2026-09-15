@@ -264,14 +264,37 @@ body {
   background: var(--danger-soft);
 }
 
+/* The options sit to the right of the buttons and stack, so a toggle can
+   carry a line of explanation without stretching the row. */
+.toggles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
 .toggle {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
   font-size: var(--text-sm);
   color: var(--text-muted);
   cursor: pointer;
-  margin-left: auto;
+}
+
+.toggle input {
+  /* Line the box up with the first line of the label rather than the middle
+     of a label that has grown to two lines. */
+  margin-top: 0.15em;
+  flex-shrink: 0;
+}
+
+.toggle-note {
+  display: block;
+  font-style: normal;
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+  opacity: 0.8;
 }
 
 /* --- Plan --------------------------------------------------------------- */
@@ -442,7 +465,7 @@ body {
     padding: var(--space-4) var(--space-3);
   }
 
-  .toggle {
+  .toggles {
     margin-left: 0;
     flex-basis: 100%;
   }

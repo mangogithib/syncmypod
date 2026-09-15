@@ -13,10 +13,26 @@ differ by model. pypodlib already encodes all of that, keyed to the device
 currently open, and it is knowledge this project has no reason to duplicate and
 every reason to get wrong.
 
-The common case does no work at all: the downloader asks for the AAC stream
-first, so the file usually arrives already playable and is passed through
-untouched. Re-encoding a lossy source into another lossy format is pure loss,
-and the fastest transcode is the one that does not happen.
+**The common case is now a convert, and that is deliberate.** Until
+15 September the downloader asked for YouTube's AAC stream so that nothing here
+had to run. Measuring the streams changed that - see `downloader.py` - and the
+file that arrives is usually Opus, which an iPod cannot play at all.
+
+So the setting below matters more than it used to. ``lossy_quality="high"``
+asks pypodlib for **256kbps** rather than its default 192. On the Opus that
+YouTube serves, measured against the source it was made from:
+
+    192kbps (the default)   rolls off from 19.5kHz   error -28.7dB
+    256kbps ("high")        full 20.1kHz             error -32.1dB
+
+256 is where the second encode stops being what limits the result: it
+reproduces the source's spectrum to within 0.2dB in every band, and going on to
+320 buys another 4dB of accuracy for a quarter more space on the device. The
+output is AAC-LC at 48kHz, which is inside every limit a clickwheel iPod has.
+
+A file that arrives already playable is still passed through untouched - a
+Premium account's 256kbps AAC needs nothing done to it, and re-encoding it
+would be pure loss.
 """
 
 from __future__ import annotations
@@ -62,7 +78,10 @@ def prepare(source: Path, destination: Path) -> Converted:
         transcode,
     )
 
-    options = TranscodeOptions(ffmpeg_path=_ffmpeg_path())
+    # "high" is 256kbps where the default is 192. The docstring has the
+    # measurements; the short version is that this is the difference between
+    # keeping the source's top octave and rolling it off.
+    options = TranscodeOptions(ffmpeg_path=_ffmpeg_path(), lossy_quality="high")
 
     try:
         plan = resolve_transcode_plan(source, options=options)

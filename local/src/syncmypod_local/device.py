@@ -22,6 +22,7 @@ import logging
 import re
 import shutil
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -296,6 +297,14 @@ class IpodDevice:
         # disk and the source paths - the only link back to what was asked for -
         # are gone. Holding the reference keeps them.
         library = self._library()
+        # Before rather than after. `add_tracks` commits the database itself, so
+        # correcting the existing rows first folds the repair into that write
+        # instead of needing a second full rewrite of the iTunesDB per batch.
+        try:
+            repair_filetypes(library)
+        except Exception as err:  # pragma: no cover - defensive
+            logger.warning("Could not correct the recorded track formats: %s", err)
+
         try:
             added = self._handle.add_tracks(resolved, raise_on_error=True)
         except Exception as err:
@@ -519,6 +528,15 @@ class IpodDevice:
             ) from err
 
     def _commit(self) -> None:
+        # Every save re-serialises every row, so this is the moment a device
+        # written by an older version heals - at no cost, in a write that was
+        # happening anyway. A failure here must not take the commit with it:
+        # not repairing leaves the device exactly as this tool used to leave it,
+        # whereas not committing loses the tracks the run just copied.
+        try:
+            repair_filetypes(self._library())
+        except Exception as err:  # pragma: no cover - defensive
+            logger.warning("Could not correct the recorded track formats: %s", err)
         try:
             ok = self._handle.save(raise_on_error=True)
         except Exception as err:
@@ -615,6 +633,145 @@ _AUDIO_SUFFIXES = frozenset(
 )
 
 
+# ---------------------------------------------------------------------------
+# Telling the iPod what kind of file each track is
+# ---------------------------------------------------------------------------
+#
+# Every row of the iTunesDB carries a four-character code naming the track's
+# format - "M4A " for AAC, "MP3 " for MP3 - and a matching `mp3_flag`. It is how
+# the iPod decides which decoder to hand the file to, and it is the one piece of
+# metadata that has to agree with the bytes on disk.
+#
+# pypodlib 0.1.0 gets it wrong for everything except MP3, and the failure is a
+# case mismatch between two of its own functions. `add_tracks` stages the value
+# through `ipod_filetype_for_extension`, which returns `"m4a"`; the writer then
+# resolves it through `track_dict_to_info`, which tests it against a list of
+# capitalised needles with a plain `in`. `"M4A" in "m4a"` is False, every needle
+# misses, and the function falls through to its `"mp3"` default.
+#
+# The result on a real device: an iPod told that 453 AAC files are MP3s. They
+# play - the firmware recovers - but it is parsing an MP4 container as an MPEG
+# frame stream, and where it resyncs on something that is not a frame header the
+# output is a burst of noise. That is the screeching.
+#
+# Two things are needed. New rows must be staged with a spelling the writer
+# recognises, which `_install_filetype_fix` does at source. Rows already on the
+# device read back as "MP3" and are re-serialised on every save, so they stay
+# wrong until something rewrites them - which `repair_filetypes` does, in memory,
+# before a save this application was going to make anyway.
+_FILETYPE_BY_SUFFIX = {
+    # The value is not free-form: it is matched against pypodlib's own needle
+    # list, so it has to be spelled the way that list expects rather than the
+    # way the iTunesDB stores it. `test_device.py` asserts every line of this
+    # map round-trips through pypodlib to the four-character code named below.
+    ".mp3": "MP3",  # -> "MP3 "
+    ".m4a": "M4A",  # -> "M4A "
+    ".aac": "M4A",  # -> "M4A "  (AAC on an iPod is always in an MP4 container)
+    ".alac": "M4A",  # -> "M4A "
+    ".m4b": "Audiobook",  # -> "M4B "
+    ".m4p": "Protected",  # -> "M4P "
+    ".m4v": "M4V",  # -> "M4V "
+    ".mov": "M4V",  # -> "M4V "
+    ".mp4": "MP4",  # -> "MP4 "
+    ".wav": "WAV",  # -> "WAV "
+    ".aif": "AIFF",  # -> "AIFF"
+    ".aiff": "AIFF",  # -> "AIFF"
+}
+
+
+def _filetype_for(location: str) -> str | None:
+    """The database's format token for an on-device path, or None if unknown.
+
+    None means "leave this row alone". A container this map has never heard of
+    is one where guessing is worse than whatever is already recorded.
+    """
+    suffix = Path(location.replace(":", "/")).suffix.lower()
+    return _FILETYPE_BY_SUFFIX.get(suffix)
+
+
+def repair_filetypes(library: Any) -> int:
+    """Correct every row whose recorded format disagrees with its file.
+
+    Returns how many rows were changed, so a caller can tell whether a save is
+    worth making. Idempotent: once a device has been healed this does nothing
+    and costs one pass over the track list.
+
+    Tracks this tool never added are repaired too. That is deliberate and it is
+    not the ledger rule being broken - nothing is added, removed or moved, and
+    an MP3 put there by iTunes is already recorded as an MP3 and will not be
+    touched. A track mislabelled by some other tool gets the same fix.
+    """
+    changed = 0
+    for track in library.tracks:
+        location = track.location or ""
+        if not location:
+            continue
+        wanted = _filetype_for(location)
+        if wanted is None:
+            continue
+        current = str(track.get("filetype") or "")
+        # Compared through pypodlib's own resolver rather than by string. "M4A"
+        # and "AAC audio file" are different strings that mean the same code,
+        # and rewriting one into the other every save would be churn.
+        if _resolved_filetype(current) == _resolved_filetype(wanted):
+            continue
+        track["filetype"] = wanted
+        changed += 1
+    if changed:
+        logger.info("Corrected the recorded format of %d track(s) on the device", changed)
+    return changed
+
+
+@lru_cache(maxsize=64)
+def _resolved_filetype(value: str) -> str:
+    """What pypodlib's writer would make of a row's ``filetype`` value.
+
+    Cached because it is asked twice per track on every commit and the answer
+    depends only on the string - a large library would otherwise build a
+    throwaway TrackInfo a thousand times to learn the same dozen answers.
+    """
+    from pypodlib.sync._track_conversion import track_dict_to_info
+
+    try:
+        return str(track_dict_to_info({"filetype": value}).filetype)
+    except Exception:  # pragma: no cover - defensive; the call is pure
+        return ""
+
+
+def _install_filetype_fix() -> None:
+    """Make pypodlib stage new tracks with a format its own writer recognises.
+
+    Reaching into a dependency is not something to do lightly, and this is the
+    file where it belongs if it is done at all. The alternative was to let
+    `add_tracks` write the wrong code and then rewrite the database a second
+    time to correct it - a full iTunesDB rewrite per batch, on every sync,
+    forever.
+
+    The patch is applied only when the round-trip is actually broken, so the day
+    pypodlib fixes this upstream it quietly stops doing anything instead of
+    having to be found and removed.
+    """
+    from pypodlib.sync import _track_conversion as conversion
+
+    if getattr(conversion, "_syncmypod_filetype_fix", False):
+        return
+
+    original = conversion.ipod_filetype_for_extension
+    if _resolved_filetype(original(".m4a")) == "m4a":
+        # Already correct. Nothing to do, and nothing left behind.
+        conversion._syncmypod_filetype_fix = True
+        return
+
+    def corrected(extension: str) -> str:
+        return _FILETYPE_BY_SUFFIX.get(
+            "." + str(extension).casefold().lstrip("."), original(extension)
+        )
+
+    conversion.ipod_filetype_for_extension = corrected
+    conversion._syncmypod_filetype_fix = True
+    logger.debug("Applied the pypodlib track-format fix")
+
+
 def _count_audio_files(mount: Path) -> int:
     """How many audio files sit in the iPod's music folders.
 
@@ -654,6 +811,13 @@ def _pypodlib() -> Any:
             "pypodlib is not available, so the iPod cannot be read or written. "
             "Reinstall the application, or run: pip install 'pypodlib==0.1.0'"
         ) from err
+
+    # Here because it is the one place every path into the library passes
+    # through, and because it must be in place before the first track is staged.
+    try:
+        _install_filetype_fix()
+    except Exception as err:  # pragma: no cover - defensive
+        logger.warning("Could not apply the pypodlib track-format fix: %s", err)
     return pypodlib
 
 

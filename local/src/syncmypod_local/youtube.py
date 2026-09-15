@@ -97,10 +97,13 @@ class Availability:
             return f"could not check ({self.error})"
         if not self.best_aac_kbps:
             return "signed in" if self.signed_in else "not signed in"
-        quality = f"{self.best_aac_kbps}kbps AAC"
         if self.premium:
-            return f"{quality} (Premium)"
-        return f"{quality}" + (
+            return f"{self.best_aac_kbps}kbps AAC (Premium)"
+        # Not the AAC bitrate, because that is not the stream a sync takes. An
+        # account without Premium gets the Opus stream converted to 256kbps AAC,
+        # which is better than the 128kbps AAC this number describes - saying
+        # "128kbps" here would understate what the device actually receives.
+        return "Opus, converted to 256kbps AAC" + (
             " - signed in, but no Premium on this account" if self.signed_in else ""
         )
 
@@ -437,9 +440,12 @@ def check(timeout: float = 45.0) -> Availability:
 def best_aac_bitrate(entry: dict) -> int | None:
     """The highest-bitrate AAC audio stream in a yt-dlp result.
 
-    AAC specifically, not "best audio": the Opus stream is often nominally
-    higher but an iPod cannot play it, so it would have to be re-encoded and
-    would end up worse than the AAC it was chosen over.
+    This is the Premium probe, not a judgement about which stream to download -
+    `downloader.py` decides that, and since 15 September it prefers Opus to the
+    128kbps AAC offered to everyone else. AAC is what is measured here because
+    it is the only stream whose bitrate says anything about the account: 256kbps
+    is offered to Premium and 128kbps to everybody, while the Opus stream is the
+    same for both.
     """
     best = 0
     for candidate in entry.get("formats") or []:
