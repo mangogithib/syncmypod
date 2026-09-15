@@ -390,6 +390,17 @@ export async function renderLibrary(view, context) {
               'div.track-title-line',
               h('span.track-title', track.title),
               track.metadataState === 'resolved' ? null : metadataBadge(track.metadataState),
+              // Still unresolved, but deliberately so. Without this the row
+              // looks identical to one nobody has looked at yet, and there
+              // would be no way to find what you had accepted and undo it.
+              track.attentionDismissed
+                ? h(
+                    'span.badge',
+                    { title: 'Not counted on the Overview. Select it and choose Flag again to undo.' },
+                    icon('check', 12),
+                    'Accepted'
+                  )
+                : null,
               // The local app has always reported a track it could not fetch and
               // the server has always stored it. Until now nothing showed it, so
               // a song that never reached the iPod looked exactly like one that
@@ -487,6 +498,25 @@ export async function renderLibrary(view, context) {
           icon('list', 14),
           'Add to playlist'
         ),
+        // Offered only when the selection contains something that is actually
+        // being flagged. On a list of resolved songs it would do nothing, and a
+        // button that does nothing is worse than no button.
+        flaggable().length > 0
+          ? h(
+              'button.btn.btn-sm',
+              { type: 'button', onclick: () => dismissSelected(true) },
+              icon('check', 14),
+              'Stop flagging'
+            )
+          : null,
+        dismissed().length > 0
+          ? h(
+              'button.btn.btn-sm',
+              { type: 'button', onclick: () => dismissSelected(false) },
+              icon('warn', 14),
+              'Flag again'
+            )
+          : null,
         h(
           'button.btn.btn-sm.btn-danger',
           { type: 'button', onclick: () => removeSelected() },
@@ -495,6 +525,37 @@ export async function renderLibrary(view, context) {
         ),
       ],
     });
+  }
+
+  // Selected tracks the Overview is currently counting, and selected tracks it
+  // has been told to stop counting.
+  const NEEDS_ATTENTION = new Set(['unresolved', 'pending']);
+  const flaggable = () =>
+    selectedTracks().filter(
+      (track) => NEEDS_ATTENTION.has(track.metadataState) && !track.attentionDismissed
+    );
+  const dismissed = () => selectedTracks().filter((track) => track.attentionDismissed);
+
+  async function dismissSelected(dismiss) {
+    const tracks = dismiss ? flaggable() : dismissed();
+    if (tracks.length === 0) return;
+    try {
+      await api.setAttention(
+        tracks.map((track) => track.id),
+        dismiss
+      );
+      selection.clear();
+      toast(
+        dismiss
+          ? `${tracks.length} song${tracks.length === 1 ? '' : 's'} will no longer be flagged. They still sync, with the artist blank.`
+          : `${tracks.length} song${tracks.length === 1 ? '' : 's'} flagged again.`,
+        'ok'
+      );
+      context.refreshStats?.();
+      load();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   }
 
   function selectedTracks() {

@@ -87,6 +87,8 @@ export const api = {
   // body, not a query string. Read-only all the same.
   libraryKnown: (items) => request('POST', '/api/library/known', { items }),
   removeTracks: (trackIds) => request('POST', '/api/library/tracks/remove', { trackIds }),
+  setAttention: (trackIds, dismissed) =>
+    request('POST', '/api/library/tracks/attention', { trackIds, dismissed }),
   removeTrack: (trackId) => request('DELETE', `/api/library/tracks/${trackId}`),
   updateTrack: (trackId, patch) => request('PATCH', `/api/library/tracks/${trackId}`, patch),
   resolveTrack: (trackId, options) =>

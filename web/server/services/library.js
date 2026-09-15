@@ -31,6 +31,7 @@ const TRACK_COLUMNS = `
   lt.added_via             AS "addedVia",
   lt.rating,
   lt.source_hint           AS "sourceHint",
+  lt.attention_dismissed   AS "attentionDismissed",
   fail.error               AS "syncError",
   fail.device_name         AS "syncFailedOn"
 `;
@@ -321,7 +322,12 @@ export async function libraryStats(userId) {
          WHERE lt.user_id = $1) AS "totalDurationMs",
        (SELECT count(*)::int
           FROM library_tracks lt JOIN tracks t ON t.id = lt.track_id
-         WHERE lt.user_id = $1 AND t.metadata_state IN ('pending', 'unresolved'))
+         WHERE lt.user_id = $1
+           AND t.metadata_state IN ('pending', 'unresolved')
+           -- Tracks the user has looked at and accepted as they are. They still
+           -- sync and still read as unresolved in the Songs list; they just stop
+           -- being counted, so the warning keeps meaning something.
+           AND NOT lt.attention_dismissed)
          AS "needsAttention",
        -- Tracks the local app could not put on a paired iPod. Counted here so
        -- the overview can say so: the sync knows, the server has always stored

@@ -231,6 +231,32 @@ libraryRoutes.post(
   })
 );
 
+// "Stop flagging these", and its undo.
+//
+// Sets nothing about the track itself: the metadata stays unresolved, the sync
+// still carries it with blank fields, and the Songs list still says so. All this
+// changes is whether the Overview counts it - which is the difference between a
+// warning that means something and one people have learned to scroll past.
+libraryRoutes.post(
+  '/tracks/attention',
+  handler(async (req, res) => {
+    const trackIds = (Array.isArray(req.body?.trackIds) ? req.body.trackIds : []).map((value) =>
+      id(value, 'trackId')
+    );
+    if (trackIds.length === 0) throw badRequest('No trackIds supplied.');
+    const dismissed = req.body?.dismissed !== false;
+
+    const { rowCount } = await query(
+      `UPDATE library_tracks
+          SET attention_dismissed = $3
+        WHERE user_id = $1 AND track_id = ANY($2::bigint[])`,
+      [req.user.id, trackIds, dismissed]
+    );
+
+    res.json({ updated: rowCount, dismissed });
+  })
+);
+
 // Removes many at once.
 //
 // POST rather than DELETE with a body: a body on DELETE is legal but poorly

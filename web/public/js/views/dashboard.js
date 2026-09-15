@@ -30,9 +30,12 @@ export async function renderDashboard(view, context) {
     ({ stats, recent, devices, playlists }) => {
       const blocks = [];
 
-      // Unresolved tracks are the one thing on this page that needs acting on:
-      // they are in the library but excluded from every sync, so silence about
-      // them would be misleading.
+      // Unresolved tracks are the one thing on this page that needs acting on.
+      // They do sync - with the artist and album blank, which the iPod files
+      // under "Unknown Artist" - so this is not a blocker, it is a "you may want
+      // to fix these". A track that is never going to resolve can be accepted
+      // from the Songs list, which stops it being counted here without hiding it
+      // or changing what syncs.
       if (stats.needsAttention > 0) {
         blocks.push(
           h(
@@ -45,7 +48,12 @@ export async function renderDashboard(view, context) {
                 'span',
                 'They still sync, but reach the iPod with the artist and album blank. '
               ),
-              h('a', { href: '#/library?state=unresolved' }, 'Review them')
+              h('a', { href: '#/library?state=unresolved' }, 'Review them'),
+              h(
+                'div.small',
+                { style: { marginTop: '4px' } },
+                'Select the ones that will never resolve and choose Stop flagging.'
+              )
             )
           )
         );
