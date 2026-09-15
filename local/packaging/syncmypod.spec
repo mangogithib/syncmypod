@@ -40,10 +40,7 @@ hidden += collect_submodules("yt_dlp")
 # wasmtime ships a compiled runtime and a .wasm payload as package data; mutagen
 # and libusb_package carry data files of their own. collect_all takes the
 # binaries and data as well as the modules.
-# pywebview picks its backend at runtime from what the platform has, so the
-# import that matters is never visible statically. collect_all rather than
-# collect_submodules because it also ships a small JS shim as package data.
-for package in ("wasmtime", "libusb_package", "mutagen", "certifi", "webview"):
+for package in ("wasmtime", "libusb_package", "mutagen", "certifi"):
     package_datas, package_binaries, package_hidden = collect_all(package)
     datas += package_datas
     binaries += package_binaries
@@ -65,12 +62,27 @@ analysis = Analysis(
     hiddenimports=hidden,
     hookspath=[],
     runtime_hooks=[],
-    # The window is drawn by the operating system's own webview through
-    # pywebview, so none of these toolkits is ever loaded - and each would add
-    # tens of megabytes to the download. Left excluded after the move to a
-    # native window on 15 September, because that is exactly what pywebview
-    # avoids needing.
-    excludes=["tkinter", "PyQt5", "PyQt6", "PySide2", "PySide6", "matplotlib", "IPython"],
+    # Nothing here draws a window of its own: the application window is a
+    # Chromium browser launched with --app, so there is no toolkit to load and
+    # each of these would add tens of megabytes to the download.
+    #
+    # pythonnet is excluded for a specific reason. pywebview pulled it in for
+    # 0.1.8 and its loader could not initialise from inside a frozen bundle -
+    # "Failed to resolve Python.Runtime.Loader.Initialize" - so it shipped
+    # several megabytes of .NET assemblies to not work. See gui/window.py.
+    excludes=[
+        "tkinter",
+        "PyQt5",
+        "PyQt6",
+        "PySide2",
+        "PySide6",
+        "matplotlib",
+        "IPython",
+        "webview",
+        "clr",
+        "pythonnet",
+        "clr_loader",
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=BLOCK_CIPHER,

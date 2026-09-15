@@ -43,14 +43,14 @@ which is the one rule the whole design rests on.
 | Local app: GUI | Working — nothing needs a terminal. **A window of its own since 15 September**, not a browser tab |
 | Knowing what cannot be synced | **`check-matches`** searches without downloading and reports it per track, so it no longer takes a sync to find out |
 | Selecting several songs at once | Working — click/shift/ctrl on a pointer, long press then drag on a phone. Bulk add to playlist, remove from playlist, remove from library |
-| Downloadable build | **Published — 0.1.8**, built and attached by CI from the `local-v0.1.8` tag |
+| Downloadable build | **Published — 0.1.9**, built and attached by CI from the `local-v0.1.9` tag |
 | Phone layout | Working — measured at 375px, list rows included |
 | CI | Green. Parses every file, checks for undefined references, checks the api client, runs migrations |
 | Connected YouTube account | **Removed.** Needed a per-instance Google client *and* a Test users entry |
 | **A web test suite** | **Still none. The biggest gap — see section 6** |
 
 About 23,900 lines: 55 JavaScript files, 17 Python modules, 8 SQL migrations.
-**276 Python tests, all passing. Zero JavaScript tests.**
+**280 Python tests, all passing. Zero JavaScript tests.**
 
 Swept for dead code on 13 September across all three languages - unused Python
 defs, JS exports nothing imports, CSS classes no markup carries. Three things
@@ -261,15 +261,30 @@ fine, but start from the reasoning rather than from scratch.
 - **The local app is a window, not a browser tab, and that is not a reversal of
   the GUI decision.** Asked for on 15 September. The 11 September entry above
   chose a served page over Tkinter and PySide6, and every reason it gave still
-  holds - which is exactly why the answer is `pywebview` (about 1MB) wrapping
-  the *existing* page in the webview the operating system already ships:
-  WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux. Not one line of
-  the interface changed.
+  holds - so the page is unchanged and only how it is shown is different.
 
-  It always falls back. No pywebview, or no platform runtime, and the browser
-  opens exactly as it used to - `gui/window.py` returns False and the caller
-  carries on. `--browser` forces the old behaviour; `--no-browser` still prints
-  the address and opens nothing.
+  **It is a Chromium browser in `--app` mode, and pywebview was tried first and
+  did not work.** 0.1.8 shipped with pywebview and failed on the first run of
+  the packaged build: `Failed to resolve Python.Runtime.Loader.Initialize from
+  .../_internal/pythonnet/runtime/Python.Runtime.dll`. Its Windows backend
+  hosts WebView2 through pythonnet, which needs a .NET runtime resolved from
+  inside a frozen PyInstaller bundle - and it cost several megabytes of .NET
+  assemblies to not work. `msedge --app=<url>` needs nothing bundled, nothing
+  installed, and draws a window with no tabs, no address bar, its own taskbar
+  entry and the app icon. pythonnet and webview are now in the spec's
+  `excludes`.
+
+  **The dedicated `--user-data-dir` is load-bearing.** Against the user's normal
+  profile, `--app=` is handed to the browser they already have open and returns
+  immediately - so there is no process to wait on, the server is shut down while
+  the window is still up, and closing the window does not end the application.
+
+  It always falls back, and 0.1.8 got that wrong too: it shut the server down
+  when the window failed, then handed the dead address to a browser, so the user
+  saw a connection refused page beside a console saying the application was
+  running. `window.run` now leaves the server alone on every failure path, and
+  `test_gui.py` asserts exactly that. `--browser` forces a normal tab;
+  `--no-browser` prints the address and opens nothing.
 - **Matching stays in the local app, and server-side matching was turned down
   with a reason.** Proposed on 15 September: have the web tool find each
   track's audio in the background so the user learns what cannot be synced
@@ -567,6 +582,34 @@ Four things that cost time or would have:
   `__Secure-*PSID` on youtube.com appears when an account is attached and not
   before. Reading the page's address instead breaks the next time Google
   changes a redirect.
+
+### Saving metadata returned a 500, and had done for as long as it existed
+
+`TRACK_COLUMNS` in `services/library.js` selects `fail.error` and
+`fail.device_name`, which only exist when `SYNC_FAILURE_JOIN` is in the same
+query. Nothing enforced the pairing, `getTrack` was written without it, and
+Postgres answered `missing FROM-clause entry for table "fail"` - so every
+`GET /api/library/tracks/:id` and **every metadata save** returned a 500. The
+browser showed "Something went wrong. Check the server logs."
+
+Two things made it survive. The Songs list *does* include the join, so the page
+those columns are most visible on worked perfectly. And the PATCH route writes
+first and returns the updated track last - so the save succeeded and only the
+read-back failed, which means the error message was not just unhelpful, it was
+wrong. The edit had been applied every time.
+
+Fixed structurally rather than by adding the join and hoping: `trackSelect(from,
+extraColumns)` returns the columns *and* the join, so there is no way to ask for
+one without the other. The two callers need different FROM shapes - one scoped
+to a library, one looking up a track by id - which is why it takes the FROM as
+an argument.
+
+**A static check for this was tried and thrown away.** A script that looks for
+`alias.column` with no matching alias in the FROM reported 202 findings on a
+clean tree: it cannot tell a query from a fragment, and `EXCLUDED`,
+`INSERT INTO`, LATERAL bodies and CTEs all look like violations. Alias
+resolution needs a real SQL parser to be accurate, and a check that cries wolf
+gets switched off. The structural fix is worth more than the linter would be.
 
 ### YouTube blocks a machine that syncs a large library
 

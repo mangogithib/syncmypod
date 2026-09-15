@@ -738,9 +738,15 @@ def _cmd_gui(args: argparse.Namespace) -> int:
         port=args.port,
     )
 
-    # Blocks until the window is closed. False means none could be opened, in
-    # which case this falls through to the browser exactly as before.
+    if want_window and window_module.available():
+        # Said before the call, because the call blocks until the window is
+        # closed - and a terminal with no output at all looks like a hang.
+        console.print("[bold]SyncMyPod[/bold] is open in a window. Close it to stop.")
+
+    # Blocks until the window is closed. False means none could be opened, and
+    # the server is deliberately left running so the fallback below can use it.
     if want_window and window_module.run(server):
+        console.print("Closed.")
         return EXIT_OK
     if want_window:
         gui_module.open_in_browser(server.url)

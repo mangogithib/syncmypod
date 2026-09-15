@@ -1,92 +1,162 @@
 """The application as a window rather than a browser tab.
 
-**What this changes, and what it deliberately does not.** The interface is still
-the same page served by ``gui/server.py`` - every line of HTML, CSS and
-JavaScript is untouched. This module only puts it in a window of its own
-instead of handing the address to whatever browser is set as default.
+**What this changes, and what it deliberately does not.** The interface is the
+same page served by ``gui/server.py`` - every line of HTML, CSS and JavaScript
+is untouched. This module only decides how that page is shown.
 
-That was a decision recorded in the handover on 11 September, and it was the
-right one at the time: a page served to the browser adds no dependency and
-keeps the packaged executable small, where Tkinter would have meant rebuilding
-the interface and PySide6 would have added about 150MB to a download. Nothing
-about that reasoning has changed - which is why the answer here is pywebview,
-about 1MB, wrapping the *existing* page in the webview the operating system
-already ships. Windows has WebView2 behind Edge, macOS has WKWebView, Linux has
-WebKitGTK.
+**Why a browser in app mode rather than a GUI toolkit.** A window with no tabs,
+no address bar, its own taskbar entry and its own icon is what people mean by
+"an application" - and every Chromium browser will draw one on request with
+``--app=<url>``. Windows always has Edge, so on the platform this is built for
+there is nothing to install and nothing to bundle.
 
-**It always falls back.** A native window is nicer; it is not worth failing to
-start over. If pywebview is missing, or the platform has no usable webview
-runtime, the browser is opened exactly as before and the address is printed. A
-user whose machine cannot do this gets the old behaviour rather than an error.
+pywebview was tried first, in 0.1.8, and it failed in the packaged build:
+
+    Could not open a window (Failed to resolve Python.Runtime.Loader.Initialize
+    from ...\\_internal\\pythonnet\\runtime\\Python.Runtime.dll)
+
+Its Windows backend hosts WebView2 through pythonnet, which needs a working
+.NET runtime resolved from inside a frozen PyInstaller bundle. That is a class
+of problem with no reliable fix from here, and it cost the download several
+megabytes of .NET assemblies to not work. `--app=` needs neither.
+
+**The dedicated profile is not optional.** Launching ``msedge --app=...`` with
+the user's normal profile hands the request to the browser they already have
+open and returns immediately - so there would be no process to wait on, and the
+server would be shut down while the window was still on screen. A
+``--user-data-dir`` of its own makes this a browser instance we launched and can
+therefore wait for.
+
+**It always falls back.** A window is nicer; it is not worth failing to start
+over. With no Chromium browser the page opens in whatever the default browser
+is, exactly as it did before any of this.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import shutil
+import subprocess
+import sys
 import threading
-from typing import Any
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Big enough for the widest card at a comfortable width, small enough to open on
-# a laptop without filling the screen. The page is responsive, so this is a
-# starting size rather than a constraint.
-WINDOW_SIZE = (1100, 820)
-# Below this the layout starts stacking, which is fine on a phone and cramped in
-# a window somebody is about to resize back.
-MIN_WINDOW_SIZE = (760, 560)
+WINDOW_SIZE = (1180, 860)
+
+# Tried in order. Edge first because it is the one Windows is guaranteed to
+# have; the rest are for a machine where somebody has removed it or for Linux.
+_CANDIDATES = (
+    "msedge",
+    "chrome",
+    "google-chrome",
+    "chromium",
+    "chromium-browser",
+    "brave",
+    "vivaldi",
+)
+
+# The usual install locations, for Windows, where none of the above is on PATH.
+_WINDOWS_PATHS = (
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+)
+
+
+def find_browser() -> str | None:
+    """A Chromium browser that can draw an app window, or None."""
+    for name in _CANDIDATES:
+        found = shutil.which(name)
+        if found:
+            return found
+    if sys.platform == "win32":
+        for path in _WINDOWS_PATHS:
+            if Path(path).is_file():
+                return path
+    return None
 
 
 def available() -> bool:
-    """Whether a native window can be opened on this machine."""
-    try:
-        import webview  # noqa: F401
-    except Exception:
-        return False
-    return True
+    return find_browser() is not None
 
 
-def run(server: Any, *, title: str = "SyncMyPod") -> bool:
-    """Show *server* in a native window, blocking until it is closed.
+def _profile_dir() -> Path:
+    """Where the window's own browser profile lives.
 
-    Returns False without doing anything if no window could be opened, which
-    leaves the caller free to fall back to a browser. The server is served on a
-    background thread because pywebview needs the main thread: on macOS the UI
-    event loop is only allowed to run there, and the same arrangement is used
-    everywhere rather than having two different shapes of startup.
+    Beside the configuration rather than in the system temp directory, so it
+    survives between runs - otherwise every launch is a cold start with no
+    window position remembered.
     """
-    try:
-        import webview
-    except Exception as err:
-        logger.info("No native window available (%s); using the browser instead", err)
+    from ..config import config_dir
+
+    return config_dir() / "window-profile"
+
+
+def run(server: object, *, title: str = "SyncMyPod") -> bool:
+    """Show *server* in an app window, blocking until it is closed.
+
+    Returns False without having touched the server if no window could be
+    opened, so the caller can fall back to a browser. **The server is left
+    running in that case** - shutting it down here and then handing its address
+    to a browser is what 0.1.8 did, and it produced a connection refused page
+    next to a console saying the application was running.
+    """
+    browser = find_browser()
+    if browser is None:
+        logger.info("No Chromium browser found; using the default browser instead")
         return False
+
+    profile = _profile_dir()
+    try:
+        profile.mkdir(parents=True, exist_ok=True)
+    except OSError as err:
+        logger.info("Could not create %s (%s); using the browser instead", profile, err)
+        return False
+
+    command = [
+        browser,
+        f"--app={server.url}",
+        f"--user-data-dir={profile}",
+        f"--window-size={WINDOW_SIZE[0]},{WINDOW_SIZE[1]}",
+        # This window is the application. None of the browser's own furniture
+        # belongs in it, and nothing here should be reporting to a browser
+        # vendor about a page served from loopback.
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-features=Translate,TranslateUI",
+        "--disable-background-networking",
+        "--disable-sync",
+    ]
 
     serving = threading.Thread(target=server.serve_forever, daemon=True)
     serving.start()
 
     try:
-        webview.create_window(
-            title,
-            server.url,
-            width=WINDOW_SIZE[0],
-            height=WINDOW_SIZE[1],
-            min_size=MIN_WINDOW_SIZE,
-            # The page draws its own light and dark surfaces. Without this the
-            # window flashes white before the first paint, which on a dark
-            # theme is the first thing anybody notices.
-            background_color="#f4f5f7",
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            # Keeps the browser's own console off the application's window on
+            # Windows, where a spawned process would otherwise attach to it.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
         )
-        # Closing the window ends the process, which is what closing an
-        # application's only window should do. `http_server` is off because we
-        # already have one - pywebview's is for serving local files.
-        webview.start(debug=False, http_server=False)
-    except Exception as err:
-        # A missing WebView2 runtime lands here rather than at import. Falling
-        # back is better than a traceback about a COM class not being
-        # registered, which tells a user nothing they can act on.
-        logger.warning("Could not open a window (%s); using the browser instead", err)
+    except OSError as err:
+        logger.warning("Could not start %s (%s); using the browser instead", browser, err)
+        # The server has to keep running: the caller is about to hand its
+        # address to the default browser.
         return False
+
+    try:
+        process.wait()
+    except KeyboardInterrupt:
+        process.terminate()
     finally:
+        # Closing the window ends the application, which is what closing an
+        # application's only window should do.
         server.shutdown()
 
     return True

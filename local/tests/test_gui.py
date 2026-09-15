@@ -265,3 +265,125 @@ class TestTheBackupSetting:
                 body={"backupBeforeSync": False},
             )
         assert raised.value.code == 401
+
+
+class TestTheApplicationWindow:
+    """Showing the page in a window of its own rather than a browser tab.
+
+    The interaction under test is small and the bug it is here to prevent was
+    not: 0.1.8 shut the server down when the window failed to open and then
+    handed its address to a browser, so the user got a connection refused page
+    beside a console claiming the application was running.
+    """
+
+    def test_it_leaves_the_server_running_when_no_window_can_open(self, monkeypatch):
+        """The bug from 0.1.8, asserted.
+
+        The caller falls back to the default browser when this returns False,
+        and that browser needs something to connect to.
+        """
+        from syncmypod_local.gui import window
+
+        monkeypatch.setattr(window, "find_browser", lambda: None)
+
+        shutdowns = []
+
+        class Fake:
+            url = "http://127.0.0.1:1/"
+
+            def serve_forever(self):
+                pass
+
+            def shutdown(self):
+                shutdowns.append(True)
+
+        assert window.run(Fake()) is False
+        assert shutdowns == [], "the server was stopped with nothing else serving"
+
+    def test_closing_the_window_stops_the_server(self, monkeypatch, tmp_path):
+        """Closing an application's only window should end it."""
+        from syncmypod_local.gui import window
+
+        monkeypatch.setenv("SYNCMYPOD_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(window, "find_browser", lambda: "browser")
+
+        class Instantly:
+            def wait(self):
+                return 0
+
+        monkeypatch.setattr(window.subprocess, "Popen", lambda *a, **k: Instantly())
+
+        shutdowns = []
+
+        class Fake:
+            url = "http://127.0.0.1:1/"
+
+            def serve_forever(self):
+                pass
+
+            def shutdown(self):
+                shutdowns.append(True)
+
+        assert window.run(Fake()) is True
+        assert shutdowns == [True]
+
+    def test_the_window_gets_a_profile_of_its_own(self, monkeypatch, tmp_path):
+        """Without it there is no process to wait on.
+
+        `msedge --app=...` against the user's normal profile is handed to the
+        browser they already have open and returns immediately, so the server
+        would be shut down while the window was still on screen.
+        """
+        from syncmypod_local.gui import window
+
+        monkeypatch.setenv("SYNCMYPOD_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(window, "find_browser", lambda: "browser")
+
+        seen = {}
+
+        class Instantly:
+            def wait(self):
+                return 0
+
+        def capture(command, **_kwargs):
+            seen["command"] = command
+            return Instantly()
+
+        monkeypatch.setattr(window.subprocess, "Popen", capture)
+
+        class Fake:
+            url = "http://127.0.0.1:1/"
+
+            def serve_forever(self):
+                pass
+
+            def shutdown(self):
+                pass
+
+        window.run(Fake())
+
+        assert any(arg.startswith("--app=") for arg in seen["command"])
+        assert any("--user-data-dir=" in arg for arg in seen["command"])
+
+    def test_a_browser_that_will_not_start_is_not_fatal(self, monkeypatch, tmp_path):
+        from syncmypod_local.gui import window
+
+        monkeypatch.setenv("SYNCMYPOD_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(window, "find_browser", lambda: "browser")
+        monkeypatch.setattr(
+            window.subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(OSError("nope"))
+        )
+
+        shutdowns = []
+
+        class Fake:
+            url = "http://127.0.0.1:1/"
+
+            def serve_forever(self):
+                pass
+
+            def shutdown(self):
+                shutdowns.append(True)
+
+        assert window.run(Fake()) is False
+        assert shutdowns == [], "the fallback browser needs the server still up"

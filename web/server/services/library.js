@@ -62,6 +62,29 @@ const SYNC_FAILURE_JOIN = `
      LIMIT 1
   ) fail ON TRUE`;
 
+// The track columns and the join they need, in one place, because they were in
+// two and that shipped a bug.
+//
+// `TRACK_COLUMNS` selects `fail.error` and `fail.device_name`, which only exist
+// if `SYNC_FAILURE_JOIN` is in the same query. Nothing enforced that, so
+// `getTrack` was written without it - and every `GET /api/library/tracks/:id`
+// and every metadata save returned a 500 from Postgres. It went unnoticed
+// because the Songs list does include the join, so the page the columns are
+// most visible on worked perfectly.
+//
+// Taking the FROM clause as an argument is what makes the pairing impossible to
+// get wrong: there is no way to ask for the columns without also getting the
+// join. The two callers need different FROM shapes - one is scoped to a
+// library, the other looks up a track by id - which is why this is a function
+// and not one more constant.
+function trackSelect(from, extraColumns = '') {
+  return `SELECT ${TRACK_COLUMNS}${extraColumns ? `,
+${extraColumns}` : ''}
+       ${from}
+       ${SYNC_FAILURE_JOIN}`;
+}
+
+
 const SORTS = {
   added: 'lt.added_at DESC NULLS LAST, t.id DESC',
   title: 'lower(t.title) ASC, t.id ASC',
@@ -133,11 +156,9 @@ export async function listLibraryTracks(userId, options = {}) {
 
   params.push(limit, offset);
   const rows = await many(
-    `SELECT ${TRACK_COLUMNS}
-       FROM library_tracks lt
+    `${trackSelect(`FROM library_tracks lt
        JOIN tracks t  ON t.id = lt.track_id
-  LEFT JOIN albums al ON al.id = t.album_id
-       ${SYNC_FAILURE_JOIN}
+  LEFT JOIN albums al ON al.id = t.album_id`)}
       WHERE ${where.join(' AND ')}
    ORDER BY ${orderBy}
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -162,13 +183,14 @@ export async function listLibraryTracks(userId, options = {}) {
 
 export async function getTrack(userId, trackId) {
   const track = await one(
-    `SELECT ${TRACK_COLUMNS},
-            t.created_at  AS "createdAt",
-            t.resolved_at AS "resolvedAt",
-            (lt.user_id IS NOT NULL) AS "inLibrary"
-       FROM tracks t
+    `${trackSelect(
+      `FROM tracks t
   LEFT JOIN albums al ON al.id = t.album_id
-  LEFT JOIN library_tracks lt ON lt.track_id = t.id AND lt.user_id = $1
+  LEFT JOIN library_tracks lt ON lt.track_id = t.id AND lt.user_id = $1`,
+      `            t.created_at  AS "createdAt",
+            t.resolved_at AS "resolvedAt",
+            (lt.user_id IS NOT NULL) AS "inLibrary"`
+    )}
       WHERE t.id = $2`,
     [userId, trackId]
   );
