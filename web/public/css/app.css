@@ -132,7 +132,6 @@ a:hover { text-decoration: underline; }
   gap: var(--space-3);
 }
 
-.provider-pills { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 
 /* ---------------------------------------------------------------------------
    Top bar and view
@@ -161,6 +160,54 @@ a:hover { text-decoration: underline; }
 .topbar .nav-toggle { display: none; }
 
 .view { padding: var(--space-5); flex: 1; min-width: 0; }
+
+/* ---------------------------------------------------------------------------
+   Footer
+   --------------------------------------------------------------------------- */
+
+/* Centred under the view rather than pinned to the window: it belongs to the
+   end of the page, and a fixed bar would cover a list the user is scrolling. */
+.app-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-5) var(--space-6);
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+  letter-spacing: 0.02em;
+}
+
+.footer-brand { font-weight: 600; color: var(--text-muted); }
+.footer-sep { opacity: 0.5; }
+
+/* ---------------------------------------------------------------------------
+   Metadata providers
+   --------------------------------------------------------------------------- */
+
+/* One row per provider, all four laid out identically. The separator is on the
+   top edge of every row but the first, so adding a provider needs no change
+   here and the last row has no trailing rule under it. */
+.provider-row {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+.provider-row:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.provider-name {
+  font-weight: 600;
+  font-size: var(--text-md);
+}
+
+.provider-about { margin: 0; max-width: 68ch; }
+
+.provider-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 
 
 /* ---------------------------------------------------------------------------
@@ -250,6 +297,14 @@ a:hover { text-decoration: underline; }
 .input::placeholder { color: var(--text-subtle); }
 .textarea { resize: vertical; min-height: 72px; }
 .select { cursor: pointer; }
+
+/* The base .select is full width with form-sized padding. In a toolbar it wants
+   to be its own width and the same height as a .btn-sm beside it. */
+.select-sm {
+  width: auto;
+  padding: 4px 9px;
+  font-size: var(--text-sm);
+}
 
 .search-input {
   position: relative;
@@ -476,6 +531,28 @@ tbody tr:hover td.actions { background: var(--surface-2); }
 .list-sub { font-size: var(--text-sm); color: var(--text-muted); }
 .list-actions { display: flex; align-items: center; gap: var(--space-2); flex: none; }
 
+/* A row whose body is a link. The anchor fills the row so the whole middle is
+   the target, and it inherits colour so the title does not turn link-blue - the
+   row is the affordance, not the words. */
+.list-main-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+.list-main-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.row-link { cursor: pointer; }
+.row-link:hover .list-title { color: var(--accent-text); }
+
+/* Already in the library. Dimmed rather than hidden: the point of the page is
+   seeing the whole release, with what you have marked on it. */
+.row-known .list-title,
+.row-known .list-sub { color: var(--text-muted); }
+.row-known .track-number { color: var(--text-subtle); }
+
 /* Playlist reordering: a drag handle plus keyboard-accessible move buttons, so
    ordering never depends on being able to drag. */
 .drag-handle { color: var(--text-subtle); cursor: grab; flex: none; }
@@ -686,6 +763,10 @@ code {
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+
+/* Tabular figures, so the count does not change width as you page through and
+   nudge the controls beside it left and right. */
+.pagination-count { font-variant-numeric: tabular-nums; }
 
 /* ---------------------------------------------------------------------------
    Responsive

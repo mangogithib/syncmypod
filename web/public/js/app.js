@@ -1,6 +1,6 @@
 import { api } from './lib/api.js';
 import { $, clear, h, icon, mount } from './lib/dom.js';
-import { badge, toast } from './lib/ui.js';
+import { toast } from './lib/ui.js';
 import { renderAuth } from './views/auth.js';
 import { renderDashboard } from './views/dashboard.js';
 import { renderDevices } from './views/devices.js';
@@ -19,7 +19,10 @@ import { renderAlbumPage, renderArtistPage } from './views/browse.js';
 // Shared, mutable app state. Small enough that a store would be ceremony.
 export const state = {
   user: null,
-  providers: { deezer: false, itunes: false, musicbrainz: false },
+  providers: { deezer: false, itunes: false, musicbrainz: false, youtube: false },
+  // From /api/health. Shown once, in the footer, so nothing else has to
+  // hardcode it and go stale.
+  version: '',
   stats: null,
 };
 
@@ -128,24 +131,17 @@ function navCount(path) {
   return value ? h('span.nav-count', String(value)) : null;
 }
 
-// Shown permanently in the sidebar rather than buried in Settings: provider
-// availability decides whether half the app can do anything at all, so it should
-// never be a surprise.
-const PROVIDER_LABELS = {
-  deezer: 'Deezer',
-  itunes: 'iTunes',
-  musicbrainz: 'MusicBrainz',
-};
-
-function renderProviderPills() {
-  const host = $('#provider-pills');
-  clear(host);
-  for (const [name, label] of Object.entries(PROVIDER_LABELS)) {
-    const on = Boolean(state.providers?.[name]);
-    // Only the active ones are named plainly. An "off" pill for every provider
-    // someone has chosen not to use is noise, so those are dimmed and abridged.
-    host.appendChild(badge(on ? label : `${label} off`, on ? 'ok' : undefined));
-  }
+// The one place the version is shown. It used to be a hardcoded string in the
+// Settings page, which is why it read 0.1.0 for six versions.
+function renderFooter() {
+  const host = $('#app-footer');
+  if (!host) return;
+  mount(
+    host,
+    h('span.footer-brand', 'SyncMyPod'),
+    h('span.footer-sep', { 'aria-hidden': 'true' }, '·'),
+    h('span.footer-version', state.version ? `version ${state.version}` : 'version unknown')
+  );
 }
 
 function closeSidebar() {
@@ -251,8 +247,9 @@ async function start() {
     }
 
     state.user = authState.user;
+    state.version = health.version || '';
     showApp();
-    renderProviderPills();
+    renderFooter();
     await refreshStats();
     await router();
   } catch (err) {

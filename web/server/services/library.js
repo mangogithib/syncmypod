@@ -195,6 +195,24 @@ export async function getTrack(userId, trackId) {
 
 // Albums represented in the library, with how many of their tracks are actually
 // present. "7 of 12" is the useful number when deciding what to fill in.
+// The tracks in this user's library matching any of these identities.
+//
+// Used by the artist and album pages to tell "already yours" from "new". Both
+// halves of the OR matter: `match_key` catches the common case, and the ISRC
+// column catches a track stored under a provider id that is now being offered
+// with an ISRC, or the reverse.
+export async function knownTracks(userId, { keys, isrcs }) {
+  if ((keys?.length ?? 0) === 0 && (isrcs?.length ?? 0) === 0) return [];
+  return many(
+    `SELECT DISTINCT t.id, t.match_key AS "matchKey", t.isrc
+       FROM library_tracks lt
+       JOIN tracks t ON t.id = lt.track_id
+      WHERE lt.user_id = $1
+        AND (t.match_key = ANY($2::text[]) OR (t.isrc IS NOT NULL AND t.isrc = ANY($3::text[])))`,
+    [userId, keys || [], isrcs || []]
+  );
+}
+
 export async function listAlbums(userId, { search, limit = 60, offset = 0 } = {}) {
   const params = [userId];
   const where = ['lt.user_id = $1'];
@@ -211,6 +229,9 @@ export async function listAlbums(userId, { search, limit = 60, offset = 0 } = {}
             al.release_year  AS "releaseYear",
             al.total_tracks  AS "totalTracks",
             al.album_type    AS "albumType",
+            -- So a library album tile can open the same album page a search
+            -- result opens, instead of a modal that only knows what you have.
+            al.deezer_id     AS "deezerId",
             aa.id            AS "artistId",
             aa.name          AS "artistName",
             count(t.id)::int AS "trackCount"

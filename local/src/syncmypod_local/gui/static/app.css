@@ -43,12 +43,12 @@ body {
 }
 
 /* The click wheel, at 14px. Enough to read as an iPod without an image file. */
+/* Hosts the inline mark from index.html - the same artwork as the web tool and
+   the favicon, so the two halves read as one product. */
 .brand-mark {
-  width: 18px;
-  height: 18px;
-  border-radius: var(--radius-pill);
-  border: 3px solid var(--sidebar-fg-strong);
-  background: var(--sidebar-bg);
+  display: grid;
+  place-items: center;
+  color: var(--sidebar-fg-strong);
 }
 
 .brand-name {

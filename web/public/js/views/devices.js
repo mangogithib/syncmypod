@@ -35,21 +35,6 @@ export async function renderDevices(view, context) {
     ({ devices, serverUrl }) => {
       const blocks = [];
 
-      blocks.push(
-        notice(
-          h(
-            'div',
-            h('strong', 'This server never touches audio. '),
-            h(
-              'span',
-              'It holds your library and playlists only. The local app on a paired computer is what downloads tracks, writes them to the iPod, and deletes the downloads afterwards.'
-            )
-          ),
-          '',
-          'info'
-        )
-      );
-
       if (devices.length === 0) {
         blocks.push(
           emptyState({

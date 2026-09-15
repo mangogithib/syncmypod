@@ -11,6 +11,7 @@ import {
   metadataBadge,
   modal,
   notice,
+  pager,
   spinner,
   toast,
 } from '../lib/ui.js';
@@ -504,40 +505,16 @@ export async function renderLibrary(view, context) {
   }
 
   function pagination(data) {
-    const from = data.total === 0 ? 0 : state.offset + 1;
-    const to = Math.min(state.offset + state.limit, data.total);
-
-    return h(
-      'div.pagination',
-      h('span', `${formatNumber(from)}-${formatNumber(to)} of ${formatNumber(data.total)}`),
-      h(
-        'div.row',
-        h(
-          'button.btn.btn-sm',
-          {
-            type: 'button',
-            disabled: state.offset === 0,
-            onclick: () => {
-              state.offset = Math.max(0, state.offset - state.limit);
-              load();
-            },
-          },
-          'Previous'
-        ),
-        h(
-          'button.btn.btn-sm',
-          {
-            type: 'button',
-            disabled: to >= data.total,
-            onclick: () => {
-              state.offset += state.limit;
-              load();
-            },
-          },
-          'Next'
-        )
-      )
-    );
+    return pager({
+      total: data.total,
+      limit: state.limit,
+      offset: state.offset,
+      onChange: ({ limit, offset }) => {
+        state.limit = limit;
+        state.offset = offset;
+        load();
+      },
+    });
   }
 
   await load();

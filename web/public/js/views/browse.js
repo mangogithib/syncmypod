@@ -30,6 +30,9 @@ export async function renderArtistPage(view, context) {
   const { artist, albums, topTracks } = data;
   document.querySelector('#page-title').textContent = artist.name;
 
+  const known = await alreadyInLibrary(topTracks);
+  if (!context.isCurrent()) return;
+
   mount(
     view,
     backLink(),
@@ -61,7 +64,13 @@ export async function renderArtistPage(view, context) {
           // the array index as the position, so the first row would be numbered
           // zero - which is falsy, and fell through to showing artwork while
           // every row below it was numbered.
-          h('div.card', h('div.list', topTracks.map((track, i) => trackRow(track, i + 1))))
+          h(
+            'div.card',
+            h(
+              'div.list',
+              topTracks.map((track, i) => trackRow(track, i + 1, { known: known.has(i) }))
+            )
+          )
         )
       : null,
     albums.length
@@ -96,12 +105,23 @@ export async function renderAlbumPage(view, context) {
   const { album, tracks } = data;
   document.querySelector('#page-title').textContent = album.name;
 
-  const addAll = h(
-    'button.btn.btn-primary',
-    { type: 'button', onclick: () => addTracks(tracks, addAll, context) },
-    icon('plus', 15),
-    `Add all ${tracks.length}`
-  );
+  const known = await alreadyInLibrary(tracks);
+  if (!context.isCurrent()) return;
+
+  // Only what is missing. "Add all 12" on an album you already own in full is
+  // an offer to do nothing, and the report afterwards said "added 12" when it
+  // had added none of them.
+  const missing = tracks.filter((_track, index) => !known.has(index));
+  const addAll = missing.length
+    ? h(
+        'button.btn.btn-primary',
+        { type: 'button', onclick: () => addTracks(missing, addAll, context) },
+        icon('plus', 15),
+        missing.length === tracks.length
+          ? `Add all ${tracks.length}`
+          : `Add the other ${missing.length}`
+      )
+    : h('span.badge.badge-ok', icon('check', 13), 'All in library');
 
   mount(
     view,
@@ -115,7 +135,13 @@ export async function renderAlbumPage(view, context) {
       actions: tracks.length ? [addAll] : [],
     }),
     tracks.length
-      ? h('div.card', h('div.list', tracks.map((track, index) => trackRow(track, index + 1))))
+      ? h(
+          'div.card',
+          h(
+            'div.list',
+            tracks.map((track, index) => trackRow(track, index + 1, { known: known.has(index) }))
+          )
+        )
       : emptyState({
           iconName: 'album',
           title: 'No tracks listed',
@@ -125,6 +151,32 @@ export async function renderAlbumPage(view, context) {
 }
 
 // --- shared pieces ---------------------------------------------------------
+
+// Which of these provider results the library already holds, as a Set of the
+// refs handed over. One request for the whole page.
+//
+// A failure here is not fatal and must not be: the page is still perfectly
+// usable showing Add on everything, which is exactly what it did before this
+// existed. So it degrades to an empty set rather than an error.
+async function alreadyInLibrary(tracks) {
+  const items = tracks.map((track, index) => ({
+    ref: String(index),
+    isrc: track.isrc,
+    deezerId: track.deezerId,
+    itunesId: track.itunesId,
+    mbid: track.mbid,
+    title: track.title,
+    artist: track.artistCredit,
+    album: track.albumName,
+  }));
+  try {
+    const { known } = await api.libraryKnown(items);
+    return new Set(Object.keys(known || {}).map(Number));
+  } catch {
+    return new Set();
+  }
+}
+
 
 function backLink() {
   return h(
@@ -157,7 +209,7 @@ function section(title, body) {
   return h('section.browse-section', h('h3.section-heading', title), body);
 }
 
-function trackRow(track, position) {
+function trackRow(track, position, { known = false } = {}) {
   const add = h(
     'button.btn.btn-sm.btn-primary',
     { type: 'button', onclick: () => addTracks([track], add) },
@@ -166,7 +218,7 @@ function trackRow(track, position) {
   );
 
   return h(
-    'div.list-row',
+    `div.list-row${known ? '.row-known' : ''}`,
     position
       ? h('span.track-number', String(position))
       : artwork(track.artworkUrl, { size: 40 }),
@@ -177,7 +229,12 @@ function trackRow(track, position) {
       track.albumName && !position ? h('div.small.subtle', track.albumName) : null
     ),
     h('span.small.subtle.nowrap', formatDuration(track.durationMs)),
-    h('div.list-actions', add)
+    h(
+      'div.list-actions',
+      // A badge, not a disabled Add button. "In library" says what is true;
+      // a greyed-out Add says only that you cannot press it.
+      known ? h('span.badge.badge-ok', icon('check', 13), 'In library') : add
+    )
   );
 }
 

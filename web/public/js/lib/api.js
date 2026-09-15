@@ -83,6 +83,9 @@ export const api = {
   tracks: (params) => request('GET', `/api/library/tracks${qs(params)}`),
   track: (trackId) => request('GET', `/api/library/tracks/${trackId}`),
   addTracks: (payload) => request('POST', '/api/library/tracks', payload),
+  // POST rather than GET: the question is a batch of identifiers, which is a
+  // body, not a query string. Read-only all the same.
+  libraryKnown: (items) => request('POST', '/api/library/known', { items }),
   removeTrack: (trackId) => request('DELETE', `/api/library/tracks/${trackId}`),
   updateTrack: (trackId, patch) => request('PATCH', `/api/library/tracks/${trackId}`, patch),
   resolveTrack: (trackId, options) =>

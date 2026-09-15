@@ -5,10 +5,10 @@ import {
   debounce,
   emptyState,
   formatDuration,
-  formatNumber,
   metadataBadge,
   modal,
   notice,
+  pager,
   spinner,
 } from '../lib/ui.js';
 
@@ -71,7 +71,18 @@ export async function renderAlbums(view, context) {
           data.albums.map((album) =>
             h(
               'button.tile',
-              { type: 'button', onclick: () => openAlbum(album) },
+              {
+                type: 'button',
+                // The album page when there is one to open, the library-only
+                // modal when there is not. Same click, same place a search
+                // result goes, and that page shows what you already have
+                // alongside what you do not - which the modal could not.
+                onclick: () =>
+                  album.deezerId
+                    ? context.navigate(`album/${encodeURIComponent(album.deezerId)}`)
+                    : openAlbum(album),
+                title: album.deezerId ? `Open ${album.name}` : `Songs from ${album.name}`,
+              },
               artwork(album.artworkUrl, { large: true }),
               h('div.tile-name', album.name),
               h('div.tile-sub', album.artistName || 'Various artists'),
@@ -85,39 +96,16 @@ export async function renderAlbums(view, context) {
             )
           )
         ),
-        data.total > state.limit
-          ? h(
-              'div.pagination',
-              h('span', `Showing ${formatNumber(data.albums.length)} of ${formatNumber(data.total)}`),
-              h(
-                'div.row',
-                h(
-                  'button.btn.btn-sm',
-                  {
-                    type: 'button',
-                    disabled: state.offset === 0,
-                    onclick: () => {
-                      state.offset = Math.max(0, state.offset - state.limit);
-                      load();
-                    },
-                  },
-                  'Previous'
-                ),
-                h(
-                  'button.btn.btn-sm',
-                  {
-                    type: 'button',
-                    disabled: state.offset + state.limit >= data.total,
-                    onclick: () => {
-                      state.offset += state.limit;
-                      load();
-                    },
-                  },
-                  'Next'
-                )
-              )
-            )
-          : null
+        pager({
+          total: data.total,
+          limit: state.limit,
+          offset: state.offset,
+          onChange: ({ limit, offset }) => {
+            state.limit = limit;
+            state.offset = offset;
+            load();
+          },
+        })
       );
     } catch (err) {
       if (err.status === 401) return;

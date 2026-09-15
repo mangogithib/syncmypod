@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { rateLimit, requireUser } from '../auth/middleware.js';
 import { one, query, transaction } from '../db/pool.js';
 import { badRequest, handler, id, notFound, pagination, str } from '../lib/api.js';
+import { matchKey } from '../lib/normalise.js';
 import * as library from '../services/library.js';
 import { appendToPlaylist } from '../services/playlist-writes.js';
 import { countUnresolved, startRematch } from '../services/rematch.js';
@@ -47,6 +48,79 @@ libraryRoutes.get(
     const track = await library.getTrack(req.user.id, id(req.params.id, 'Track id'));
     if (!track) throw notFound('Track not found.');
     res.json(track);
+  })
+);
+
+// Which of these provider results are already in the library.
+//
+// The artist and album pages read from the providers rather than from the
+// library, which is what lets them show music not added yet - but it also meant
+// every row offered "Add", including the forty you added last week. Answering
+// that needs the library's own idea of identity, which lives on the server.
+//
+// **Why several keys per item rather than one.** `matchKey` prefers an ISRC and
+// falls back to a provider id, so the same recording can be stored under
+// `isrc:...` (resolved through Deezer's track endpoint, which returns one) and
+// arrive here as `dz:...` (from an album listing, which does not). Comparing a
+// single key would miss it and offer to add a duplicate. So every key the item
+// could plausibly have been stored under is tried, plus the ISRC column
+// directly.
+//
+// Read-only and cheap: one query, no provider calls, nothing resolved.
+libraryRoutes.post(
+  '/known',
+  handler(async (req, res) => {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (items.length === 0) return res.json({ known: {} });
+    if (items.length > 500) throw badRequest('Too many items in one request (max 500).');
+
+    // Every candidate key, remembered against the caller's own id for the item
+    // so the answer can be handed back in the shape the page asked in.
+    const keysByRef = new Map();
+    const allKeys = new Set();
+    const allIsrcs = new Set();
+
+    items.forEach((item, index) => {
+      const ref = String(item?.ref ?? index);
+      const isrc = str(item?.isrc, 'ISRC', { max: 20 });
+      const title = str(item?.title, 'Title', { max: 500 });
+      const artist = str(item?.artist, 'Artist', { max: 500 });
+      const album = str(item?.album, 'Album', { max: 500 });
+
+      const candidates = [];
+      const push = (parts) => {
+        const key = matchKey(parts);
+        candidates.push(key);
+        allKeys.add(key);
+      };
+
+      if (isrc) push({ isrc });
+      if (item?.deezerId) push({ deezerId: str(item.deezerId, 'deezerId', { max: 60 }) });
+      if (item?.itunesId) push({ itunesId: str(item.itunesId, 'itunesId', { max: 60 }) });
+      if (item?.mbid) push({ mbid: str(item.mbid, 'mbid', { max: 60 }) });
+      if (title) push({ name: title, extra: [artist, album].filter(Boolean).join(' ') });
+
+      if (isrc) allIsrcs.add(isrc.toUpperCase().replace(/[^A-Z0-9]/g, ''));
+      keysByRef.set(ref, { candidates, isrc });
+    });
+
+    const rows = await library.knownTracks(req.user.id, {
+      keys: [...allKeys],
+      isrcs: [...allIsrcs],
+    });
+
+    const byKey = new Map(rows.map((row) => [row.matchKey, row.id]));
+    const byIsrc = new Map(rows.filter((r) => r.isrc).map((r) => [r.isrc, r.id]));
+
+    const known = {};
+    for (const [ref, { candidates, isrc }] of keysByRef) {
+      const hit =
+        candidates.map((key) => byKey.get(key)).find(Boolean) ??
+        (isrc ? byIsrc.get(isrc.toUpperCase().replace(/[^A-Z0-9]/g, '')) : undefined);
+      if (hit) known[ref] = Number(hit);
+    }
+
+    res.json({ known });
   })
 );
 

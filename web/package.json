@@ -1,6 +1,6 @@
 {
   "name": "syncmypod",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Self-hosted music library manager for classic/clickwheel iPods. Library data only - never audio.",
   "type": "module",

@@ -1,7 +1,7 @@
 import { state as appState } from '../app.js';
 import { api } from '../lib/api.js';
 import { h, icon, mount } from '../lib/dom.js';
-import { badge, notice, renderAsync, toast } from '../lib/ui.js';
+import { badge, modal, notice, renderAsync, toast } from '../lib/ui.js';
 
 // Settings: account, provider configuration, and instance information.
 //
@@ -18,6 +18,43 @@ import { badge, notice, renderAsync, toast } from '../lib/ui.js';
 //     and blank means "leave unchanged", so saving the form does not wipe a
 //     secret the user never typed.
 
+// The four providers, in the order the resolver asks them. One list, so the
+// page cannot drift from itself the way it had: the server's own provider table
+// in `routes/settings.js` already had all four with a working test endpoint,
+// and only this page was treating them as three special cases.
+const PROVIDERS = [
+  {
+    name: 'deezer',
+    label: 'Deezer',
+    order: 'Tried first',
+    about:
+      'No account or key. Its track endpoint returns properly ordered artist credits and an ISRC, which is why it goes first.',
+  },
+  {
+    name: 'itunes',
+    label: 'iTunes',
+    order: 'Second',
+    about:
+      'No account or key. Strong on film and regional catalogue, but reports every artist as one combined string - correct for the iPod tag, without the structure.',
+  },
+  {
+    name: 'musicbrainz',
+    label: 'MusicBrainz',
+    order: 'Last fallback',
+    offLabel: 'Not configured',
+    offWarn: true,
+    about:
+      'Asked only when Deezer and iTunes have no answer. It requires every client to identify itself with a contactable address and throttles those that do not, so it stays off until one is set. A fake address gets the instance blocked.',
+  },
+  {
+    name: 'youtube',
+    label: 'YouTube',
+    order: 'Search and import',
+    about:
+      'Needs no account and no key. Powers searching and importing a public playlist link, and is the named fallback in the resolver for regional and very recent releases the licensed catalogues have not got.',
+  },
+];
+
 export async function renderSettings(view, context) {
   await renderAsync(
     view,
@@ -26,9 +63,10 @@ export async function renderSettings(view, context) {
       h(
         'div.stack',
         providerCard(settings, () => renderSettings(view, context)),
-        accountCard(),
-        localAppCard(),
-        aboutCard()
+        aboutCard(),
+        // Last, because it is the one thing here nobody came to this page to
+        // do. The old order put it above two cards of explanatory text.
+        accountCard()
       )
   );
 
@@ -110,9 +148,9 @@ function providerCard(data, reload) {
     );
   };
 
-  const deezerResult = h('div');
-  const itunesResult = h('div');
-  const musicbrainzResult = h('div');
+  // One slot per provider, keyed by name, so the rows below can be generated
+  // from a list rather than written out one at a time.
+  const resultSlots = Object.fromEntries(PROVIDERS.map((p) => [p.name, h('div')]));
 
   const testButton = (provider, slot) =>
     h(
@@ -171,7 +209,7 @@ function providerCard(data, reload) {
       h(
         'p.muted',
         { style: { marginBottom: '20px' } },
-        'Every track is re-tagged against a real catalogue before it reaches the iPod, whatever source the audio came from. Deezer is tried first, then iTunes, then MusicBrainz.'
+        'Every track is re-tagged against a real catalogue before it reaches the iPod, whatever source the audio came from. They are tried in the order below, each one only asked what the one above it could not answer.'
       ),
       h(
         'form.stack',
@@ -226,79 +264,40 @@ function providerCard(data, reload) {
         },
         saveResult,
 
-        // --- Deezer and iTunes ---------------------------------------------
-        // Grouped together because they share the only thing worth saying about
-        // them: there is nothing to configure. No account, no key, no quota to
-        // register for.
-        h(
-          'div',
-          { style: { paddingBottom: '20px', borderBottom: '1px solid var(--border)' } },
+        // Every provider gets the same row: name, state, one line about what
+        // it is for, its configuration, and its own test. They used to be laid
+        // out three different ways - Deezer and iTunes sharing a block with two
+        // badges and two buttons, MusicBrainz alone with a field, YouTube alone
+        // with no test at all - which made the page read as three unrelated
+        // things rather than one list of four.
+        //
+        // Ordered the way the resolver uses them, so the page explains the
+        // ladder just by being read top to bottom.
+        ...PROVIDERS.map((provider) =>
           h(
-            'div.row-between',
-            { style: { marginBottom: '10px' } },
-            h('div', { style: { fontWeight: 600 } }, 'Deezer and iTunes'),
+            'div.provider-row',
             h(
-              'div.row',
-              data.providers.deezer ? badge('Deezer on', 'ok') : badge('Deezer off'),
-              data.providers.itunes ? badge('iTunes on', 'ok') : badge('iTunes off')
-            )
-          ),
-          h(
-            'p.small.muted',
-            { style: { marginBottom: '14px' } },
-            'Neither needs an account or a key, so both are on by default. Deezer is tried first because its track endpoint returns properly ordered artist credits and an ISRC. iTunes has strong coverage of film and regional catalogue, but reports all artists as one combined string - correct for the iPod tag, though without the structure.'
-          ),
-          toggle('deezer.enabled'),
-          toggle('itunes.enabled'),
-          h(
-            'div.row',
-            { style: { marginTop: '12px' } },
-            testButton('deezer', deezerResult),
-            testButton('itunes', itunesResult)
-          ),
-          deezerResult,
-          itunesResult
-        ),
-
-        // --- MusicBrainz ---------------------------------------------------
-        h(
-          'div',
-          h(
-            'div.row-between',
-            { style: { marginBottom: '10px' } },
-            h('div', { style: { fontWeight: 600 } }, 'MusicBrainz'),
-            data.providers.musicbrainz
-              ? badge('Configured', 'ok')
-              : badge('Not configured', 'warn')
-          ),
-          h(
-            'p.small.muted',
-            { style: { marginBottom: '14px' } },
-            'The last fallback, used when Deezer and iTunes have no answer. MusicBrainz requires every client to identify itself with a contactable address and throttles those that do not, so this stays off until one is set - sending a fake one gets the instance blocked.'
-          ),
-          field('musicbrainz.contact', {
-            placeholder: 'you@example.com',
-            hint: 'An email address or a project URL. Sent in the User-Agent header on every MusicBrainz request.',
-          }),
-          h('div.row', { style: { marginTop: '12px' } }, testButton('musicbrainz', musicbrainzResult)),
-          musicbrainzResult
-        ),
-
-        // --- YouTube -------------------------------------------------------
-        h(
-          'div',
-          h(
-            'div.row-between',
-            { style: { marginBottom: '10px' } },
-            h('div', { style: { fontWeight: 600 } }, 'YouTube'),
-            data.providers?.youtube === false ? badge('Off') : badge('On', 'ok')
-          ),
-          h(
-            'p.small.muted',
-            { style: { marginBottom: '14px' } },
-            'Searching YouTube and importing a public playlist link need no account and no key. YouTube Music is also the last step of the resolver, for regional and very recent releases the licensed catalogues have not got.'
-          ),
-          toggle('youtube.enabled'),
+              'div.row-between',
+              h(
+                'div.row',
+                { style: { gap: '10px', alignItems: 'baseline' } },
+                h('div.provider-name', provider.label),
+                h('span.small.subtle', provider.order)
+              ),
+              data.providers?.[provider.name]
+                ? badge('On', 'ok')
+                : badge(provider.offLabel || 'Off', provider.offWarn ? 'warn' : undefined)
+            ),
+            h('p.small.muted.provider-about', provider.about),
+            provider.name === 'musicbrainz'
+              ? field('musicbrainz.contact', {
+                  placeholder: 'you@example.com',
+                  hint: 'An email address or a project URL. Sent in the User-Agent header on every request.',
+                })
+              : toggle(`${provider.name}.enabled`),
+            h('div.provider-actions', testButton(provider.name, resultSlots[provider.name])),
+            resultSlots[provider.name]
+          )
         ),
 
         h('div', { style: { marginTop: '4px' } }, save)
@@ -312,12 +311,6 @@ function providerCard(data, reload) {
 // ---------------------------------------------------------------------------
 
 function accountCard() {
-  const current = h('input.input', { type: 'password', autocomplete: 'current-password' });
-  const next = h('input.input', { type: 'password', autocomplete: 'new-password' });
-  const confirm = h('input.input', { type: 'password', autocomplete: 'new-password' });
-  const statusSlot = h('div');
-  const submit = h('button.btn.btn-primary', { type: 'submit' }, 'Change password');
-
   return h(
     'div.card',
     h('div.card-head', h('h2', 'Account')),
@@ -325,102 +318,74 @@ function accountCard() {
       'div.card-body',
       h(
         'dl.kv',
-        { style: { marginBottom: '20px' } },
+        { style: { marginBottom: '18px' } },
         h('dt', 'Signed in as'),
         h('dd', appState.user?.username || '--'),
         h('dt', 'Role'),
         h('dd', appState.user?.isOwner ? 'Instance owner' : 'User')
       ),
+      // One button rather than three fields sitting open on the page. Changing
+      // a password is rare and deliberate, and a form left permanently open
+      // invites a browser to fill it in with the wrong thing.
       h(
-        'form.stack',
-        {
-          onsubmit: async (event) => {
-            event.preventDefault();
-            mount(statusSlot);
-
-            if (next.value !== confirm.value) {
-              mount(statusSlot, notice('The two new passwords do not match.', 'danger', 'warn'));
-              return;
-            }
-            if (next.value.length < 10) {
-              mount(statusSlot, notice('Use at least 10 characters.', 'danger', 'warn'));
-              return;
-            }
-
-            submit.disabled = true;
-            try {
-              await api.changePassword(current.value, next.value);
-              mount(
-                statusSlot,
-                notice(
-                  'Password changed. Other browser sessions have been signed out; paired computers keep working.',
-                  '',
-                  'check'
-                )
-              );
-              current.value = next.value = confirm.value = '';
-              toast('Password changed.', 'ok');
-            } catch (err) {
-              mount(statusSlot, notice(err.message, 'danger', 'warn'));
-            } finally {
-              submit.disabled = false;
-            }
-          },
-        },
-        statusSlot,
-        h('div.field', h('label', 'Current password'), current),
-        h('div.field', h('label', 'New password'), next, h('span.hint', 'At least 10 characters.')),
-        h('div.field', h('label', 'Confirm new password'), confirm),
-        h('div', submit)
+        'button.btn',
+        { type: 'button', onclick: openPasswordDialog },
+        icon('settings', 14),
+        'Change password'
       )
     )
   );
 }
 
-// ---------------------------------------------------------------------------
-// Informational
-// ---------------------------------------------------------------------------
+function openPasswordDialog() {
+  const current = h('input.input', { type: 'password', autocomplete: 'current-password' });
+  const next = h('input.input', { type: 'password', autocomplete: 'new-password' });
+  const confirm = h('input.input', { type: 'password', autocomplete: 'new-password' });
+  const statusSlot = h('div');
+  const submit = h('button.btn.btn-primary', { type: 'submit' }, 'Change password');
 
-function localAppCard() {
-  return h(
-    'div.card',
-    h('div.card-head', h('h2', 'The local sync app')),
-    h(
-      'div.card-body',
-      h(
-        'p.muted',
-        { style: { marginBottom: '16px' } },
-        'This server holds library data only. Downloading audio, tagging it, writing it to the iPod and cleaning up afterwards all happen in the local app, on the computer the iPod is plugged into.'
-      ),
-      h(
-        'div.stack',
-        h(
-          'div',
-          h('div.small', { style: { fontWeight: 600, marginBottom: '4px' } }, 'What the local app does'),
-          h(
-            'ul.small.muted',
-            { style: { paddingLeft: '20px', display: 'grid', gap: '4px', margin: 0 } },
-            h('li', 'Pulls the manifest: every track and playlist that should be on the iPod.'),
-            h('li', 'Diffs it against what is already there.'),
-            h('li', 'Downloads what is missing and re-tags it from the manifest, not from the source.'),
-            h('li', 'Writes the tracks and playlists to the iPod database.'),
-            h('li', 'Asks before removing anything no longer in the library.'),
-            h('li', 'Deletes every downloaded file once the transfer is confirmed.')
-          )
-        ),
-        notice(
-          h(
-            'div',
-            h('strong', 'Not built yet. '),
-            h('span', 'The device API it talks to is live, and you can already pair a computer against it. '),
-            h('a', { href: '#/devices' }, 'Devices')
-          ),
-          'accent',
-          'info'
-        )
-      )
-    )
+  const form = h(
+    'form.stack',
+    {
+      onsubmit: async (event) => {
+        event.preventDefault();
+        mount(statusSlot);
+
+        if (next.value !== confirm.value) {
+          mount(statusSlot, notice('The two new passwords do not match.', 'danger', 'warn'));
+          return;
+        }
+        if (next.value.length < 10) {
+          mount(statusSlot, notice('Use at least 10 characters.', 'danger', 'warn'));
+          return;
+        }
+
+        submit.disabled = true;
+        try {
+          await api.changePassword(current.value, next.value);
+          dialog.close();
+          toast(
+            'Password changed. Other browser sessions were signed out; paired computers keep working.',
+            'ok'
+          );
+        } catch (err) {
+          mount(statusSlot, notice(err.message, 'danger', 'warn'));
+        } finally {
+          submit.disabled = false;
+        }
+      },
+    },
+    statusSlot,
+    h('div.field', h('label', 'Current password'), current),
+    h('div.field', h('label', 'New password'), next, h('span.hint', 'At least 10 characters.')),
+    h('div.field', h('label', 'Confirm new password'), confirm),
+    // Inside the form, so Enter submits it. In the modal footer it would be a
+    // button sitting outside the thing it is meant to submit.
+    h('div.row', { style: { justifyContent: 'flex-end' } }, submit)
   );
+
+  const dialog = modal({ title: 'Change password', body: form });
+  current.focus();
 }
 
 function aboutCard() {
@@ -432,7 +397,9 @@ function aboutCard() {
       h(
         'dl.kv',
         h('dt', 'Version'),
-        h('dd', '0.1.0'),
+        // From /api/health, which reads package.json. Hardcoded here, it went
+        // on saying 0.1.0 long after that stopped being true.
+        h('dd', appState.version || '--'),
         h('dt', 'Audio stored here'),
         h('dd', 'None, by design'),
         h('dt', 'Manifest version'),

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -13,6 +14,7 @@ import { pruneProviderCache } from './lib/http.js';
 import * as deezer from './providers/deezer.js';
 import * as itunes from './providers/itunes.js';
 import * as musicbrainz from './providers/musicbrainz.js';
+import * as youtube from './providers/youtube.js';
 import { artistRoutes } from './routes/artists.js';
 import { authRoutes } from './routes/auth.js';
 import { deviceRoutes } from './routes/devices.js';
@@ -28,7 +30,18 @@ import { loadSettings } from './services/app-settings.js';
 import { checkDueFollows } from './services/follows.js';
 import { failOrphanedJobs } from './services/import.js';
 
-const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
+const serverDir = dirname(fileURLToPath(import.meta.url));
+const publicDir = join(serverDir, '..', 'public');
+
+// Read once at startup from the one file that already has to be correct.
+// Hardcoding it in the Settings page is how it came to say 0.1.0 forever.
+const version = (() => {
+  try {
+    return JSON.parse(readFileSync(join(serverDir, '..', 'package.json'), 'utf8')).version || '0';
+  } catch {
+    return '0';
+  }
+})();
 
 const app = express();
 
@@ -76,10 +89,14 @@ app.get('/api/health', async (_req, res) => {
     await query('SELECT 1');
     res.json({
       ok: true,
+      version,
       providers: {
         deezer: deezer.isEnabled(),
         itunes: itunes.isEnabled(),
         musicbrainz: musicbrainz.isEnabled(),
+        // Was missing, so the Settings page had to guess at YouTube's state
+        // from `=== false` while every other provider was told to it.
+        youtube: youtube.isEnabled(),
       },
     });
   } catch (err) {

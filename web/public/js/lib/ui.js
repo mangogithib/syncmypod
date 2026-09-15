@@ -286,6 +286,96 @@ export async function renderAsync(container, loader, render) {
 
 // Waits until typing stops. Search boxes hit provider APIs, so firing per
 // keystroke would be both slow and a good way to get rate limited.
+// One pager, used by every paginated list.
+//
+// It was written twice - Songs and Albums - with the same Previous/Next pair and
+// a different count line each, and neither could change the page size or jump
+// more than one page. A library of four hundred songs is nine clicks from the
+// end of it.
+//
+// `onChange({ limit, offset })` is called with the new window; the caller owns
+// its own state and reload. Page sizes stop at 200 because that is the server's
+// own ceiling in `pagination()`, and offering 500 would silently give 200.
+export function pager({ total, limit, offset, onChange, sizes = [25, 50, 100, 200] }) {
+  const pages = Math.max(1, Math.ceil(total / limit));
+  const page = Math.min(pages, Math.floor(offset / limit) + 1);
+  const from = total === 0 ? 0 : offset + 1;
+  const to = Math.min(offset + limit, total);
+
+  const sizeSelect = h(
+    'select.select.select-sm',
+    {
+      'aria-label': 'Rows per page',
+      onchange: () => {
+        const next = Number(sizeSelect.value);
+        // Keep the first row of the current view in sight rather than jumping
+        // to the top: changing the page size to look more closely at what is on
+        // screen should not move you somewhere else.
+        onChange({ limit: next, offset: Math.floor(offset / next) * next });
+      },
+    },
+    ...sizes.map((size) =>
+      h('option', { value: String(size), selected: size === limit }, `${size} per page`)
+    )
+  );
+
+  // A dropdown rather than a numbered strip: it takes one click to reach any
+  // page, needs no ellipsis logic, and works the same with nine pages or nine
+  // hundred. Hidden when there is only one page, where it would be furniture.
+  const pageSelect =
+    pages > 1
+      ? h(
+          'select.select.select-sm',
+          {
+            'aria-label': 'Page',
+            onchange: () => onChange({ limit, offset: (Number(pageSelect.value) - 1) * limit }),
+          },
+          ...Array.from({ length: pages }, (_unused, index) =>
+            h(
+              'option',
+              { value: String(index + 1), selected: index + 1 === page },
+              `Page ${index + 1} of ${pages}`
+            )
+          )
+        )
+      : null;
+
+  return h(
+    'div.pagination',
+    h(
+      'span.pagination-count',
+      total === 0
+        ? 'Nothing to show'
+        : `${formatNumber(from)}-${formatNumber(to)} of ${formatNumber(total)}`
+    ),
+    h(
+      'div.row',
+      sizeSelect,
+      pageSelect,
+      h(
+        'button.btn.btn-sm',
+        {
+          type: 'button',
+          disabled: offset === 0,
+          'aria-label': 'Previous page',
+          onclick: () => onChange({ limit, offset: Math.max(0, offset - limit) }),
+        },
+        'Previous'
+      ),
+      h(
+        'button.btn.btn-sm',
+        {
+          type: 'button',
+          disabled: to >= total,
+          'aria-label': 'Next page',
+          onclick: () => onChange({ limit, offset: offset + limit }),
+        },
+        'Next'
+      )
+    )
+  );
+}
+
 export function debounce(fn, wait = 320) {
   let timer;
   return (...args) => {

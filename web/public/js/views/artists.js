@@ -171,10 +171,26 @@ export async function renderArtists(view, context) {
               'div.list',
               data.artists.map((artist) =>
                 h(
-                  'div.list-row',
+                  `div.list-row${artist.deezerId ? '.row-link' : ''}`,
+                  // The row itself opens the artist's page. It used to do
+                  // nothing at all: the only way through was the Songs button,
+                  // which goes to a filtered track list rather than the artist.
+                  //
+                  // An anchor rather than a click handler on the row, so it
+                  // middle-clicks into a new tab and shows its target in the
+                  // status bar like any other link. Falls back to the filtered
+                  // list when there is no Deezer id to open a page with.
                   artwork(artist.imageUrl, { size: 38 }),
                   h(
-                    'div.list-main',
+                    'a.list-main.list-main-link',
+                    {
+                      href: artist.deezerId
+                        ? `#/artist/${encodeURIComponent(artist.deezerId)}`
+                        : `#/library?q=${encodeURIComponent(artist.name)}`,
+                      title: artist.deezerId
+                        ? `Open ${artist.name}`
+                        : `${artist.name} has no Deezer id, so their releases cannot be browsed`,
+                    },
                     h('div.list-title', artist.name),
                     h(
                       'div.list-sub',
