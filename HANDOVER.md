@@ -36,6 +36,9 @@ which is the one rule the whole design rests on.
 | Local app: the sync engine | Working, verified on real hardware — a blank restored iPod included. **Four downloads at a time** |
 | Playlists on the device | Working — **written to MHSD 3, the dataset the iPod reads.** Reconciled every sync |
 | Album art on the device | Working — verified by decoding it back off the iPod |
+| Source stream taken | **Opus since 15 September**, converted to 256kbps AAC. YouTube's free AAC is cut at 15.8kHz; the Opus runs to 20kHz. See section 5 |
+| Audio quality on the device | **Fixed 14 September** — every AAC file was recorded as an MP3 in the iTunesDB, which is what made the iPod screech. See section 5 |
+| Backup before a sync | On by default, and **can now be turned off** — a toggle in the app, `--no-backup` on the CLI |
 | YouTube Premium sign-in (local) | Reads a browser where it can, else **opens one of its own** and takes the session from it |
 | Local app: GUI | Working — nothing needs a terminal |
 | Downloadable build | **Published — 0.1.6**, built and attached by CI from the `local-v0.1.6` tag |
@@ -45,7 +48,7 @@ which is the one rule the whole design rests on.
 | **A web test suite** | **Still none. The biggest gap — see section 6** |
 
 About 23,900 lines: 55 JavaScript files, 17 Python modules, 8 SQL migrations.
-**247 Python tests, all passing. Zero JavaScript tests.**
+**271 Python tests, all passing. Zero JavaScript tests.**
 
 Swept for dead code on 13 September across all three languages - unused Python
 defs, JS exports nothing imports, CSS classes no markup carries. Three things
@@ -206,18 +209,28 @@ fine, but start from the reasoning rather than from scratch.
   An iPod moved between two computers then continues one history rather than
   starting a second. Keyed by server and user, so two accounts can share a
   device.
-- **AAC in an `.m4a`, and there is nothing better to choose.** Asked on
-  13 September, so it is written down. A 5.5th gen plays MP3, AAC, Apple
-  Lossless, AIFF and WAV. YouTube serves exactly two audio streams, AAC and
-  Opus, and the iPod cannot play Opus at all - so AAC is the only usable one,
-  and it is taken **untouched**. Converting it to MP3 would add a second lossy
-  pass for a larger file; wrapping it in ALAC or WAV would be a lossless
-  container around lossy audio. Both are strictly worse.
+- **AAC in an `.m4a` on the device - but the stream downloaded is Opus.**
+  Superseded on 15 September; the previous version of this entry said the
+  opposite and the reasoning is worth keeping so it is not reversed again.
 
-  The format is therefore not the lever. The **source** is: 128kbps signed out,
-  256kbps with Premium, and lossless from a file the user already owns - which
-  is the real argument for the local-files source in section 6, and the only
-  thing that would beat what the tool does today.
+  What was decided on 13 September: a 5.5th gen plays MP3, AAC, Apple Lossless,
+  AIFF and WAV; YouTube serves AAC and Opus; the iPod cannot play Opus - so take
+  the AAC and pass it through **untouched**, because re-encoding a lossy source
+  is pure loss. The conclusion drawn was that "the format is not the lever".
+
+  What was missed: nobody had measured the two streams. YouTube's free AAC is
+  brickwalled at **15.8kHz** and its Opus runs to **20kHz**, so the re-encode
+  that entry was avoiding buys back more than 4kHz of treble. Section 5 has the
+  numbers. The download now prefers Opus and converts it to 256kbps AAC, and
+  takes AAC directly only when it is Premium's 256kbps stream.
+
+  The rest of that entry stands. MP3 would be a second lossy pass for a larger
+  file, and ALAC or WAV would be a lossless container around lossy audio - 6x
+  the size on the device to avoid a second generation that measures at -32dB.
+  Both are still strictly worse. And the **source** is still the real lever:
+  Premium's 256kbps AAC needs no conversion at all, and a file the user already
+  owns is lossless - which remains the argument for the local-files source in
+  section 6.
 - **Two ideas raised on 13 September and turned down.** Writing only the primary
   artist to the device, so the iPod's Artists menu reads "Arijit Singh" rather
   than the full credit - Mohamed wants the full credit. And backfilling the
@@ -230,6 +243,19 @@ fine, but start from the reasoning rather than from scratch.
   offered one at 256. There is nothing to choose between, so the policy is a
   single format expression that takes the best AAC the account is entitled to.
   A bitrate menu would offer numbers no source can supply.
+- **The backup before a sync can be turned off, and is on by default.** Asked
+  for on 14 September. The default must stay on - rewriting the iTunesDB is the
+  one operation here that can leave a device unusable, and pypodlib is alpha -
+  but a snapshot is a full copy of the music on the iPod, so on a full 160GB
+  Classic the first one is slow and the disk it lands on may not have room. That
+  is a real reason to turn it off and it is the user's call.
+
+  It is a setting rather than a per-run flag in the app: it is saved the moment
+  the box is unticked, so closing the window does not quietly turn backups back
+  on. The CLI's `--no-backup` applies to that run only and does not change the
+  stored preference. A skipped backup is said out loud in the log, the terminal
+  and the page - "I never turned that off" is exactly what somebody says after
+  losing a device.
 - **There is exactly one YouTube sign-in, and it is in the local app.** The
   browser's own cookies, on the user's machine, used to fetch the 256kbps stream
   a Premium account is entitled to. It never leaves that machine, and the server
@@ -292,6 +318,120 @@ and it killed both metadata resolution and playlist import.
 
 Mohamed's credentials were valid. Do not go looking for a bug. Migration
 `004_drop_spotify.sql` removed the provider, the OAuth table and the id columns.
+
+### YouTube's AAC stream is brickwalled at 15.8kHz; its Opus is not
+
+Measured on 15 September, because "is the quality the best it can be" had never
+been answered with a number. It is the reason the download policy changed.
+
+Signed out, YouTube offers five audio-only streams. The two that matter:
+
+| itag | codec | bitrate | measured cutoff |
+|---|---|---|---|
+| 140 | AAC-LC | 129kbps | **15.8kHz** |
+| 251 | Opus | 145kbps | **20.1kHz** |
+
+Above 15.8kHz the AAC stream is not quiet, it is **empty** - the 16-17kHz band
+sits at -105dB where Opus has it at -50dB. Measured on three unrelated tracks
+(Daft Punk, A.R. Rahman, Billie Eilish) the figure was 15.8kHz every time, so it
+is a property of YouTube's encoding ladder rather than of any one upload.
+
+**Converting the Opus to AAC keeps it.** Against the Opus it was made from:
+
+| target | cutoff | error to source |
+|---|---|---|
+| 192kbps (pypodlib's default) | 19.5kHz | -28.7dB |
+| **256kbps (`lossy_quality="high"`)** | **20.1kHz** | **-32.1dB** |
+| 320kbps | 20.1kHz | -37.7dB |
+
+256 is the knee: it reproduces the source's spectrum to within 0.2dB in every
+band, and 320 buys 4dB more accuracy for a quarter more space on the device. The
+output is AAC-LC at 48kHz stereo, inside every limit a clickwheel iPod has, and
+it decodes without a warning.
+
+So the second lossy generation costs far less than the 4kHz it recovers, and
+`downloader.py` now asks for Opus. Premium's 256kbps AAC (itag 141) is still
+taken directly where it is offered - full bandwidth and no re-encode at all -
+which is the one case that beats both. **Untested on a real Premium account**;
+the ordering assumes a 256kbps AAC is not band-limited the way the 128 is.
+
+**Two things this depends on that are not obvious.**
+
+- yt-dlp saves Opus as `.webm`, and pypodlib classifies `.webm` as **video**. Left
+  alone it would set about making an iPod video file out of an audio download. A
+  `FFmpegExtractAudio` postprocessor with `preferredcodec="best"` puts it in
+  `.opus` instead - a stream copy, verified bit-identical (-190dB), and one that
+  yt-dlp skips entirely when the file is already AAC in an `.m4a`.
+- **Opus needs ffmpeg and AAC does not.** The remux and the conversion both
+  require it, so without ffmpeg the download falls back to the old AAC-first
+  expression. One track short is a bad sync; every track short is a broken one.
+
+**The encoder is ffmpeg's native `aac`.** The bundled builds are BtbN's LGPL
+ones, which cannot carry libfdk_aac, and there is no macOS `aac_at` on Windows
+or Linux. At 256kbps this does not matter much - the measurements above are all
+native `aac` - but it is why the bitrate is set generously rather than trusting
+the encoder at 192.
+
+**What this does not fix.** Tracks already on the device were downloaded as
+15.8kHz AAC and the ledger will not fetch them again. They keep the quality they
+were synced at unless they are removed and re-added. There is no bulk refetch
+mode and adding one was not asked for - see section 6.
+
+### Every AAC file was recorded in the iTunesDB as an MP3
+
+**The screeching.** Tracks on the real Classic played with bursts of harsh noise
+at random points. The files were fine: all 453 probed as AAC-LC 44.1kHz stereo,
+and every one decoded through ffmpeg with no error at all. The fault was in the
+database.
+
+Each row of the iTunesDB carries a four-character code naming the track's format
+and a matching `mp3_flag`. It is how the iPod picks a decoder. Read straight off
+the device, all 453 rows said `MP3 ` with `mp3_flag = 1`, on 453 `.m4a` files.
+The firmware was parsing an MP4 container as an MPEG frame stream, and where it
+resynced on something that was not a frame header the output was noise.
+
+It is a case mismatch between two functions inside pypodlib 0.1.0:
+
+- `api.add_tracks` stages the value through `ipod_filetype_for_extension`, which
+  returns `"m4a"` — lower case.
+- `_track_conversion.track_dict_to_info` resolves it by testing that string
+  against a list of capitalised needles with a plain `in`. `"M4A" in "m4a"` is
+  False, every needle misses, and it falls through to its `"mp3"` default.
+
+MP3 was the only format that ever came out right, and only because it was the
+default being fallen back to.
+
+**How it is fixed**, both in `device.py`:
+
+- `_install_filetype_fix` corrects the value at source, so new rows are staged
+  with a spelling the writer recognises. It checks the round-trip first and does
+  nothing if it already works, so it retires itself when pypodlib fixes this.
+- `repair_filetypes` re-derives the format from each row's own filename before
+  a save. Rows already on a device read back as `"MP3"` and are re-serialised on
+  every save, so they stay wrong until something rewrites them — this is what
+  heals a library written by an older version. It runs before `add_tracks`
+  (which commits internally) rather than after, so the repair rides along in a
+  write that was happening anyway instead of costing a second full iTunesDB
+  rewrite per batch.
+
+**If you touch this, keep the test.** `TestRecordedTrackFormat` in
+`test_device.py` reads the four-character codes out of the on-disk database
+rather than asking this application what it thinks it wrote, and
+`test_every_container_maps_to_the_code_it_should` asserts the one thing the fix
+depends on and does not own: pypodlib's needle spellings. Change those upstream
+and the map silently goes back to writing `MP3 ` for everything.
+
+**What this was not.** Ruled out with evidence before the database was suspected,
+so nobody spends the time twice: the AAC bitstreams are clean (ffmpeg decodes
+every file without a single warning); the codec, sample rate and channel count
+are within the iPod's limits on every file; `size` in the database matches the
+file on disk for all 453; and the `mp4a` sample-rate field is a correct 44100.
+The files are fine. They always were.
+
+**Still open, and unrelated to the noise.** `sample_count`, `pregap`, `postgap`
+and `gapless_audio_payload_size` are all zero on every row, so nothing trims the
+AAC encoder delay and there is a small gap between tracks. pypodlib does not
+compute them. Worth doing one day; it is a gap, not a glitch.
 
 ### pyPodLib is much larger than it looks
 
@@ -1216,6 +1356,34 @@ the local app at a folder of music already owned, match manifest tracks against
 it, and skip downloading entirely. The iPod Classic plays Apple Lossless, so a
 CD rip goes on untouched. Discussed on 11 September and deferred; the engine
 already has every piece it needs.
+
+Now the *only* remaining quality lever that is free, after 15 September's
+measurements. What else was surveyed that day, so it is not surveyed again:
+
+| Source | Free audio | Verdict |
+|---|---|---|
+| YouTube Opus | 145kbps, 20kHz | **Taken.** The best free stream for this catalogue |
+| YouTube AAC | 129kbps, 15.8kHz | What the tool used to take |
+| YouTube Premium | 256kbps AAC, no conversion | Better, and not free |
+| SoundCloud | ~128kbps MP3 / 64kbps Opus | Worse. 256kbps AAC is Go+ only - it is in yt-dlp's extractor as `256 if is_premium` |
+| Bandcamp streaming | 128kbps MP3 | Worse. Lossless exists only behind a purchase or a name-your-price download, and only where the artist offers one |
+| Deezer, Spotify, Tidal, Apple | - | Paid and DRM'd. Not reachable |
+| Internet Archive, Jamendo, FMA | Lossless | Real, but live recordings, public domain and CC catalogues - not the library this syncs |
+
+So for mainstream commercial music there is nothing free above YouTube's Opus.
+The two things that beat it are a Premium subscription and the user's own files.
+
+### 2a. Refetching what is already on the device
+
+Not done, and not asked for. The 453 tracks synced before 15 September were
+downloaded as 15.8kHz AAC, and the ledger correctly sees them as present, so
+they keep the quality they were synced at. Re-fetching them would mean hours of
+downloading and deleting files that are already there, which is the user's call
+rather than a default.
+
+`build_plan` is where it would go - the branch that appends to
+`already_present` - paired with a removal of the old file once the new one has
+landed.
 
 ### 3. A "needs attention" view
 
