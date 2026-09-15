@@ -553,6 +553,93 @@ tbody tr:hover td.actions { background: var(--surface-2); }
 .row-known .list-sub { color: var(--text-muted); }
 .row-known .track-number { color: var(--text-subtle); }
 
+/* ---------------------------------------------------------------------------
+   Selecting several rows
+   --------------------------------------------------------------------------- */
+
+/* The checkbox column is narrow and the box inside it is invisible until it is
+   wanted - hovered, focused, or with a selection already running. A list you are
+   only reading should not be a column of empty boxes. */
+.col-check {
+  width: 34px;
+  padding-right: 0 !important;
+}
+
+/* The same thing in a flex list rather than a table. Fixed width so the rows
+   below line up with each other whether or not a box is showing. */
+.check-cell {
+  flex: none;
+  width: 18px;
+  display: grid;
+  place-items: center;
+}
+
+.row-check {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 90ms var(--ease);
+}
+
+tr:hover .row-check,
+.list-row:hover .row-check,
+.row-check:focus-visible,
+.row-check:checked,
+.selecting .row-check {
+  opacity: 1;
+}
+
+/* Touch screens have no hover, so there is nothing to reveal the box with.
+   Once a selection is running every box is shown; before that, a long press is
+   the way in and the boxes stay out of the way. */
+@media (hover: none) {
+  .row-check { opacity: 0; }
+  .selecting .row-check { opacity: 1; }
+}
+
+tr.row-selected > td,
+.list-row.row-selected {
+  background: var(--accent-soft);
+}
+
+/* A long press must not also select the text under the finger. Applied only
+   while a selection is running, so ordinary reading and copying still work. */
+.selecting .list-row,
+.selecting tbody tr {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Floats over the foot of the view: it must not move the rows being selected,
+   and on a phone it needs to be where a thumb already is. */
+.selection-bar {
+  position: sticky;
+  bottom: var(--space-4);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin: var(--space-4) 0 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.selection-count { font-size: var(--text-sm); color: var(--text-muted); }
+.selection-count strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.selection-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+@media (max-width: 560px) {
+  .selection-bar { flex-direction: column; align-items: stretch; gap: var(--space-2); }
+  .selection-actions { justify-content: space-between; }
+}
+
 /* Playlist reordering: a drag handle plus keyboard-accessible move buttons, so
    ordering never depends on being able to drag. */
 .drag-handle { color: var(--text-subtle); cursor: grab; flex: none; }

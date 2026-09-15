@@ -1,5 +1,6 @@
 import { api } from '../lib/api.js';
 import { h, icon, mount } from '../lib/dom.js';
+import { createSelection, selectable, selectionBar } from '../lib/select.js';
 import {
   artwork,
   confirmDialog,
@@ -113,7 +114,75 @@ export async function renderPlaylist(view, context) {
         const byId = new Map(playlist.tracks.map((track) => [track.id, track]));
 
         const listSlot = h('div.list');
+        const selectionHost = h('div', { hidden: true });
         const orphaned = playlist.tracks.filter((track) => !track.inLibrary);
+
+        const selection = createSelection({ onChange: () => paintSelectionBar() });
+
+        // Three things worth doing to a handful of tracks in a playlist, and
+        // they are genuinely different: take them out of this playlist, put
+        // them in another one as well, or remove them from the library
+        // altogether - which takes them out of every playlist and off the iPod.
+        function paintSelectionBar() {
+          const chosen = selection.ids.map(Number);
+          selectionBar(selectionHost, selection, {
+            total: order.length,
+            onRender: () => paintSelectionBar(),
+            actions: [
+              h(
+                'button.btn.btn-sm',
+                { type: 'button', onclick: () => removeSelectedFromPlaylist(chosen) },
+                icon('x', 14),
+                'Remove from playlist'
+              ),
+              h(
+                'button.btn.btn-sm.btn-danger',
+                { type: 'button', onclick: () => removeSelectedFromLibrary(chosen) },
+                icon('trash', 14),
+                'Remove from library'
+              ),
+            ],
+          });
+        }
+
+        async function removeSelectedFromPlaylist(trackIds) {
+          if (trackIds.length === 0) return;
+          try {
+            const { removed } = await api.removeManyFromPlaylist(playlistId, trackIds);
+            const gone = new Set(trackIds);
+            order = order.filter((value) => !gone.has(value));
+            for (const trackId of gone) byId.delete(trackId);
+            selection.clear();
+            paintList();
+            toast(`Removed ${removed} from the playlist.`, 'ok');
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        }
+
+        async function removeSelectedFromLibrary(trackIds) {
+          if (trackIds.length === 0) return;
+          const confirmed = await confirmDialog({
+            title: `Remove ${trackIds.length} song${trackIds.length === 1 ? '' : 's'} from the library?`,
+            message:
+              'They will be removed from your library and from every playlist they are in, and from the iPod on the next sync. This is not the same as taking them out of this playlist.',
+            confirmLabel: 'Remove from library',
+            danger: true,
+          });
+          if (!confirmed) return;
+          try {
+            const { removed } = await api.removeTracks(trackIds);
+            const gone = new Set(trackIds);
+            order = order.filter((value) => !gone.has(value));
+            for (const trackId of gone) byId.delete(trackId);
+            selection.clear();
+            paintList();
+            toast(`Removed ${removed} from your library.`, 'ok');
+            context.refreshStats?.();
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        }
 
         const persistOrder = async () => {
           try {
@@ -137,15 +206,25 @@ export async function renderPlaylist(view, context) {
         let dragId = null;
 
         function paintList() {
+          selection.setOrder(order);
+          selection.resetRows();
           mount(
             listSlot,
             order.map((trackId, index) => {
               const track = byId.get(trackId);
               if (!track) return null;
 
-              const row = h(
-                'div.list-row',
-                { draggable: 'true', dataset: { trackId: String(trackId) } },
+              const row = h('div.list-row', {
+                draggable: 'true',
+                dataset: { trackId: String(trackId) },
+              });
+              // Long-press selection and drag-to-reorder do not fight on touch:
+              // dragging here is a mouse shortcut, and the move buttons are how
+              // a finger reorders. See `select.js`.
+              const check = selectable(row, trackId, selection);
+
+              row.append(
+                h('span.check-cell', check),
                 h('span.drag-handle', { 'aria-hidden': 'true' }, icon('grip', 16)),
                 h('span.small.subtle', { style: { width: '26px', textAlign: 'right' } }, String(index + 1)),
                 artwork(track.artworkUrl, { size: 34 }),
@@ -315,6 +394,7 @@ export async function renderPlaylist(view, context) {
         } else {
           blocks.push(
             h('div.card', listSlot),
+            selectionHost,
             h(
               'p.small.subtle',
               { style: { marginTop: '12px' } },

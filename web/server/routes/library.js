@@ -231,6 +231,42 @@ libraryRoutes.post(
   })
 );
 
+// Removes many at once.
+//
+// POST rather than DELETE with a body: a body on DELETE is legal but poorly
+// supported by proxies and by fetch, and this already sits beside a batched
+// POST for adding. One transaction, so a selection of forty either leaves the
+// library or does not.
+libraryRoutes.post(
+  '/tracks/remove',
+  handler(async (req, res) => {
+    const trackIds = (Array.isArray(req.body?.trackIds) ? req.body.trackIds : []).map((value) =>
+      id(value, 'trackId')
+    );
+    if (trackIds.length === 0) throw badRequest('No trackIds supplied.');
+    if (trackIds.length > 1000) throw badRequest('Too many tracks in one request (max 1000).');
+
+    const removed = await transaction(async (client) => {
+      const { rowCount } = await client.query(
+        'DELETE FROM library_tracks WHERE user_id = $1 AND track_id = ANY($2::bigint[])',
+        [req.user.id, trackIds]
+      );
+      // Same reasoning as the single removal: a track out of the library must
+      // not linger in a playlist that is about to be synced, or it goes
+      // straight back onto the iPod.
+      await client.query(
+        `DELETE FROM playlist_tracks
+          WHERE track_id = ANY($1::bigint[])
+            AND playlist_id IN (SELECT id FROM playlists WHERE user_id = $2)`,
+        [trackIds, req.user.id]
+      );
+      return rowCount;
+    });
+
+    res.json({ removed, requested: trackIds.length });
+  })
+);
+
 libraryRoutes.delete(
   '/tracks/:id',
   handler(async (req, res) => {

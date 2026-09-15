@@ -86,6 +86,7 @@ export const api = {
   // POST rather than GET: the question is a batch of identifiers, which is a
   // body, not a query string. Read-only all the same.
   libraryKnown: (items) => request('POST', '/api/library/known', { items }),
+  removeTracks: (trackIds) => request('POST', '/api/library/tracks/remove', { trackIds }),
   removeTrack: (trackId) => request('DELETE', `/api/library/tracks/${trackId}`),
   updateTrack: (trackId, patch) => request('PATCH', `/api/library/tracks/${trackId}`, patch),
   resolveTrack: (trackId, options) =>
@@ -103,6 +104,8 @@ export const api = {
     request('POST', `/api/playlists/${playlistId}/tracks`, { trackIds }),
   removeFromPlaylist: (playlistId, trackId) =>
     request('DELETE', `/api/playlists/${playlistId}/tracks/${trackId}`),
+  removeManyFromPlaylist: (playlistId, trackIds) =>
+    request('POST', `/api/playlists/${playlistId}/tracks/remove`, { trackIds }),
   reorderPlaylist: (playlistId, trackIds) =>
     request('PUT', `/api/playlists/${playlistId}/order`, { trackIds }),
 

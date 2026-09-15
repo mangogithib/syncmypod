@@ -207,6 +207,36 @@ playlistRoutes.post(
   })
 );
 
+// Removes many from one playlist. Beside the batched add for the same reason
+// the library has one: a selection is a single action, not forty.
+playlistRoutes.post(
+  '/:id/tracks/remove',
+  handler(async (req, res) => {
+    const playlistId = id(req.params.id, 'Playlist id');
+    const trackIds = (Array.isArray(req.body?.trackIds) ? req.body.trackIds : []).map((value) =>
+      id(value, 'trackId')
+    );
+    if (trackIds.length === 0) throw badRequest('No trackIds supplied.');
+
+    const owned = await one('SELECT id FROM playlists WHERE id = $1 AND user_id = $2', [
+      playlistId,
+      req.user.id,
+    ]);
+    if (!owned) throw notFound('Playlist not found.');
+
+    const removed = await transaction(async (client) => {
+      const { rowCount } = await client.query(
+        'DELETE FROM playlist_tracks WHERE playlist_id = $1 AND track_id = ANY($2::bigint[])',
+        [playlistId, trackIds]
+      );
+      await client.query('UPDATE playlists SET updated_at = now() WHERE id = $1', [playlistId]);
+      return rowCount;
+    });
+
+    res.json({ removed, requested: trackIds.length });
+  })
+);
+
 playlistRoutes.delete(
   '/:id/tracks/:trackId',
   handler(async (req, res) => {

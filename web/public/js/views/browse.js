@@ -182,7 +182,7 @@ function backLink() {
   return h(
     'button.link-back',
     { type: 'button', onclick: () => window.history.back() },
-    icon('chevron-left', 15),
+    icon('back', 15),
     'Back'
   );
 }
