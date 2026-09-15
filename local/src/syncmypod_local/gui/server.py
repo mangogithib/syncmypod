@@ -187,6 +187,54 @@ class GuiServer:
         self._worker.start()
         return {"started": True}
 
+    def start_match_check(self) -> dict[str, Any]:
+        """Search for every unlinked track, downloading nothing.
+
+        Shares the session and the progress channel with a sync because it is
+        the same question asked without the iPod: which of these can be found.
+        Refused while a sync is running - both drive the same search and would
+        be two machines' worth of requests from one address.
+        """
+        if self.session.running:
+            return {"started": False, "error": "Something is already running."}
+
+        self.session.reset()
+        self.session.running = True
+        self._worker = threading.Thread(target=self._run_match_check, daemon=True)
+        self._worker.start()
+        return {"started": True}
+
+    def _run_match_check(self) -> None:
+        try:
+            report = sync_engine.check_matches(
+                config_module.load(),
+                progress=self._progress,
+                cancel=lambda: self.session.cancelled,
+            )
+            self.session.summary = {
+                "kind": "matches",
+                "status": report.status,
+                "checked": report.checked,
+                "found": report.found,
+                "missing": [{"label": label} for label, _reason in report.missing],
+                "skipped": report.skipped,
+                "message": report.message,
+            }
+            self.session.add("done", summary=self.session.summary)
+        except (
+            sync_engine.SyncError,
+            ApiError,
+            config_module.ConfigError,
+        ) as err:
+            self.session.error = str(err)
+            self.session.add("error", message=str(err))
+        except Exception as err:  # pragma: no cover - a bug, not a user problem
+            logger.exception("The match check failed unexpectedly")
+            self.session.error = f"Unexpected failure: {err}"
+            self.session.add("error", message=self.session.error)
+        finally:
+            self.session.running = False
+
     def pair(self, server_url: str, code: str, device_name: str) -> dict[str, Any]:
         """Exchange a pairing code for a device token, from the page.
 
@@ -432,6 +480,12 @@ class GuiServer:
             self.session.add("database")
         elif event in {"backup", "backup-skipped"}:
             self.session.add(event)
+        elif event == "checking":
+            self.session.add("checking", total=data["total"], skipped=data["skipped"])
+        elif event in {"match", "no-match"}:
+            self.session.add(event, label=data["label"])
+        elif event == "reporting":
+            self.session.add("reporting", count=data["count"])
         elif event == "track":
             self.session.add(
                 "track",
@@ -598,6 +652,8 @@ def _make_handler(gui: GuiServer):
                         backup=None if backup is None else bool(backup),
                     ),
                 )
+            elif path == "/api/check-matches":
+                self._json(200, gui.start_match_check())
             elif path == "/api/cancel":
                 self._json(200, gui.cancel())
             elif path == "/api/eject":
@@ -692,5 +748,15 @@ def serve(*, open_browser: bool = True, port: int = 0) -> GuiServer:
     """Start the GUI and, unless told otherwise, open it."""
     gui = GuiServer(port=port)
     if open_browser:
-        threading.Timer(0.3, lambda: webbrowser.open(gui.url)).start()
+        open_in_browser(gui.url)
     return gui
+
+
+def open_in_browser(url: str) -> None:
+    """Hand the address to the default browser, shortly.
+
+    Delayed, because the browser can request the page before the server is
+    accepting connections and show its own "cannot connect" instead - which
+    looks exactly like the application having failed to start.
+    """
+    threading.Timer(0.3, lambda: webbrowser.open(url)).start()

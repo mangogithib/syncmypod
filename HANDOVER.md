@@ -40,15 +40,17 @@ which is the one rule the whole design rests on.
 | Audio quality on the device | **Fixed 14 September** — every AAC file was recorded as an MP3 in the iTunesDB, which is what made the iPod screech. See section 5 |
 | Backup before a sync | On by default, and **can now be turned off** — a toggle in the app, `--no-backup` on the CLI |
 | YouTube Premium sign-in (local) | Reads a browser where it can, else **opens one of its own** and takes the session from it |
-| Local app: GUI | Working — nothing needs a terminal |
-| Downloadable build | **Published — 0.1.6**, built and attached by CI from the `local-v0.1.6` tag |
+| Local app: GUI | Working — nothing needs a terminal. **A window of its own since 15 September**, not a browser tab |
+| Knowing what cannot be synced | **`check-matches`** searches without downloading and reports it per track, so it no longer takes a sync to find out |
+| Selecting several songs at once | Working — click/shift/ctrl on a pointer, long press then drag on a phone. Bulk add to playlist, remove from playlist, remove from library |
+| Downloadable build | **Published — 0.1.8**, built and attached by CI from the `local-v0.1.8` tag |
 | Phone layout | Working — measured at 375px, list rows included |
 | CI | Green. Parses every file, checks for undefined references, checks the api client, runs migrations |
 | Connected YouTube account | **Removed.** Needed a per-instance Google client *and* a Test users entry |
 | **A web test suite** | **Still none. The biggest gap — see section 6** |
 
 About 23,900 lines: 55 JavaScript files, 17 Python modules, 8 SQL migrations.
-**271 Python tests, all passing. Zero JavaScript tests.**
+**276 Python tests, all passing. Zero JavaScript tests.**
 
 Swept for dead code on 13 September across all three languages - unused Python
 defs, JS exports nothing imports, CSS classes no markup carries. Three things
@@ -256,6 +258,38 @@ fine, but start from the reasoning rather than from scratch.
   stored preference. A skipped backup is said out loud in the log, the terminal
   and the page - "I never turned that off" is exactly what somebody says after
   losing a device.
+- **The local app is a window, not a browser tab, and that is not a reversal of
+  the GUI decision.** Asked for on 15 September. The 11 September entry above
+  chose a served page over Tkinter and PySide6, and every reason it gave still
+  holds - which is exactly why the answer is `pywebview` (about 1MB) wrapping
+  the *existing* page in the webview the operating system already ships:
+  WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux. Not one line of
+  the interface changed.
+
+  It always falls back. No pywebview, or no platform runtime, and the browser
+  opens exactly as it used to - `gui/window.py` returns False and the caller
+  carries on. `--browser` forces the old behaviour; `--no-browser` still prints
+  the address and opens nothing.
+- **Matching stays in the local app, and server-side matching was turned down
+  with a reason.** Proposed on 15 September: have the web tool find each
+  track's audio in the background so the user learns what cannot be synced
+  without plugging in an iPod. The goal is right and is now met by
+  `syncmypod check-matches`, which runs the real search with no download and
+  reports per track.
+
+  Doing the searching on the server does not work, and the evidence is already
+  in section 5: a home connection was blocked after one large sync, every
+  search returning the bot check. A datacentre address is what that check is
+  aimed at, it would be the same address for every search forever, and the only
+  known remedy is a signed-in session - which means a Google credential on a
+  public box. It would also mean porting 200 lines of tuned scoring to
+  JavaScript or putting Python on the Node server, and yt-dlp breaking would
+  become downtime rather than an app update.
+
+  If it is ever revisited, use the **YouTube Data API** for search rather than
+  scraping: quota'"'"'d rather than bot-checked, an API key rather than the OAuth
+  client that killed the connected account, and roughly 100 searches a day on
+  the default quota - too slow for a 450-track backlog, fine for a trickle.
 - **There is exactly one YouTube sign-in, and it is in the local app.** The
   browser's own cookies, on the user's machine, used to fetch the 256kbps stream
   a Premium account is entitled to. It never leaves that machine, and the server

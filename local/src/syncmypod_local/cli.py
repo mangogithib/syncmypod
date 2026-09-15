@@ -6,6 +6,7 @@ Subcommands, each doing one thing:
     syncmypod status                 what is paired, what is plugged in
     syncmypod devices                just the attached iPods
     syncmypod sync                   do the work
+    syncmypod check-matches          which songs can be found, without syncing
     syncmypod gui                    the same thing, in a browser
     syncmypod youtube                sign in for higher quality audio
     syncmypod eject                  make it safe to unplug
@@ -335,19 +336,51 @@ def _build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--verbose", action="store_true", help="Log what each step is doing")
     sync.set_defaults(handler=_cmd_sync)
 
+    matches = subparsers.add_parser(
+        "check-matches",
+        help="Find out which songs have audio available, without downloading any",
+        description=(
+            "Searches for every track that has no source link yet and reports "
+            "back which ones can be found. Downloads nothing and needs no iPod "
+            "attached. A track that is found gets its link saved, so the next "
+            "sync skips the search for it."
+        ),
+    )
+    matches.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Check at most N tracks",
+    )
+    matches.add_argument(
+        "--at-once",
+        type=int,
+        default=sync_engine.DEFAULT_CONCURRENCY,
+        metavar="N",
+        help=f"Searches at the same time (default {sync_engine.DEFAULT_CONCURRENCY})",
+    )
+    matches.add_argument("--verbose", action="store_true", help="Log what each step is doing")
+    matches.set_defaults(handler=_cmd_check_matches)
+
     gui = subparsers.add_parser(
         "gui",
-        help="Open the window",
+        help="Open the application window",
         description=(
-            "Serves a small page to your browser and opens it. The server binds "
-            "to this computer only, needs a token generated at startup, and "
-            "stops when this command does."
+            "Opens the application in a window of its own. The page is served "
+            "on this computer only, needs a token generated at startup, and "
+            "stops when the window is closed."
         ),
+    )
+    gui.add_argument(
+        "--browser",
+        action="store_true",
+        help="Open in your default browser instead of a window of its own",
     )
     gui.add_argument(
         "--no-browser",
         action="store_true",
-        help="Print the address instead of opening a browser",
+        help="Print the address and open nothing",
     )
     gui.add_argument(
         "--port",
@@ -551,6 +584,66 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_check_matches(args: argparse.Namespace) -> int:
+    _configure_logging(args.verbose)
+
+    stored = config.load()
+    if not stored.is_paired:
+        console.print("[yellow]Not paired.[/yellow]  Run:  syncmypod pair <server> <code>")
+        return EXIT_FAILURE
+
+    def progress(event: str, data: dict) -> None:
+        if event == "checking":
+            total, skipped = data["total"], data["skipped"]
+            console.print(
+                f"Checking [bold]{total}[/bold] track(s)"
+                + (f"; {skipped} already have a source link" if skipped else "")
+            )
+        elif event == "no-match":
+            console.print(f"  [yellow]not found[/yellow]  {data['label']}")
+        elif event == "reporting":
+            console.print(f"Sending {data['count']} result(s) to the library...")
+
+    report = sync_engine.check_matches(
+        stored,
+        limit=args.limit,
+        concurrency=max(1, args.at_once),
+        progress=progress,
+    )
+
+    console.print()
+    if report.status == "blocked":
+        console.print(f"[red]Stopped.[/red] {report.message}")
+        return EXIT_FAILURE
+    if report.message and report.checked == 0:
+        console.print(report.message)
+        return EXIT_OK
+
+    table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    table.add_column(style="dim")
+    table.add_column()
+    table.add_row("Checked", str(report.checked))
+    table.add_row("Found", f"[green]{report.found}[/green]")
+    table.add_row("Not found", f"[yellow]{len(report.missing)}[/yellow]")
+    if report.skipped:
+        table.add_row("Already linked", str(report.skipped))
+    console.print(table)
+
+    if report.missing:
+        console.print()
+        console.print("[yellow]No audio found for:[/yellow]")
+        for label, _reason in report.missing[:40]:
+            console.print(f"  {label}")
+        if len(report.missing) > 40:
+            console.print(f"  ...and {len(report.missing) - 40} more")
+        console.print()
+        console.print(
+            "[dim]Paste a source link for any of these in the web interface and "
+            "they will sync.[/dim]"
+        )
+    return EXIT_OK
+
+
 def _cmd_youtube_status(_args: argparse.Namespace) -> int:
     console.print("Asking YouTube what it will offer...")
     available = youtube_module.check()
@@ -630,10 +723,28 @@ def _cmd_eject(args: argparse.Namespace) -> int:
 
 def _cmd_gui(args: argparse.Namespace) -> int:
     from . import gui as gui_module
+    from .gui import window as window_module
 
     _configure_logging(args.verbose)
 
-    server = gui_module.serve(open_browser=not args.no_browser, port=args.port)
+    # A window by default, since 15 September. The page is identical either way
+    # - see gui/window.py for why this is pywebview rather than a rewrite - and
+    # the flags are the escape hatches: --browser for the old behaviour, and
+    # --no-browser for a headless box or for debugging the server on its own.
+    want_window = not args.browser and not args.no_browser
+
+    server = gui_module.serve(
+        open_browser=args.browser and not args.no_browser,
+        port=args.port,
+    )
+
+    # Blocks until the window is closed. False means none could be opened, in
+    # which case this falls through to the browser exactly as before.
+    if want_window and window_module.run(server):
+        return EXIT_OK
+    if want_window:
+        gui_module.open_in_browser(server.url)
+
     console.print(f"[bold]SyncMyPod[/bold] is running at [link]{server.url}[/link]")
     console.print(
         "\n[dim]Reachable from this computer only. The link contains a one-time "

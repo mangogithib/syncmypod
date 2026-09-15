@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "syncmypod-local"
-version = "0.1.7"
+version = "0.1.8"
 description = "Syncs a SyncMyPod library to a classic iPod. The only component that touches audio."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -40,6 +40,12 @@ dependencies = [
   "httpx>=0.27.0",
   "platformdirs>=4.2.0",
   "rich>=13.7.0",
+  # The native window. About 1MB, and it wraps the existing page in the webview
+  # the operating system already ships rather than replacing the interface -
+  # WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux. It is a soft
+  # requirement: `gui/window.py` falls back to the browser when it or the
+  # platform runtime is missing, so a machine without one still works.
+  "pywebview>=5.0",
   # Windows ships no system timezone database, so zoneinfo has nothing to read
   # and pypodlib cannot parse an iTunesDB at all - it looks up the timezone the
   # iPod itself is set to. Found on a real Classic set to Europe/Dublin, where

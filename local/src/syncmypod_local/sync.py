@@ -648,6 +648,149 @@ def _prepare_one(
     )
 
 
+@dataclass(slots=True)
+class MatchReport:
+    """What a match check found, for the CLI and the GUI."""
+
+    checked: int = 0
+    found: int = 0
+    missing: list[tuple[str, str]] = field(default_factory=list)
+    skipped: int = 0
+    status: str = "done"
+    message: str | None = None
+
+
+def check_matches(
+    stored: config_module.Config,
+    *,
+    limit: int | None = None,
+    concurrency: int = DEFAULT_CONCURRENCY,
+    progress: Progress | None = None,
+    cancel: Callable[[], bool] | None = None,
+) -> MatchReport:
+    """Find out which tracks have audio available, without downloading any.
+
+    **Why this exists.** Until now the only way to discover that a song could
+    not be found was to run a whole sync with the iPod plugged in and read the
+    failures afterwards - minutes of downloading before the first bad news. The
+    search is the cheap half of a sync and needs no device at all, so it can be
+    run on its own and the answer sent to the server, where the web tool shows
+    it per track.
+
+    **Why it runs here and not on the server.** Searching from the server would
+    be the obvious design and it does not work: a home connection was blocked
+    after one large sync on 13 September, with every search returning the bot
+    check, and a datacentre address is what that check is aimed at. The only
+    known remedy is a signed-in session, which would mean a Google credential on
+    a public box. So the searching stays on this machine and only the result
+    travels.
+
+    A track that already has a ``sourceHint`` is skipped: somebody has already
+    said where the audio is, and confirming it would cost a search to learn
+    nothing.
+    """
+    say = progress or (lambda event, data: None)
+    stop = cancel or (lambda: False)
+
+    if not stored.is_paired:
+        raise SyncError(
+            "This computer is not paired with a library. Run: syncmypod pair <server> <code>"
+        )
+
+    report = MatchReport()
+
+    with DeviceApi(stored.server_url, stored.token) as api:
+        say("hello", {})
+        api.hello()
+
+        manifest = api.manifest()
+        tracks = list(manifest.get("tracks") or [])
+        queue = [t for t in tracks if not (t.get("sourceHint") or "").strip()]
+        report.skipped = len(tracks) - len(queue)
+        if limit is not None:
+            queue = queue[:limit]
+
+        say("checking", {"total": len(queue), "skipped": report.skipped})
+        if not queue:
+            report.message = "Every track already has a source link."
+            return report
+
+        # The same fan-out the download path uses, and for the same reason: a
+        # search is mostly waiting. Four, not sixteen - this is the operation
+        # that got a machine bot-checked in the first place, so it must not look
+        # more like a robot than a sync already does.
+        results: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
+            in_flight: dict[Future, dict[str, Any]] = {}
+            pending = list(queue)
+
+            def fill() -> None:
+                while pending and len(in_flight) < max(1, concurrency):
+                    item = pending.pop(0)
+                    in_flight[pool.submit(_best_match, item)] = item
+
+            fill()
+            while in_flight:
+                if stop():
+                    report.status = "cancelled"
+                    report.message = "Stopped before the rest were checked."
+                    break
+                done, _ = wait(list(in_flight), return_when=FIRST_COMPLETED)
+                for future in done:
+                    item = in_flight.pop(future)
+                    label = _label(item)
+                    report.checked += 1
+                    try:
+                        candidate = future.result()
+                    except downloader.BlockedError as err:
+                        # The bot check. Every remaining search would fail the
+                        # same way, so stopping and saying so beats reporting a
+                        # hundred tracks as unfindable when they are not.
+                        report.status = "blocked"
+                        report.message = str(err)
+                        pending.clear()
+                        in_flight.clear()
+                        break
+                    except Exception as err:  # pragma: no cover - yt-dlp raises broadly
+                        logger.info("Could not check %s: %s", label, err)
+                        candidate = None
+
+                    if candidate is not None:
+                        report.found += 1
+                        results.append({"trackId": item["id"], "sourceUrl": candidate.url})
+                        say("match", {"label": label, "url": candidate.url})
+                    else:
+                        report.missing.append((label, "no usable result"))
+                        results.append({"trackId": item["id"], "sourceUrl": None})
+                        say("no-match", {"label": label})
+                fill()
+
+        if results:
+            say("reporting", {"count": len(results)})
+            # In batches, because the server caps one request at 500 and a
+            # cancelled check should still have recorded what it learned.
+            for start in range(0, len(results), 500):
+                api.report_matches(results[start : start + 500])
+
+    return report
+
+
+def _label(track: dict[str, Any]) -> str:
+    """ "Artist - Title" for a raw manifest track, for logs and progress."""
+    return f"{track.get('artist') or 'Unknown'} - {track.get('title') or 'Untitled'}"
+
+
+def _best_match(track: dict[str, Any]) -> downloader.Candidate | None:
+    """The top-scoring search result for a track, or None.
+
+    Deliberately the same `downloader.search` a real sync uses, scoring and all,
+    so the answer this reports is the answer a sync would act on. A separate,
+    simpler check would be able to disagree with the thing it is predicting.
+    """
+    candidates = downloader.search(track)
+    return candidates[0] if candidates else None
+
+
 def _commit_batch(
     ipod: device_module.IpodDevice,
     record: ledger.Ledger,

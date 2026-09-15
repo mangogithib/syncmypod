@@ -84,6 +84,8 @@ async function refreshState() {
   const ready = Boolean(data.paired && data.ipod && !data.running);
   el("btn-sync").disabled = !ready;
   el("btn-check").disabled = !ready;
+  // Needs a library but no device: it searches, it does not write anything.
+  el("btn-matches").disabled = Boolean(!data.paired || data.running);
   // Ejecting needs an iPod but not a pairing: getting the device back safely is
   // not something that should depend on the server being reachable.
   el("btn-eject").disabled = Boolean(!data.ipod || data.running);
@@ -532,6 +534,18 @@ function handle(event) {
     case "backup-skipped":
       note("Backup skipped - nothing will be saved to restore from.");
       break;
+    case "checking":
+      note(
+        `Looking for ${event.total} track(s)` +
+          (event.skipped ? `; ${event.skipped} already have a source link.` : ".")
+      );
+      break;
+    case "no-match":
+      note(`No audio found for ${event.label}`);
+      break;
+    case "reporting":
+      note(`Sending ${event.count} result(s) to the library...`);
+      break;
     case "writing":
       note(`Writing ${event.count} track(s) to the iPod…`);
       break;
@@ -665,6 +679,44 @@ function showSummary(summary) {
     return;
   }
 
+  // The match check reports something different from a sync: not what was
+  // written, but what could be found at all.
+  if (summary.kind === "matches") {
+    if (summary.status === "blocked") {
+      body.append(node("p", "notice notice-danger", summary.message));
+      return;
+    }
+    body.append(
+      node(
+        "p",
+        summary.missing.length ? "notice notice-warn" : "notice notice-ok",
+        summary.checked === 0
+          ? summary.message || "Nothing needed checking."
+          : `Checked ${summary.checked}. Found ${summary.found}, ` +
+            `${summary.missing.length} with no audio available.` +
+            (summary.skipped ? ` ${summary.skipped} already had a link.` : "")
+      )
+    );
+    if (summary.missing.length) {
+      const list = node("ol", "tracks");
+      for (const entry of summary.missing) {
+        const row = node("li", "track track-failed");
+        row.append(node("span", "track-name", entry.label));
+        row.append(node("span", "track-state", "not found"));
+        list.append(row);
+      }
+      body.append(list);
+      body.append(
+        node(
+          "p",
+          "muted",
+          "Paste a source link for any of these in the web interface and they will sync."
+        )
+      );
+    }
+    return;
+  }
+
   if (summary.dryRun) {
     body.append(
       node(
@@ -727,6 +779,32 @@ function showSummary(summary) {
 
 el("btn-sync").addEventListener("click", () => start({ dryRun: false }));
 el("btn-check").addEventListener("click", () => start({ dryRun: true }));
+
+// Needs no iPod: it answers "which of these can be found at all", which is
+// worth knowing before the device is anywhere near the machine.
+el("btn-matches").addEventListener("click", async () => {
+  state.since = 0;
+  state.tracks.clear();
+  state.total = 0;
+  clear(el("track-list"));
+  clear(el("summary-body"));
+  el("summary-panel").hidden = true;
+  el("plan-panel").hidden = true;
+  el("run-panel").hidden = false;
+  el("progress-track").hidden = true;
+  el("progress-count").textContent = "";
+
+  setRunning(true);
+  try {
+    const result = await api("/api/check-matches", { method: "POST", body: "{}" });
+    if (!result.started) throw new Error(result.error || "Could not start.");
+  } catch (error) {
+    setRunning(false);
+    showSummary({ status: "error", message: error.message, failed: [] });
+    return;
+  }
+  poll();
+});
 // Saved when it changes, not only when a sync starts. It reads as a setting
 // rather than a per-run choice, so closing the window must not discard it.
 el("opt-backup").addEventListener("change", async () => {

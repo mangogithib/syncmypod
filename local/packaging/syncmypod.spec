@@ -40,7 +40,10 @@ hidden += collect_submodules("yt_dlp")
 # wasmtime ships a compiled runtime and a .wasm payload as package data; mutagen
 # and libusb_package carry data files of their own. collect_all takes the
 # binaries and data as well as the modules.
-for package in ("wasmtime", "libusb_package", "mutagen", "certifi"):
+# pywebview picks its backend at runtime from what the platform has, so the
+# import that matters is never visible statically. collect_all rather than
+# collect_submodules because it also ships a small JS shim as package data.
+for package in ("wasmtime", "libusb_package", "mutagen", "certifi", "webview"):
     package_datas, package_binaries, package_hidden = collect_all(package)
     datas += package_datas
     binaries += package_binaries
@@ -62,9 +65,11 @@ analysis = Analysis(
     hiddenimports=hidden,
     hookspath=[],
     runtime_hooks=[],
-    # Dropped because nothing here draws a window of its own - the GUI is a page
-    # served to the user's own browser - and these pull in tens of megabytes of
-    # toolkit that would never be loaded.
+    # The window is drawn by the operating system's own webview through
+    # pywebview, so none of these toolkits is ever loaded - and each would add
+    # tens of megabytes to the download. Left excluded after the move to a
+    # native window on 15 September, because that is exactly what pywebview
+    # avoids needing.
     excludes=["tkinter", "PyQt5", "PyQt6", "PySide2", "PySide6", "matplotlib", "IPython"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -80,6 +85,9 @@ executable = EXE(
     [],
     exclude_binaries=True,
     name="syncmypod",
+    # The same mark as the favicon and the page's own header, so the taskbar,
+    # the window and the browser tab all show one logo.
+    icon="icon.ico",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -32,6 +32,8 @@ const TRACK_COLUMNS = `
   lt.rating,
   lt.source_hint           AS "sourceHint",
   lt.attention_dismissed   AS "attentionDismissed",
+  lt.source_checked_at     AS "sourceCheckedAt",
+  lt.source_missing        AS "sourceMissing",
   fail.error               AS "syncError",
   fail.device_name         AS "syncFailedOn"
 `;
@@ -336,7 +338,14 @@ export async function libraryStats(userId) {
           FROM device_tracks dt
           JOIN devices d ON d.id = dt.device_id
          WHERE d.user_id = $1 AND d.revoked_at IS NULL AND dt.state = 'failed')
-         AS "syncFailed"`,
+         AS "syncFailed",
+       -- Songs the local app looked for and could not find. Known
+       -- without an iPod being attached, which is the whole point of
+       -- the check.
+       (SELECT count(*)::int
+          FROM library_tracks lt
+         WHERE lt.user_id = $1 AND lt.source_missing)
+         AS "sourceMissing"`,
     [userId]
   );
   return row;

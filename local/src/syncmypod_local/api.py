@@ -183,6 +183,19 @@ class DeviceApi:
         # The server caps a batch at 500.
         return self._post(f"/api/sync/runs/{run_id}/results", {"results": results[:500]})
 
+    def report_matches(self, matches: list[dict[str, Any]]) -> dict[str, Any]:
+        """Report where each track's audio was found, or that it was not.
+
+        Sent by the match check, which searches without downloading anything.
+        A URL lands in the track's ``sourceHint``, so the next real sync skips
+        the search for it; a track with no URL is recorded as unfindable, which
+        is what lets the web tool answer "what cannot be synced" without an iPod
+        being plugged in.
+        """
+        if not matches:
+            return {"found": 0, "missing": 0}
+        return self._post("/api/sync/matches", {"matches": matches[:500]})
+
     def finish_run(
         self,
         run_id: int,

@@ -183,6 +183,63 @@ syncRoutes.post(
 
 // What the server believes is on this device. The local app can use it to
 // shortcut a full filesystem scan, and the UI uses it for "41 of 50 synced".
+// What the local app found when it looked for each track's audio.
+//
+// The point is that it can be run without an iPod attached and without
+// downloading anything, so "which of my songs cannot be found" stops being
+// something you only discover part way through a sync.
+//
+// A found URL is written to source_hint, which is the same field a user can
+// paste into by hand - so the next sync skips the search for that track
+// entirely and gets faster as a side effect. A hand-pasted link is never
+// overwritten: the user chose it deliberately and the search did not.
+syncRoutes.post(
+  '/matches',
+  handler(async (req, res) => {
+    const matches = Array.isArray(req.body?.matches) ? req.body.matches : [];
+    if (matches.length === 0) throw badRequest('No matches supplied.');
+    if (matches.length > 500) throw badRequest('Send at most 500 matches per request.');
+
+    const found = [];
+    const missing = [];
+    for (const match of matches) {
+      const trackId = Number(match?.trackId);
+      if (!Number.isInteger(trackId)) continue;
+      const url = str(match?.sourceUrl, 'sourceUrl', { max: 1000 });
+      if (url) found.push({ trackId, url });
+      else missing.push(trackId);
+    }
+
+    const userId = req.user.id;
+
+    if (found.length > 0) {
+      // One statement rather than a loop: unnest turns the two arrays into rows
+      // to join against, which is a single round trip for a batch of 500.
+      await query(
+        `UPDATE library_tracks lt
+            SET source_hint       = COALESCE(NULLIF(lt.source_hint, ''), incoming.url),
+                source_checked_at = now(),
+                source_missing    = false
+           FROM (SELECT * FROM unnest($2::bigint[], $3::text[]) AS t(track_id, url)) AS incoming
+          WHERE lt.user_id = $1 AND lt.track_id = incoming.track_id`,
+        [userId, found.map((entry) => entry.trackId), found.map((entry) => entry.url)]
+      );
+    }
+
+    if (missing.length > 0) {
+      await query(
+        `UPDATE library_tracks
+            SET source_checked_at = now(),
+                source_missing    = true
+          WHERE user_id = $1 AND track_id = ANY($2::bigint[])`,
+        [userId, missing]
+      );
+    }
+
+    res.json({ found: found.length, missing: missing.length });
+  })
+);
+
 syncRoutes.get(
   '/state',
   handler(async (req, res) => {

@@ -989,3 +989,124 @@ class TestADeviceAlreadyMissingTheMirrorIsRepaired:
         inner = getattr(library, "_library", library)
         assert [r.get("Title") for r in inner._ds3 if not r.get("master_flag")] == ["Liked"]
         assert "Liked" in repaired.playlist_contents()
+
+
+class TestCheckingMatches:
+    """Which songs can be found, answered without an iPod or a download.
+
+    The point is that it costs a search and nothing else. Until this existed the
+    only way to learn a track was unfindable was to start a sync, wait through
+    the downloads, and read the failures - so a library with ten hopeless tracks
+    told you about them an hour in.
+    """
+
+    @pytest.fixture
+    def searches(self, monkeypatch):
+        """Replaces the YouTube search, and records what it was asked."""
+        asked: list[str] = []
+
+        def fake_search(track_dict):
+            asked.append(track_dict.get("title") or "")
+            # Track 2 is the one nothing can be found for.
+            if str(track_dict.get("title") or "").endswith("2"):
+                return []
+            return [
+                downloader.Candidate(
+                    url=f"https://youtu.be/{track_dict['id']}",
+                    title=track_dict.get("title") or "",
+                    uploader="Aurora Kane - Topic",
+                    duration=268.0,
+                    score=0.9,
+                    reason="test",
+                )
+            ]
+
+        monkeypatch.setattr(downloader, "search", fake_search)
+        return asked
+
+    @respx.mock
+    def test_it_reports_a_url_for_what_it_found(self, paired, searches):
+        matches = respx.post(f"{SERVER}/api/sync/matches").mock(
+            return_value=httpx.Response(200, json={"found": 2, "missing": 1})
+        )
+        mock_server(manifest(tracks=[track(i) for i in (1, 2, 3)]))
+
+        report = sync.check_matches(paired)
+
+        assert report.checked == 3
+        assert report.found == 2
+        assert [label for label, _ in report.missing] == ["Aurora Kane - Track 2"]
+
+        sent = json.loads(matches.calls[0].request.content)["matches"]
+        by_id = {entry["trackId"]: entry["sourceUrl"] for entry in sent}
+        assert by_id[1] == "https://youtu.be/1"
+        assert by_id[2] is None, "a track with nothing found must be reported, not omitted"
+        assert by_id[3] == "https://youtu.be/3"
+
+    @respx.mock
+    def test_a_track_with_a_link_already_is_not_searched(self, paired, searches):
+        """Somebody has said where the audio is. Confirming it buys nothing."""
+        respx.post(f"{SERVER}/api/sync/matches").mock(
+            return_value=httpx.Response(200, json={"found": 1, "missing": 0})
+        )
+        tracks = [track(1, sourceHint="https://youtu.be/pasted"), track(3)]
+        mock_server(manifest(tracks=tracks))
+
+        report = sync.check_matches(paired)
+
+        assert report.skipped == 1
+        assert report.checked == 1
+        assert searches == ["Track 3"]
+
+    @respx.mock
+    def test_nothing_is_downloaded(self, paired, searches, monkeypatch):
+        """It must not touch the download path at all."""
+
+        def explode(*_args, **_kwargs):
+            raise AssertionError("check_matches downloaded something")
+
+        monkeypatch.setattr(downloader, "fetch", explode)
+        respx.post(f"{SERVER}/api/sync/matches").mock(
+            return_value=httpx.Response(200, json={"found": 1, "missing": 0})
+        )
+        mock_server(manifest(tracks=[track(1)]))
+
+        assert sync.check_matches(paired).found == 1
+
+    @respx.mock
+    def test_the_bot_check_stops_the_run_rather_than_failing_every_track(
+        self, paired, monkeypatch
+    ):
+        """The lesson from 13 September, applied here too.
+
+        Once YouTube has decided this machine is a robot, every remaining search
+        returns nothing - so carrying on would record a hundred perfectly
+        findable tracks as unfindable and write that to the library.
+        """
+
+        def blocked(_track_dict):
+            raise downloader.BlockedError(
+                "YouTube is asking this computer to prove it is not a robot."
+            )
+
+        monkeypatch.setattr(downloader, "search", blocked)
+        matches = respx.post(f"{SERVER}/api/sync/matches").mock(
+            return_value=httpx.Response(200, json={"found": 0, "missing": 0})
+        )
+        mock_server(manifest(tracks=[track(i) for i in range(1, 6)]))
+
+        report = sync.check_matches(paired)
+
+        assert report.status == "blocked"
+        assert "robot" in (report.message or "")
+        # Nothing may be recorded as missing on the strength of a block.
+        for call in matches.calls:
+            for entry in json.loads(call.request.content)["matches"]:
+                assert entry["sourceUrl"] is not None
+
+    @respx.mock
+    def test_an_empty_library_says_so_rather_than_failing(self, paired, searches):
+        mock_server(manifest(tracks=[]))
+        report = sync.check_matches(paired)
+        assert report.checked == 0
+        assert report.message
