@@ -93,8 +93,8 @@ jobs:
             It opens the application in a window of its own, with no console
             behind it.
 
-            `syncmypod.exe` is beside it for the command line
-            (`syncmypod.exe sync --dry-run`, `syncmypod.exe check-matches`).
+            `syncmypod-cli.exe` is beside it for the command line
+            (`syncmypod-cli.exe sync --dry-run`, `syncmypod-cli.exe check-matches`).
 
             ffmpeg is included, so there is nothing else to install.
 

@@ -101,14 +101,20 @@ pyz = PYZ(analysis.pure, analysis.zipped_data, cipher=BLOCK_CIPHER)
 # opened a proper window and left a terminal sitting behind it saying "Press
 # Enter to close".
 #
-# `syncmypod.exe` stays for `syncmypod sync`, `check-matches` and the rest.
-# Those print, and a windowed build has nowhere to print to.
+# `syncmypod-cli.exe` is the same code with a console, for `sync`,
+# `check-matches` and the rest. Those print, and a windowed build has nowhere to
+# print to.
+#
+# **The names must differ by more than case.** 0.2.0 called them `SyncMyPod` and
+# `syncmypod`, which are the same filename on Windows - PyInstaller built both
+# and then one overwrote the other in the output directory, so the release
+# shipped with only the console build in it. The logs said both had succeeded.
 console_executable = EXE(
     pyz,
     [script for script in analysis.scripts if "entry_windowed" not in script[0]],
     [],
     exclude_binaries=True,
-    name="syncmypod",
+    name="syncmypod-cli",
     # The same mark as the favicon and the page's own header, so the taskbar,
     # the window and the browser tab all show one logo.
     icon="icon.ico",

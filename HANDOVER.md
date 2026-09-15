@@ -307,9 +307,18 @@ fine, but start from the reasoning rather than from scratch.
   **Two executables, because `console` is decided per executable.**
   `SyncMyPod.exe` is windowed and is what people double-click - 0.1.9 opened a
   proper window and left a terminal behind it saying "Press Enter to close",
-  which is not what an application does. `syncmypod.exe` stays beside it for
+  which is not what an application does. `syncmypod-cli.exe` sits beside it for
   `sync`, `check-matches` and the rest, which print and so need somewhere to
   print to. One PyInstaller analysis, two `EXE()` blocks.
+
+  **The two names must differ by more than case, and 0.2.0 shipped broken
+  because they did not.** They were `SyncMyPod` and `syncmypod`, which is one
+  filename on Windows: PyInstaller built both, reported both as successful,
+  exited zero, and one overwrote the other in the output directory - so the
+  release contained only the console build. Nothing caught it except unzipping
+  the published asset. `build.py` now checks for both by name and fails the
+  build if either is missing, which is the check that should have existed the
+  first time an executable was renamed.
 - **Matching stays in the local app, and server-side matching was turned down
   with a reason.** Proposed on 15 September: have the web tool find each
   track's audio in the background so the user learns what cannot be synced

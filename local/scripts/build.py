@@ -11,7 +11,7 @@ single file, and it does it by unpacking the whole bundle into a temporary
 directory every time the program starts. This bundle carries 148MB of ffmpeg, so
 that would be a ten-second wait on every run to save the user seeing a folder.
 The zip means the download is still one file; what comes out of it is a folder
-with `SyncMyPod.exe` in it - and `syncmypod.exe` beside it for commands.
+with `SyncMyPod.exe` in it - and `syncmypod-cli.exe` beside it for commands.
 
 **Why the build directory is outside the project.** PyInstaller writes tens of
 thousands of files while it works. The project lives in a synced folder on the
@@ -35,6 +35,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = ROOT / "packaging" / "syncmypod.spec"
 BUNDLED_FFMPEG = ROOT / "src" / "syncmypod_local" / "_bin"
+
+# What the spec is supposed to produce. Checked after the build rather than
+# trusted, because a missing one is invisible until somebody unzips the release.
+EXPECTED_EXECUTABLES = (
+    "SyncMyPod.exe" if sys.platform == "win32" else "SyncMyPod",
+    "syncmypod-cli.exe" if sys.platform == "win32" else "syncmypod-cli",
+)
 
 
 def version() -> str:
@@ -117,6 +124,22 @@ def main() -> int:
     bundle = staged / "syncmypod"
     if not bundle.is_dir():
         print(f"PyInstaller produced nothing at {bundle}.", file=sys.stderr)
+        return 1
+
+    # Both of them, by name.
+    #
+    # 0.2.0 shipped without the windowed executable and nothing noticed: the two
+    # were called `SyncMyPod` and `syncmypod`, which are the same filename on
+    # Windows, so one overwrote the other in the output directory. PyInstaller
+    # reported building both and exited zero. The only way that release was
+    # found to be wrong was unzipping it.
+    missing = [name for name in EXPECTED_EXECUTABLES if not (bundle / name).is_file()]
+    if missing:
+        print(
+            f"PyInstaller did not produce {', '.join(missing)}. "
+            f"Found: {sorted(p.name for p in bundle.glob('*.exe'))}",
+            file=sys.stderr,
+        )
         return 1
 
     print("\n== packaging ==")
