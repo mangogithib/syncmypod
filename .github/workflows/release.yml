@@ -89,9 +89,12 @@ jobs:
           body: |
             The local sync app for Windows.
 
-            Download the zip, unpack it anywhere, and run `syncmypod.exe`.
-            Double-clicking opens the window; it also takes commands
-            (`syncmypod.exe sync --dry-run`).
+            Download the zip, unpack it anywhere, and run **`SyncMyPod.exe`**.
+            It opens the application in a window of its own, with no console
+            behind it.
+
+            `syncmypod.exe` is beside it for the command line
+            (`syncmypod.exe sync --dry-run`, `syncmypod.exe check-matches`).
 
             ffmpeg is included, so there is nothing else to install.
 

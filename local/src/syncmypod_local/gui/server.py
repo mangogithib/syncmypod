@@ -21,6 +21,7 @@ import logging
 import mimetypes
 import secrets
 import threading
+import time
 import webbrowser
 from dataclasses import dataclass, field
 from http.cookies import SimpleCookie
@@ -82,6 +83,16 @@ class GuiServer:
     def __init__(self, *, host: str = "127.0.0.1", port: int = 0):
         self.session = Session(token=secrets.token_urlsafe(24))
         self._worker: threading.Thread | None = None
+        # When the page last said anything.
+        #
+        # This is how the application knows its window has gone. Waiting on the
+        # browser process instead does not work: a Chromium launcher hands the
+        # request to a session process and exits, so the wait returns while the
+        # window is still on screen - and 0.1.9 then shut the server down under
+        # it, which is the connection refused page in a window with no tabs.
+        #
+        # The page pings while it is open. No pings means no page.
+        self._last_seen = time.monotonic()
         # Port 0 asks the operating system for a free one, so two copies of the
         # application never collide and no fixed port has to be reserved.
         self._httpd = ThreadingHTTPServer((host, port), _make_handler(self))
@@ -99,6 +110,15 @@ class GuiServer:
 
     def serve_forever(self) -> None:
         self._httpd.serve_forever()
+
+    def touch(self) -> None:
+        """Called on every request from the page."""
+        self._last_seen = time.monotonic()
+
+    @property
+    def idle_for(self) -> float:
+        """Seconds since the page last said anything."""
+        return time.monotonic() - self._last_seen
 
     def shutdown(self) -> None:
         self._httpd.shutdown()
@@ -608,6 +628,14 @@ def _make_handler(gui: GuiServer):
                     401, {"error": "Open this page from the link the application printed."}
                 )
                 return
+            gui.touch()
+
+            if path == "/api/ping":
+                # The window's way of saying it is still there. See
+                # GuiServer._last_seen for why the browser process cannot be
+                # asked instead.
+                self._json(200, {"ok": True})
+                return
 
             if path == "/api/state":
                 self._json(200, gui.state(self.headers.get("User-Agent") or ""))
@@ -637,6 +665,7 @@ def _make_handler(gui: GuiServer):
                 )
                 return
 
+            gui.touch()
             body = self._read_json()
             path = urlparse(self.path).path
 
@@ -710,6 +739,7 @@ def _make_handler(gui: GuiServer):
             It is exchanged for a cookie immediately, so a reload or a
             screenshot of the address bar does not carry the credential.
             """
+            gui.touch()
             valid_token = bool(token) and secrets.compare_digest(token, gui.session.token)
             if not self._authorised() and not valid_token:
                 self._send(

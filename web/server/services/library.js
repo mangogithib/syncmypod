@@ -140,6 +140,19 @@ export async function listLibraryTracks(userId, options = {}) {
     // Not a metadata state at all, but it shares the one filter control on the
     // Songs page because both answer "which songs need looking at".
     where.push('fail.error IS NOT NULL');
+  } else if (metadataState === 'no-artist') {
+    // The filter that replaced "unresolved".
+    //
+    // They were the same set - 14 of 14 on the real library - but not the same
+    // idea, and `metadata_state` was the worse of the two. Two tracks had been
+    // corrected by hand and so read `manual` while still having no artist, and
+    // the state could not express that. An empty artist is the fact; the state
+    // was only ever a proxy for it.
+    where.push("coalesce(t.artist_credit, '') = ''");
+  } else if (metadataState === 'flagged') {
+    // What the Overview is counting: no artist, and not one the user has
+    // already looked at and accepted.
+    where.push("coalesce(t.artist_credit, '') = '' AND NOT lt.attention_dismissed");
   } else if (metadataState) {
     params.push(metadataState);
     where.push(`t.metadata_state = $${params.length}`);
@@ -324,7 +337,37 @@ export async function listArtists(userId, { search, limit = 100, offset = 0 } = 
     params.slice(0, -2)
   );
 
-  return { artists, total: total.count, limit, offset };
+  // Songs with no artist, as an entry in the Artists list.
+  //
+  // They have no `track_artists` rows at all, so the query above cannot see
+  // them and they were invisible here - the only way to find them was a
+  // "Unresolved" badge in the Songs list saying, in the resolver's words, what
+  // the empty Artist column already said. This is the same information in the
+  // place people go looking for an artist, and it matches what the iPod itself
+  // does with them: files them under Unknown Artist.
+  //
+  // Counted rather than joined, and returned separately rather than as a row
+  // with a null id, so nothing downstream has to guard against an artist that
+  // has no artist record.
+  const unknown = await one(
+    `SELECT count(*)::int AS "trackCount",
+            count(*) FILTER (WHERE NOT lt.attention_dismissed)::int AS "flaggedCount"
+       FROM library_tracks lt
+       JOIN tracks t ON t.id = lt.track_id
+      WHERE lt.user_id = $1
+        AND coalesce(t.artist_credit, '') = ''`,
+    [userId]
+  );
+
+  return {
+    artists,
+    total: total.count,
+    limit,
+    offset,
+    // Only when it would say something, and only on the first page - it belongs
+    // at the top of the list, not repeated on page four.
+    unknown: unknown.trackCount > 0 && offset === 0 ? unknown : null,
+  };
 }
 
 // Everything the dashboard shows, in one round trip rather than six.
@@ -347,10 +390,13 @@ export async function libraryStats(userId) {
        (SELECT count(*)::int
           FROM library_tracks lt JOIN tracks t ON t.id = lt.track_id
          WHERE lt.user_id = $1
-           AND t.metadata_state IN ('pending', 'unresolved')
+           -- An empty artist rather than the metadata_state, which was a
+           -- proxy for it and a leakier one: a track corrected by hand reads
+           -- 'manual' and can still have no artist, and two of them did.
+           AND coalesce(t.artist_credit, '') = ''
            -- Tracks the user has looked at and accepted as they are. They still
-           -- sync and still read as unresolved in the Songs list; they just stop
-           -- being counted, so the warning keeps meaning something.
+           -- sync, and they are still listed under Unknown artist; they just
+           -- stop being counted, so the warning keeps meaning something.
            AND NOT lt.attention_dismissed)
          AS "needsAttention",
        -- Tracks the local app could not put on a paired iPod. Counted here so

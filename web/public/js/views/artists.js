@@ -169,6 +169,35 @@ export async function renderArtists(view, context) {
             'div.card',
             h(
               'div.list',
+              // Songs with no artist, at the top of the list.
+              //
+              // They have no artist record at all, so the query behind this
+              // page cannot see them - they were invisible here, and the only
+              // sign of them was a badge in the Songs list saying "Unresolved",
+              // which is the resolver's word for what the empty Artist column
+              // already showed. This is the same fact where people look for an
+              // artist, and it is what the iPod does with them too.
+              data.unknown
+                ? h(
+                    'div.list-row.row-link',
+                    h('span.thumb.thumb-unknown', icon('user', 18)),
+                    h(
+                      'a.list-main.list-main-link',
+                      { href: '#/library?state=no-artist' },
+                      h('div.list-title', 'Unknown artist'),
+                      h(
+                        'div.list-sub',
+                        `${data.unknown.trackCount} song${data.unknown.trackCount === 1 ? '' : 's'} with no artist yet`
+                      )
+                    ),
+                    h(
+                      'div.list-actions',
+                      data.unknown.flaggedCount
+                        ? badge(`${data.unknown.flaggedCount} flagged`, 'warn')
+                        : badge('All accepted', 'ok')
+                    )
+                  )
+                : null,
               data.artists.map((artist) =>
                 h(
                   `div.list-row${artist.deezerId ? '.row-link' : ''}`,

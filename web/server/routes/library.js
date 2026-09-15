@@ -368,7 +368,14 @@ libraryRoutes.patch(
       await query(
         `UPDATE library_tracks
             SET rating      = COALESCE($3, rating),
-                source_hint = COALESCE($4, source_hint)
+                source_hint = COALESCE($4, source_hint),
+                -- A pasted link is an answer to "this could not be found", so
+                -- the mark that said so goes with it rather than sitting there
+                -- contradicting the fix.
+                source_missing = CASE
+                  WHEN COALESCE(NULLIF($4, ''), NULL) IS NOT NULL THEN false
+                  ELSE source_missing
+                END
           WHERE user_id = $1 AND track_id = $2`,
         [
           req.user.id,
@@ -377,6 +384,24 @@ libraryRoutes.patch(
           req.body?.sourceHint === undefined ? null : req.body.sourceHint,
         ]
       );
+
+      // Same reasoning for the "failed to sync" badge. The failure is real and
+      // was recorded honestly, but it describes a sync that ran before there
+      // was a link - so keeping it would mean the song still reads as broken
+      // after the thing that broke it has been dealt with.
+      //
+      // Nothing is lost: if the pasted link does not work either, the next sync
+      // records the failure again, with whatever went wrong that time.
+      const pastedLink = str(req.body?.sourceHint, 'sourceHint', { max: 1000 });
+      if (pastedLink) {
+        await query(
+          `DELETE FROM device_tracks
+            WHERE track_id = $2
+              AND state = 'failed'
+              AND device_id IN (SELECT id FROM devices WHERE user_id = $1)`,
+          [req.user.id, trackId]
+        );
+      }
     }
 
     res.json(await library.getTrack(req.user.id, trackId));

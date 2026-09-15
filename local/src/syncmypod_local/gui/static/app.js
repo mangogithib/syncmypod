@@ -851,6 +851,23 @@ el("btn-eject").addEventListener("click", async () => {
   }
 });
 
+// Tells the application its window is still open.
+//
+// The alternative was waiting on the browser process, and that does not work:
+// a Chromium launcher hands the request to a session process and exits, so the
+// wait returns while the window is still on screen. 0.1.9 shut the server down
+// at that point, which is why the window showed "can't reach this page".
+//
+// Five seconds, against a grace period several times longer on the other side,
+// so a slow page load or a tab the system has throttled is never mistaken for a
+// window that has been closed.
+setInterval(() => {
+  api("/api/ping").catch(() => {
+    // The server has gone. Nothing to do: the window is about to be closed by
+    // whoever stopped it, and retrying would only fill the console.
+  });
+}, 5000);
+
 refreshState().then((data) => {
   // A sync started from the terminal, or a page reloaded mid-run, should pick
   // up where it is rather than showing an idle screen next to a busy engine.

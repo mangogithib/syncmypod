@@ -9,7 +9,6 @@ import {
   emptyState,
   formatDuration,
   formatNumber,
-  metadataBadge,
   modal,
   notice,
   pager,
@@ -63,13 +62,15 @@ export async function renderLibrary(view, context) {
       },
     },
     h('option', { value: '' }, 'All songs'),
-    h('option', { value: 'resolved' }, 'Resolved only'),
-    h('option', { value: 'unresolved' }, 'Unresolved'),
-    h('option', { value: 'pending' }, 'Pending'),
-    h('option', { value: 'manual' }, 'Manually edited'),
-    // Not a metadata state, and deliberately in the same control: both answers
-    // to "which of these songs needs me to do something".
-    h('option', { value: 'sync-failed' }, 'Failed to sync')
+    // Named for what is true of the song rather than for the resolver's state
+    // machine. "Unresolved" and "Pending" meant nothing to anybody reading
+    // them, and one of the two never occurred at all.
+    h('option', { value: 'no-artist' }, 'No artist'),
+    h('option', { value: 'flagged' }, 'No artist, still flagged'),
+    // Not about metadata at all, and deliberately in the same control: both are
+    // answers to "which of these songs needs me to do something".
+    h('option', { value: 'sync-failed' }, 'Failed to sync'),
+    h('option', { value: 'manual' }, 'Manually edited')
   );
   stateFilter.value = state.state;
 
@@ -389,18 +390,19 @@ export async function renderLibrary(view, context) {
             h(
               'div.track-title-line',
               h('span.track-title', track.title),
-              track.metadataState === 'resolved' ? null : metadataBadge(track.metadataState),
-              // Still unresolved, but deliberately so. Without this the row
-              // looks identical to one nobody has looked at yet, and there
-              // would be no way to find what you had accepted and undo it.
-              track.attentionDismissed
-                ? h(
-                    'span.badge',
-                    { title: 'Not counted on the Overview. Select it and choose Flag again to undo.' },
-                    icon('check', 12),
-                    'Accepted'
-                  )
-                : null,
+              // No metadata badge, deliberately.
+              //
+              // "Unresolved" was a second name for something the Artist column
+              // already says: on the real library it was 14 of 14 the same set
+              // as "has no artist", and two tracks read `manual` while still
+              // having none - which the badge could not express at all.
+              // "Pending" never appeared, being a state that exists only inside
+              // a running import. So the row shows the fact, and the Artists
+              // list has an Unknown artist entry for finding them.
+              //
+              // "Manual" went with them. It means the resolver will not
+              // overwrite an edit, which is worth saying once in the dialog
+              // that makes the edit rather than on every row forever.
               // The local app has always reported a track it could not fetch and
               // the server has always stored it. Until now nothing showed it, so
               // a song that never reached the iPod looked exactly like one that

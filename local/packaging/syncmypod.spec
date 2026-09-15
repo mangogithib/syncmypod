@@ -54,8 +54,10 @@ datas += [
     ("../src/syncmypod_local/_bin", "syncmypod_local/_bin"),
 ]
 
+# Both entry points in one analysis, so the dependency graph is walked once and
+# the two executables share every library in the bundle.
 analysis = Analysis(
-    ["entry.py"],
+    ["entry.py", "entry_windowed.py"],
     pathex=["../src"],
     binaries=binaries,
     datas=datas,
@@ -91,9 +93,19 @@ analysis = Analysis(
 
 pyz = PYZ(analysis.pure, analysis.zipped_data, cipher=BLOCK_CIPHER)
 
-executable = EXE(
+# Two executables, because `console` is decided per executable and the two uses
+# want opposite answers.
+#
+# `SyncMyPod.exe` is the one people double-click. It is windowed, so there is no
+# console behind the application at all - which is what 0.1.9 got wrong: it
+# opened a proper window and left a terminal sitting behind it saying "Press
+# Enter to close".
+#
+# `syncmypod.exe` stays for `syncmypod sync`, `check-matches` and the rest.
+# Those print, and a windowed build has nowhere to print to.
+console_executable = EXE(
     pyz,
-    analysis.scripts,
+    [script for script in analysis.scripts if "entry_windowed" not in script[0]],
     [],
     exclude_binaries=True,
     name="syncmypod",
@@ -116,8 +128,31 @@ executable = EXE(
     entitlements_file=None,
 )
 
+windowed_executable = EXE(
+    pyz,
+    # The windowed script only. `analysis.scripts` holds both, and giving both
+    # to both executables would make each of them run the other's entry point.
+    [script for script in analysis.scripts if "entry_windowed" in script[0]],
+    [],
+    exclude_binaries=True,
+    name="SyncMyPod",
+    icon="icon.ico",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    # The whole point of this second executable.
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
 COLLECT(
-    executable,
+    console_executable,
+    windowed_executable,
     analysis.binaries,
     analysis.zipfiles,
     analysis.datas,

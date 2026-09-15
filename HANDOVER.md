@@ -43,14 +43,14 @@ which is the one rule the whole design rests on.
 | Local app: GUI | Working — nothing needs a terminal. **A window of its own since 15 September**, not a browser tab |
 | Knowing what cannot be synced | **`check-matches`** searches without downloading and reports it per track, so it no longer takes a sync to find out |
 | Selecting several songs at once | Working — click/shift/ctrl on a pointer, long press then drag on a phone. Bulk add to playlist, remove from playlist, remove from library |
-| Downloadable build | **Published — 0.1.9**, built and attached by CI from the `local-v0.1.9` tag |
+| Downloadable build | **Published — 0.2.0**, built and attached by CI from the `local-v0.2.0` tag. `SyncMyPod.exe` is windowed; `syncmypod.exe` is the CLI |
 | Phone layout | Working — measured at 375px, list rows included |
 | CI | Green. Parses every file, checks for undefined references, checks the api client, runs migrations |
 | Connected YouTube account | **Removed.** Needed a per-instance Google client *and* a Test users entry |
 | **A web test suite** | **Still none. The biggest gap — see section 6** |
 
 About 23,900 lines: 55 JavaScript files, 17 Python modules, 8 SQL migrations.
-**280 Python tests, all passing. Zero JavaScript tests.**
+**281 Python tests, all passing. Zero JavaScript tests.**
 
 Swept for dead code on 13 September across all three languages - unused Python
 defs, JS exports nothing imports, CSS classes no markup carries. Three things
@@ -263,8 +263,13 @@ fine, but start from the reasoning rather than from scratch.
   chose a served page over Tkinter and PySide6, and every reason it gave still
   holds - so the page is unchanged and only how it is shown is different.
 
-  **It is a Chromium browser in `--app` mode, and pywebview was tried first and
-  did not work.** 0.1.8 shipped with pywebview and failed on the first run of
+  **It is a Chromium browser in `--app` mode, in a windowed executable, and two
+  earlier attempts failed first.** pywebview (0.1.8) could not open a window in
+  the packaged build at all; app mode (0.1.9) opened one and then killed the
+  server under it. 0.2.0 is the one that works. See `gui/window.py` and the two
+  bullet points below.
+
+  **pywebview was tried first and did not work.** 0.1.8 shipped with pywebview and failed on the first run of
   the packaged build: `Failed to resolve Python.Runtime.Loader.Initialize from
   .../_internal/pythonnet/runtime/Python.Runtime.dll`. Its Windows backend
   hosts WebView2 through pythonnet, which needs a .NET runtime resolved from
@@ -285,6 +290,26 @@ fine, but start from the reasoning rather than from scratch.
   running. `window.run` now leaves the server alone on every failure path, and
   `test_gui.py` asserts exactly that. `--browser` forces a normal tab;
   `--no-browser` prints the address and opens nothing.
+
+  **The window's lifetime is measured by the page, not by the process, and that
+  is what 0.1.9 got wrong.** A Chromium launcher hands the request to a session
+  process and exits, so `process.wait()` returns while the window is still on
+  screen - and the server was shut down at that point, giving a window with no
+  tabs showing "can't reach this page". Whether the launcher behaves that way
+  depends on whether that profile already had a browser running, which is
+  exactly why it worked once in testing and not on the machine it shipped to.
+
+  So the page pings `/api/ping` every five seconds and the launcher waits for
+  those to stop. The process is still watched, but only as a second opinion: the
+  server stops when the process has gone **and** the page has fallen silent.
+  There is a test for the handed-off-and-exited case specifically.
+
+  **Two executables, because `console` is decided per executable.**
+  `SyncMyPod.exe` is windowed and is what people double-click - 0.1.9 opened a
+  proper window and left a terminal behind it saying "Press Enter to close",
+  which is not what an application does. `syncmypod.exe` stays beside it for
+  `sync`, `check-matches` and the rest, which print and so need somewhere to
+  print to. One PyInstaller analysis, two `EXE()` blocks.
 - **Matching stays in the local app, and server-side matching was turned down
   with a reason.** Proposed on 15 September: have the web tool find each
   track's audio in the background so the user learns what cannot be synced
@@ -582,6 +607,48 @@ Four things that cost time or would have:
   `__Secure-*PSID` on youtube.com appears when an account is attached and not
   before. Reading the page's address instead breaks the next time Google
   changes a redirect.
+
+### The metadata badges are gone, and Unknown artist replaced them
+
+Asked for on 15 September, and the data said it more strongly than the request
+did. On the real library:
+
+| metadata_state | tracks | of which no artist |
+|---|---|---|
+| resolved | 672 | 0 |
+| unresolved | 14 | **14** |
+| manual | 9 | **2** |
+
+So "Unresolved" was a second name for "has no artist" - 14 of 14 the same set -
+except that it was **worse** at saying it: two tracks corrected by hand read
+`manual` while still having no artist, and the badge could not express that at
+all. And `pending` had zero rows, because it only exists inside a running
+import; that badge had never once appeared.
+
+What replaced them:
+
+- **No metadata badge on any row.** Not unresolved, not pending, not manual.
+  "Manual" means the resolver will not overwrite an edit, which is worth saying
+  once in the dialog that makes the edit rather than on every row forever.
+- **An Unknown artist entry at the top of the Artists list**, counting songs with
+  no artist credit and linking to them. They have no `track_artists` rows, so
+  the artists query could never see them - they were invisible on that page. It
+  is also what the iPod does with them.
+- **Filters named for the song, not the state machine**: "No artist", "No
+  artist, still flagged", "Failed to sync", "Manually edited".
+- The Overview counts an empty `artist_credit` rather than a `metadata_state`,
+  so it now includes those two `manual` tracks it had been missing.
+
+`attention_dismissed` still does its job - it keeps a song out of the count -
+but there is no "Accepted" badge any more. The Unknown artist list is where they
+live, and the flagged count beside it says how many are still being counted.
+
+**A pasted source link now clears what it answers.** `source_missing` is set
+false and any `device_tracks` failure for that track is deleted, because both
+describe a sync that ran before there was a link - and leaving them would mean
+the song still read as broken after the thing that broke it had been fixed.
+Nothing is lost: if the link does not work either, the next sync records the
+failure again with whatever went wrong that time.
 
 ### Saving metadata returned a 500, and had done for as long as it existed
 

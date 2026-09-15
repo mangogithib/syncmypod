@@ -28,9 +28,12 @@ source checkout.
 ## Install
 
 **Download the latest release**, unpack the zip anywhere, and double-click
-`syncmypod.exe` - that opens the window. It also takes commands when run from a
-terminal (`syncmypod.exe sync --dry-run`), where it prints its help rather than
-opening anything. ffmpeg is included, so there is nothing else to install.
+`SyncMyPod.exe`. It opens the application in a window of its own, with no
+console behind it. ffmpeg is included, so there is nothing else to install.
+
+`syncmypod.exe` sits beside it for the command line - `syncmypod.exe sync
+--dry-run`, `syncmypod.exe check-matches` - which is the same engine with a
+terminal in front of it instead of a window.
 
 Windows Defender may quarantine it on first run. That is a false positive every
 unsigned build attracts, not a sign of anything wrong with the download — code
@@ -63,9 +66,9 @@ syncmypod.cmd sync --dry-run
 Everything below works the same way through `syncmypod` itself once the package
 is installed.
 
-Nothing here needs a terminal: `syncmypod.exe` opens a window that pairs, signs
+Nothing here needs a terminal: `SyncMyPod.exe` opens a window that pairs, signs
 in to YouTube, and syncs. The commands below are the same actions for a script
-or a scheduled task.
+or a scheduled task, through `syncmypod.exe`.
 
 ```bash
 # Link this computer to your library. Generate the code in the web

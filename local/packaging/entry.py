@@ -27,5 +27,33 @@ def main() -> int:
     return cli_main()
 
 
+def windowed() -> int:
+    """The entry point for SyncMyPod.exe, the one people double-click.
+
+    Built with ``console=False``, so this process has no console at all - which
+    is the point. It also means ``sys.stdout`` and ``sys.stderr`` are None, and
+    anything that writes to them raises. So there is nothing to write to, and
+    the only argument that could be passed is the one that opens the window.
+
+    The console build, ``syncmypod.exe``, is still there beside it for
+    ``syncmypod sync`` and everything else.
+    """
+    multiprocessing.freeze_support()
+
+    # rich builds its Console against sys.stdout at import time, and a windowed
+    # build has none. Giving it somewhere harmless to write is cheaper than
+    # teaching every print site to check.
+    import io
+
+    if sys.stdout is None:
+        sys.stdout = io.StringIO()
+    if sys.stderr is None:
+        sys.stderr = io.StringIO()
+
+    from syncmypod_local.cli import main as cli_main
+
+    return cli_main(["gui"])
+
+
 if __name__ == "__main__":
     sys.exit(main())

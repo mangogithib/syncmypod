@@ -11,7 +11,7 @@ single file, and it does it by unpacking the whole bundle into a temporary
 directory every time the program starts. This bundle carries 148MB of ffmpeg, so
 that would be a ten-second wait on every run to save the user seeing a folder.
 The zip means the download is still one file; what comes out of it is a folder
-with `syncmypod.exe` in it.
+with `SyncMyPod.exe` in it - and `syncmypod.exe` beside it for commands.
 
 **Why the build directory is outside the project.** PyInstaller writes tens of
 thousands of files while it works. The project lives in a synced folder on the

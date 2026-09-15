@@ -7,7 +7,6 @@ import {
   emptyState,
   formatDuration,
   formatTotalDuration,
-  metadataBadge,
   modal,
   notice,
   renderAsync,
@@ -234,11 +233,11 @@ export async function renderPlaylist(view, context) {
                   h('div.list-sub', track.artistCredit || 'Unknown artist')
                 ),
                 h('span.small.subtle.nowrap', formatDuration(track.durationMs)),
-                !track.inLibrary
-                  ? h('span.badge.badge-warn', 'Not in library')
-                  : track.metadataState !== 'resolved'
-                    ? metadataBadge(track.metadataState)
-                    : null,
+                // "Not in library" stays: it means this row will be skipped
+                // when syncing, which is about the playlist rather than about
+                // the song's metadata. The metadata badge is gone for the same
+                // reason it went from the Songs list - see library.js.
+                !track.inLibrary ? h('span.badge.badge-warn', 'Not in library') : null,
                 h(
                   'div.list-actions',
                   // Keyboard-accessible ordering. Dragging is the shortcut, not

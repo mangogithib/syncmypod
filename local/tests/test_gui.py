@@ -290,6 +290,7 @@ class TestTheApplicationWindow:
 
         class Fake:
             url = "http://127.0.0.1:1/"
+            idle_for = 0.0
 
             def serve_forever(self):
                 pass
@@ -300,23 +301,37 @@ class TestTheApplicationWindow:
         assert window.run(Fake()) is False
         assert shutdowns == [], "the server was stopped with nothing else serving"
 
-    def test_closing_the_window_stops_the_server(self, monkeypatch, tmp_path):
-        """Closing an application's only window should end it."""
+    @staticmethod
+    def _quick(monkeypatch):
+        """Shrinks the timers so a test does not take 45 seconds."""
         from syncmypod_local.gui import window
 
+        monkeypatch.setattr(window, "IDLE_TIMEOUT", 0.6)
+        monkeypatch.setattr(window, "STARTUP_GRACE", 0.3)
+        monkeypatch.setattr(window, "POLL_SECONDS", 0.05)
+        return window
+
+    def test_closing_the_window_stops_the_server(self, monkeypatch, tmp_path):
+        """Closing an application's only window should end it."""
+        window = self._quick(monkeypatch)
         monkeypatch.setenv("SYNCMYPOD_CONFIG_DIR", str(tmp_path))
         monkeypatch.setattr(window, "find_browser", lambda: "browser")
 
-        class Instantly:
-            def wait(self):
+        class Gone:
+            def poll(self):
                 return 0
 
-        monkeypatch.setattr(window.subprocess, "Popen", lambda *a, **k: Instantly())
+            def terminate(self):
+                pass
+
+        monkeypatch.setattr(window.subprocess, "Popen", lambda *a, **k: Gone())
 
         shutdowns = []
 
         class Fake:
             url = "http://127.0.0.1:1/"
+            # Nothing has asked for a page in a long time, so there is no window.
+            idle_for = 9999.0
 
             def serve_forever(self):
                 pass
@@ -327,6 +342,64 @@ class TestTheApplicationWindow:
         assert window.run(Fake()) is True
         assert shutdowns == [True]
 
+    def test_a_browser_that_hands_off_and_exits_does_not_kill_the_window(
+        self, monkeypatch, tmp_path
+    ):
+        """The bug 0.1.9 shipped, asserted.
+
+        A Chromium launcher passes the request to a session process and exits,
+        so waiting on the process returns while the window is still on screen.
+        0.1.9 shut the server down at that point, and the window - which had
+        opened correctly, with no tabs and no address bar - showed "can't reach
+        this page".
+
+        Whether the launcher does this depends on whether that profile already
+        had a browser running, which is why it worked once in testing and not on
+        the machine it shipped to. So the page is the authority now: it pings,
+        and while pings arrive the server stays up however the process behaves.
+        """
+        window = self._quick(monkeypatch)
+        monkeypatch.setenv("SYNCMYPOD_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(window, "find_browser", lambda: "browser")
+
+        class HandedOffAndExited:
+            def poll(self):
+                return 0
+
+            def terminate(self):
+                pass
+
+        monkeypatch.setattr(window.subprocess, "Popen", lambda *a, **k: HandedOffAndExited())
+
+        shutdowns = []
+
+        class StillOpen:
+            """A window that is alive and saying so."""
+
+            url = "http://127.0.0.1:1/"
+
+            def __init__(self):
+                self._pings = 0
+
+            @property
+            def idle_for(self):
+                # Answers "just pinged" a few times, then falls silent as if
+                # the window had been closed.
+                self._pings += 1
+                return 0.0 if self._pings < 8 else 9999.0
+
+            def serve_forever(self):
+                pass
+
+            def shutdown(self):
+                shutdowns.append(True)
+
+        server = StillOpen()
+        window.run(server)
+
+        assert shutdowns == [True], "the server should stop once the window really goes"
+        assert server._pings >= 8, "it gave up while the page was still pinging"
+
     def test_the_window_gets_a_profile_of_its_own(self, monkeypatch, tmp_path):
         """Without it there is no process to wait on.
 
@@ -334,25 +407,28 @@ class TestTheApplicationWindow:
         browser they already have open and returns immediately, so the server
         would be shut down while the window was still on screen.
         """
-        from syncmypod_local.gui import window
-
+        window = self._quick(monkeypatch)
         monkeypatch.setenv("SYNCMYPOD_CONFIG_DIR", str(tmp_path))
         monkeypatch.setattr(window, "find_browser", lambda: "browser")
 
         seen = {}
 
-        class Instantly:
-            def wait(self):
+        class Gone:
+            def poll(self):
                 return 0
+
+            def terminate(self):
+                pass
 
         def capture(command, **_kwargs):
             seen["command"] = command
-            return Instantly()
+            return Gone()
 
         monkeypatch.setattr(window.subprocess, "Popen", capture)
 
         class Fake:
             url = "http://127.0.0.1:1/"
+            idle_for = 9999.0
 
             def serve_forever(self):
                 pass
@@ -378,6 +454,7 @@ class TestTheApplicationWindow:
 
         class Fake:
             url = "http://127.0.0.1:1/"
+            idle_for = 0.0
 
             def serve_forever(self):
                 pass
