@@ -738,6 +738,65 @@ def _resolved_filetype(value: str) -> str:
         return ""
 
 
+# A blob in the backup store is named after its own SHA-256, so exactly 64
+# hexadecimal characters and nothing else in pypodlib is named that way.
+_BLOB_FILENAME = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _install_backup_race_fix() -> None:
+    """Let two identical files on one iPod be backed up without failing.
+
+    pypodlib's backup store is content addressed and written by several threads.
+    Two files with the same bytes hash the same, so both threads write a
+    temporary blob and both then rename it onto the same final name. Its own
+    comment says that race is "a harmless overwrite (same content, same hash)",
+    and on POSIX it is - but on Windows renaming onto a path another thread is
+    still writing raises `[WinError 5] Access is denied`, the snapshot is
+    discarded, and `sync.py` stops the run because a backup that failed is not a
+    backup.
+
+    An iPod with the same track on it twice is enough to trigger it. It is a
+    Windows-only fault in the one component that exists to make the rest safe.
+
+    **Scoped as narrowly as it can be.** `durable_replace` also writes the
+    iTunesDB, the artwork database and iTunesPrefs, where the target always
+    exists and swallowing a failure would mean reporting a sync that never
+    happened. So this only steps in when the destination is named after its own
+    hash - which only the blob store is - and only when what is already there is
+    the same size as what was being written. Anything else is re-raised
+    untouched.
+    """
+    from pypodlib.sync import backup_manager
+
+    if getattr(backup_manager, "_syncmypod_backup_race_fix", False):
+        return
+
+    original = backup_manager.durable_replace
+
+    def replace(source: Any, target: Any) -> None:
+        try:
+            original(source, target)
+        except OSError:
+            destination = Path(target)
+            if not _BLOB_FILENAME.match(destination.name) or not destination.is_file():
+                raise
+            try:
+                same_size = destination.stat().st_size == Path(source).stat().st_size
+            except OSError:
+                raise
+            if not same_size:
+                # The pre-existing blob is the wrong size, so this was a repair
+                # of a corrupt one rather than a race. That must still fail.
+                raise
+            logger.debug("Blob %s was already written by another thread", destination.name[:12])
+            with contextlib.suppress(OSError):
+                Path(source).unlink()
+
+    backup_manager.durable_replace = replace
+    backup_manager._syncmypod_backup_race_fix = True
+    logger.debug("Applied the pypodlib backup race fix")
+
+
 def _install_filetype_fix() -> None:
     """Make pypodlib stage new tracks with a format its own writer recognises.
 
@@ -814,10 +873,14 @@ def _pypodlib() -> Any:
 
     # Here because it is the one place every path into the library passes
     # through, and because it must be in place before the first track is staged.
-    try:
-        _install_filetype_fix()
-    except Exception as err:  # pragma: no cover - defensive
-        logger.warning("Could not apply the pypodlib track-format fix: %s", err)
+    for name, install in (
+        ("track-format", _install_filetype_fix),
+        ("backup race", _install_backup_race_fix),
+    ):
+        try:
+            install()
+        except Exception as err:  # pragma: no cover - defensive
+            logger.warning("Could not apply the pypodlib %s fix: %s", name, err)
     return pypodlib
 
 

@@ -43,14 +43,14 @@ which is the one rule the whole design rests on.
 | Local app: GUI | Working — nothing needs a terminal. **A window of its own since 15 September**, not a browser tab |
 | Knowing what cannot be synced | **`check-matches`** searches without downloading and reports it per track, so it no longer takes a sync to find out |
 | Selecting several songs at once | Working — click/shift/ctrl on a pointer, long press then drag on a phone. Bulk add to playlist, remove from playlist, remove from library |
-| Downloadable build | **Published — 0.2.0**, built and attached by CI from the `local-v0.2.0` tag. `SyncMyPod.exe` is windowed; `syncmypod.exe` is the CLI |
+| Downloadable build | **Published — 0.2.2**, built and attached by CI from the `local-v0.2.2` tag. `SyncMyPod.exe` is windowed; `syncmypod.exe` is the CLI |
 | Phone layout | Working — measured at 375px, list rows included |
 | CI | Green. Parses every file, checks for undefined references, checks the api client, runs migrations |
 | Connected YouTube account | **Removed.** Needed a per-instance Google client *and* a Test users entry |
 | **A web test suite** | **Still none. The biggest gap — see section 6** |
 
 About 23,900 lines: 55 JavaScript files, 17 Python modules, 8 SQL migrations.
-**281 Python tests, all passing. Zero JavaScript tests.**
+**285 Python tests, all passing. Zero JavaScript tests.**
 
 Swept for dead code on 13 September across all three languages - unused Python
 defs, JS exports nothing imports, CSS classes no markup carries. Three things
@@ -616,6 +616,46 @@ Four things that cost time or would have:
   `__Secure-*PSID` on youtube.com appears when an account is attached and not
   before. Reading the page's address instead breaks the next time Google
   changes a redirect.
+
+### Backing up an iPod with two identical files failed on Windows
+
+Found by the test isolation below, after it failed a release build.
+
+pypodlib's backup store is content addressed and written by several threads.
+Two files with the same bytes hash the same, so both threads write a temporary
+blob and both rename it onto the same final name. Its own comment says that race
+is "a harmless overwrite (same content, same hash)" - true on POSIX, and on
+Windows renaming onto a path another thread still holds raises
+`[WinError 5] Access is denied`. The snapshot is then discarded and `sync.py`
+stops the run, because a backup that failed is not a backup.
+
+The same track added to an iPod twice is enough to cause it.
+
+`_install_backup_race_fix` in `device.py` handles it, **scoped as narrowly as it
+can be**: `durable_replace` also writes the iTunesDB, the artwork database and
+iTunesPrefs, where the target always exists and swallowing a failure would mean
+reporting a sync that never happened. So it only intervenes when the destination
+is named after its own hash - 64 hex characters, which only the blob store is -
+and only when what is already there is the same size as what was being written.
+A corrupt blob being repaired still fails, as it should.
+
+### The test suite was writing to the real user profile
+
+`config_dir()` and `backups_dir()` fall back to the platform's own locations,
+and only some tests overrode the first while nothing overrode the second. So
+every test that ran a sync took a real iPod backup into
+`%LOCALAPPDATA%\SyncMyPodackups` - on the developer's machine and on the CI
+runner.
+
+That is untidy, and it also hid the bug above: a warm blob store makes the race
+impossible to hit, because the pre-existing blob short-circuits the write. So it
+passed locally for weeks and failed on a cold CI runner, intermittently,
+depending on which tests ran first.
+
+`tests/conftest.py` now points both directories at a per-test `tmp_path`. The
+handover already said this about the workspace - "a claim about the shared temp
+is a claim about every process on the machine" - and the same reasoning applies
+to anything the platform chooses for you.
 
 ### The metadata badges are gone, and Unknown artist replaced them
 

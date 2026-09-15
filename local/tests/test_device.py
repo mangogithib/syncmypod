@@ -519,3 +519,107 @@ class TestRecordedTrackFormat:
         library = video._handle.library()
         assert device._filetype_for(":iPod_Control:Music:F00:ABCD.flac") is None
         assert device.repair_filetypes(library) == 0
+
+
+class TestBackingUpDuplicateFiles:
+    """An iPod with the same bytes on it twice must still back up.
+
+    pypodlib's backup store is content addressed and written by several threads,
+    so two identical files hash the same and both threads rename a temporary
+    blob onto the same final name. Its comment calls that "a harmless overwrite
+    (same content, same hash)", and on POSIX it is - on Windows it raises
+    `[WinError 5] Access is denied`, the snapshot is discarded, and the sync
+    stops because a backup that failed is not a backup.
+
+    It failed a release build, and the same track added twice is enough to cause
+    it on a real device.
+    """
+
+    @staticmethod
+    def _blob(tmp_path, name, contents=b"same bytes"):
+        source = tmp_path / "tmp-source"
+        source.write_bytes(contents)
+        target = tmp_path / name
+        return source, target
+
+    def test_a_blob_another_thread_already_wrote_is_not_an_error(self, tmp_path, classic):
+        from pypodlib.sync import backup_manager
+
+        # 64 hex characters: a content-addressed blob and nothing else.
+        name = "c" * 64
+        source, target = self._blob(tmp_path, name)
+        target.write_bytes(b"same bytes")
+
+        def always_denied(_source, _target):
+            raise PermissionError(5, "Access is denied")
+
+        real = backup_manager.durable_replace
+        backup_manager.durable_replace = always_denied
+        try:
+            backup_manager._syncmypod_backup_race_fix = False
+            device._install_backup_race_fix()
+            backup_manager.durable_replace(source, target)
+        finally:
+            backup_manager.durable_replace = real
+            backup_manager._syncmypod_backup_race_fix = False
+
+        assert not source.exists(), "the losing thread's temp file should be cleaned up"
+        assert target.read_bytes() == b"same bytes"
+
+    def test_a_failure_writing_the_database_still_fails(self, tmp_path, classic):
+        """The reason this is scoped to blob names and not applied generally.
+
+        `durable_replace` also writes the iTunesDB, the artwork database and
+        iTunesPrefs. Those targets always exist, so swallowing a failure there
+        would mean reporting a sync that never happened.
+        """
+        from pypodlib.sync import backup_manager
+
+        source, target = self._blob(tmp_path, "iTunesDB")
+        target.write_bytes(b"same bytes")
+
+        def always_denied(_source, _target):
+            raise PermissionError(5, "Access is denied")
+
+        real = backup_manager.durable_replace
+        backup_manager.durable_replace = always_denied
+        try:
+            backup_manager._syncmypod_backup_race_fix = False
+            device._install_backup_race_fix()
+            with pytest.raises(PermissionError):
+                backup_manager.durable_replace(source, target)
+        finally:
+            backup_manager.durable_replace = real
+            backup_manager._syncmypod_backup_race_fix = False
+
+    def test_a_corrupt_blob_of_the_wrong_size_still_fails(self, tmp_path, classic):
+        """A repair, not a race. Those must not be swallowed either."""
+        from pypodlib.sync import backup_manager
+
+        source, target = self._blob(tmp_path, "d" * 64)
+        target.write_bytes(b"truncated")
+
+        def always_denied(_source, _target):
+            raise PermissionError(5, "Access is denied")
+
+        real = backup_manager.durable_replace
+        backup_manager.durable_replace = always_denied
+        try:
+            backup_manager._syncmypod_backup_race_fix = False
+            device._install_backup_race_fix()
+            with pytest.raises(PermissionError):
+                backup_manager.durable_replace(source, target)
+        finally:
+            backup_manager.durable_replace = real
+            backup_manager._syncmypod_backup_race_fix = False
+
+    def test_a_device_holding_two_identical_tracks_backs_up(self, classic, tmp_path):
+        """End to end, which is how it was found."""
+        sources = []
+        for index in range(3):
+            path = tmp_path / f"copy{index}.m4a"
+            path.write_bytes((FIXTURES / "tagged.m4a").read_bytes())
+            sources.append(path)
+        classic.add_files(sources)
+
+        assert classic.backup(reason="duplicates") is not None
