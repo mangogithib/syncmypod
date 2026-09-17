@@ -1,5 +1,4 @@
 import { clear, h, mount } from './dom.js';
-import { debounce } from './ui.js';
 
 // A text input that suggests names as you type.
 //
@@ -56,32 +55,71 @@ export function suggestInput({ value = '', placeholder = '', multi = false, fetc
 
   let items = [];
   let active = -1;
+  // Set while a suggestion is being applied.
+  //
+  // Picking a name writes it into the field, and writing into a field is what
+  // this dropdown watches for - so choosing one immediately looked the name up
+  // again and reopened the list under the caret. From the outside that is a
+  // field that will not accept an answer: you click "Arijit Singh", the
+  // suggestions come straight back, and nothing looks finished.
+  let applying = false;
+
+  // A queued lookup, so it can be called off. Declared here because `close`
+  // cancels one and `close` has to exist before the first keystroke.
+  //
+  // `generation` covers the half of the race a timer cannot: a request already
+  // in flight when the user picks a suggestion cannot be cancelled, and its
+  // answer must not reopen the list over the name they just chose. Every
+  // cancellation moves the counter on, and a reply from an older generation is
+  // dropped.
+  let pending = null;
+  let generation = 0;
+  const cancelLookup = () => {
+    clearTimeout(pending);
+    pending = null;
+    generation++;
+  };
 
   const close = () => {
+    cancelLookup();
     list.hidden = true;
     input.setAttribute('aria-expanded', 'false');
+    items = [];
     active = -1;
   };
 
   const choose = (name) => {
+    applying = true;
     if (multi) {
-      // Replace only the name being typed, keeping the rest of the list and
-      // its spacing, and leave the caret after what was just inserted.
+      // Replace only the name being typed, keeping the rest of the list, and
+      // leave the caret ready for the next name.
+      //
+      // The separator is added here rather than left for the user to type.
+      // This field holds a list, picking one name almost always means another
+      // is coming, and "Sadhana Sargam" followed by a comma and a space is the
+      // only thing that could come next.
       const { start, end } = currentSegment(input.value, input.selectionStart ?? input.value.length);
       const head = input.value.slice(0, start);
       const tail = input.value.slice(end);
       const spaced = head && !head.endsWith(' ') ? `${head} ` : head;
-      input.value = `${spaced}${name}${tail}`;
-      const caret = spaced.length + name.length;
+      const needsSeparator = tail.trim() === '';
+      input.value = `${spaced}${name}${needsSeparator ? ', ' : tail}`;
+      const caret = spaced.length + name.length + (needsSeparator ? 2 : 0);
       close();
       input.focus();
       input.setSelectionRange(caret, caret);
     } else {
+      // One value, so the field is finished. Nothing more to suggest and
+      // nowhere else to go.
       input.value = name;
       close();
       input.focus();
+      input.setSelectionRange(name.length, name.length);
     }
+    // Still dispatched, because something outside may be watching the field -
+    // but the flag above means this module's own listener ignores it.
     input.dispatchEvent(new Event('input', { bubbles: true }));
+    applying = false;
   };
 
   const render = (groups) => {
@@ -118,27 +156,45 @@ export function suggestInput({ value = '', placeholder = '', multi = false, fetc
     active = -1;
   };
 
-  const look = debounce(async () => {
-    const query = multi
-      ? currentSegment(input.value, input.selectionStart ?? input.value.length).text
-      : input.value.trim();
-    if (query.length < 2) {
-      close();
-      return;
-    }
-    try {
-      render(await fetchSuggestions(query));
-    } catch {
-      close(); // Suggestions are a convenience; typing still works without them.
-    }
-  }, 220);
+  // Its own debounce rather than the shared one, because this needs to be
+  // cancellable. A lookup queued by the last keystroke before a suggestion is
+  // clicked would otherwise fire a fifth of a second later and reopen the list
+  // over the answer the user just gave.
+  const look = () => {
+    cancelLookup();
+    const mine = generation;
+    pending = setTimeout(async () => {
+      pending = null;
+      const query = multi
+        ? currentSegment(input.value, input.selectionStart ?? input.value.length).text
+        : input.value.trim();
+      if (query.length < 2) {
+        close();
+        return;
+      }
+      try {
+        const groups = await fetchSuggestions(query);
+        if (mine === generation) render(groups);
+      } catch {
+        if (mine === generation) close();
+      }
+    }, 220);
+  };
 
-  input.addEventListener('input', look);
+  // Guarded at the listener rather than inside the debounce: `applying` is
+  // false again long before a debounced callback would run.
+  const onInput = () => {
+    if (applying) return;
+    look();
+  };
+
+  input.addEventListener('input', onInput);
   // Clicking or arrowing into a different name in the list changes what should
   // be suggested, and neither fires an input event.
   if (multi) {
-    input.addEventListener('click', look);
+    input.addEventListener('click', onInput);
     input.addEventListener('keyup', (event) => {
+      if (applying) return;
       if (event.key.startsWith('Arrow') || event.key === 'Home' || event.key === 'End') look();
     });
   }

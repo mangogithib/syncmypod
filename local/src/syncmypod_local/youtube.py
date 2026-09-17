@@ -35,10 +35,12 @@ import logging
 import os
 import shutil
 import stat
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import config as config_module
 from .config import config_dir
 
 logger = logging.getLogger(__name__)
@@ -158,9 +160,56 @@ def is_signed_in() -> bool:
         return False
 
 
-def cookie_options() -> dict[str, str]:
-    """What to merge into yt-dlp's options so a download uses the session."""
-    return {"cookiefile": str(cookies_path())} if is_signed_in() else {}
+def premium_observed() -> bool:
+    """Whether the last check found this session is offered the Premium stream."""
+    try:
+        return bool(config_module.load().youtube_premium)
+    except Exception:
+        # A config that cannot be read is not a reason to fail a download. The
+        # honest reading of "unknown" here is "no", which is also the safe one:
+        # it means the session is left out, which is the behaviour of a machine
+        # that never signed in.
+        return False
+
+
+def remember(available: Availability) -> None:
+    """Record what the account was last offered, for the next run to read."""
+    try:
+        stored = config_module.load()
+    except Exception:
+        return
+    stored.youtube_premium = available.premium
+    stored.youtube_checked_at = time.time()
+    with contextlib.suppress(Exception):
+        config_module.save(stored)
+
+
+def cookie_options(*, force: bool = False) -> dict[str, str]:
+    """What to merge into yt-dlp's options so a request uses the session.
+
+    **The session is used only when it buys something, which means Premium.**
+
+    That is not caution, it is a bug fix. Signing in with an ordinary account
+    made things strictly worse on a real machine: `check()` came back "YouTube
+    returned no results to check against", and the sync that followed failed
+    every single track. A signed-in request is treated differently - it is
+    attributable, it is subject to bot checks a signed-out one is not, and
+    yt-dlp cannot produce the tokens YouTube now wants alongside a session. The
+    account that showed this had no Premium, so all of that risk was being
+    taken for no gain whatsoever: without Premium the cookies unlock nothing,
+    because the only thing they were ever for is the 256kbps AAC stream.
+
+    So the rule is exactly the value proposition: carry the session when it
+    reaches the better stream, and otherwise ask as anybody else would.
+
+    `force` is for `check()` itself, which has to send the cookies to find out
+    what they are worth. Nothing else should pass it.
+    """
+    if not is_signed_in():
+        return {}
+    if not force and not premium_observed():
+        return {}
+    return {"cookiefile": str(cookies_path())}
 
 
 def sign_in(browser: str | None = None, *, prefer: str | None = None) -> Availability:
@@ -394,12 +443,109 @@ def _jar_from_devtools(cookies: list[dict]) -> Any:
 
 
 def forget() -> bool:
-    """Delete the saved session. Returns whether there was one."""
+    """Delete the saved session, the browser profile, and what was known of it.
+
+    Signing out has to take the profile with it. It holds the Google session
+    that `sign_in_with_browser` restores without a password, so leaving it
+    behind would mean "sign out" removed the cookies and then silently put them
+    back the next time anything refreshed.
+    """
     path = cookies_path()
-    if not path.exists():
+    had = path.exists()
+    if had:
+        path.unlink()
+
+    from . import browser_login
+
+    profile = browser_login.profile_dir(config_dir())
+    if profile.exists():
+        shutil.rmtree(profile, ignore_errors=True)
+        had = True
+
+    with contextlib.suppress(Exception):
+        stored = config_module.load()
+        stored.youtube_premium = None
+        stored.youtube_checked_at = None
+        config_module.save(stored)
+
+    return had
+
+
+# How long a saved session is used before it is quietly renewed.
+#
+# The cookies do not expire on a schedule anybody can read, but YouTube rotates
+# them on use and a jar left alone for weeks starts being refused. A week is
+# well inside that and costs one silent browser start.
+SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+
+
+# How long a silent refresh waits before giving up.
+#
+# Much shorter than a sign-in, and deliberately. A profile that holds a session
+# hands it over within a second or two of the browser starting; one that does
+# not is never going to, because there is nobody watching to type a password
+# into a window that is not on screen. This runs at the start of a sync, so the
+# cost of waiting is a sync that appears to hang before it has said anything.
+REFRESH_TIMEOUT_SECONDS = 20.0
+
+
+def refresh_session(*, timeout: float = REFRESH_TIMEOUT_SECONDS) -> bool:
+    """Renew the saved cookies from the browser profile, showing nothing.
+
+    The other half of "sign in once". `sign_in_with_browser` keeps the profile
+    it signed in with, so the session is already there - what lapses is the
+    copy in `youtube-cookies.txt`. Starting that same profile again restores
+    the session on its own and hands over fresh cookies, with no password and
+    nothing to click.
+
+    Headless, which is the difference between a refresh and an interruption.
+    The visible window is needed to *sign in* - Google will not accept a
+    password in an automated browser - and not to read a session that is
+    already established, so a renewal can happen without a window appearing
+    over whatever the user is doing.
+
+    Returns False rather than raising when there is nothing to refresh from, or
+    when it did not work. A stale session is not a failure worth stopping a
+    sync over: the request simply goes out as an anonymous one would.
+    """
+    from . import browser_login
+
+    if not browser_login.has_profile(config_dir()):
         return False
-    path.unlink()
+
+    try:
+        cookies = browser_login.collect_cookies(config_dir(), timeout=timeout, headless=True)
+    except browser_login.BrowserLoginError as err:
+        logger.info("Could not refresh the YouTube session: %s", err)
+        return False
+
+    if not _write_youtube_cookies(_jar_from_devtools(cookies)):
+        return False
+    logger.info("Refreshed the saved YouTube session")
     return True
+
+
+def session_age_seconds() -> float | None:
+    """How long ago the saved cookies were written, or None if there are none."""
+    try:
+        return time.time() - cookies_path().stat().st_mtime
+    except OSError:
+        return None
+
+
+def ensure_fresh() -> bool:
+    """Renew the session if it is old. Called before a sync, never by a user.
+
+    Does nothing at all unless a session is saved and the account had Premium
+    when it was last checked - which is the only case where the session is used
+    for anything, so the only case where keeping it current matters.
+    """
+    if not is_signed_in() or not premium_observed():
+        return False
+    age = session_age_seconds()
+    if age is None or age < SESSION_MAX_AGE_SECONDS:
+        return False
+    return refresh_session()
 
 
 def check(timeout: float = 45.0) -> Availability:
@@ -418,23 +564,40 @@ def check(timeout: float = 45.0) -> Availability:
         "socket_timeout": timeout,
         "noprogress": True,
         "ignoreerrors": True,
-    } | cookie_options()
+        # force, because this is the one call whose whole job is to find out
+        # what the session is worth. Everywhere else the answer below decides.
+    } | cookie_options(force=True)
 
     try:
         with YoutubeDL(options) as ydl:
             info = ydl.extract_info(_PROBE_QUERY, download=False)
     except Exception as err:
-        return Availability(best_aac_kbps=None, signed_in=is_signed_in(), error=str(err)[:200])
+        return _remembered(
+            Availability(best_aac_kbps=None, signed_in=is_signed_in(), error=str(err)[:200])
+        )
 
     entries = (info or {}).get("entries") or []
     if not entries or not entries[0]:
-        return Availability(
-            best_aac_kbps=None,
-            signed_in=is_signed_in(),
-            error="YouTube returned no results to check against.",
+        # A signed-in session that returns nothing is worse than no session:
+        # this is what the failing machine saw, and the sync that followed it
+        # failed every track. Recorded as "not Premium", which is what makes
+        # `cookie_options` leave it out of the downloads that follow.
+        return _remembered(
+            Availability(
+                best_aac_kbps=None,
+                signed_in=is_signed_in(),
+                error="YouTube returned no results to check against.",
+            )
         )
 
-    return Availability(best_aac_kbps=best_aac_bitrate(entries[0]), signed_in=is_signed_in())
+    return _remembered(
+        Availability(best_aac_kbps=best_aac_bitrate(entries[0]), signed_in=is_signed_in())
+    )
+
+
+def _remembered(available: Availability) -> Availability:
+    remember(available)
+    return available
 
 
 def best_aac_bitrate(entry: dict) -> int | None:

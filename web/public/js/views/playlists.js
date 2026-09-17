@@ -1,6 +1,6 @@
 import { api } from '../lib/api.js';
 import { h, icon, mount } from '../lib/dom.js';
-import { createSelection, selectable, selectionBar } from '../lib/select.js';
+import { createSelection, selectable, selectAllRow, selectionBar } from '../lib/select.js';
 import {
   artwork,
   confirmDialog,
@@ -113,6 +113,10 @@ export async function renderPlaylist(view, context) {
         const byId = new Map(playlist.tracks.map((track) => [track.id, track]));
 
         const listSlot = h('div.list');
+        // Two hosts, one above the list and one below it. A selection made at
+        // the foot of a three-hundred-song playlist should not need a scroll
+        // back to the top to act on, and the reverse is just as true.
+        const selectionTop = h('div', { hidden: true });
         const selectionHost = h('div', { hidden: true });
         const orphaned = playlist.tracks.filter((track) => !track.inLibrary);
 
@@ -122,24 +126,30 @@ export async function renderPlaylist(view, context) {
         // they are genuinely different: take them out of this playlist, put
         // them in another one as well, or remove them from the library
         // altogether - which takes them out of every playlist and off the iPod.
+        //
+        // Actions are built per bar rather than shared: one element cannot be
+        // in two places, so a shared button would simply move to whichever bar
+        // rendered last.
         function paintSelectionBar() {
           const chosen = selection.ids.map(Number);
-          selectionBar(selectionHost, selection, {
+          selectionBar([selectionTop, selectionHost], selection, {
             total: order.length,
             onRender: () => paintSelectionBar(),
             actions: [
-              h(
-                'button.btn.btn-sm',
-                { type: 'button', onclick: () => removeSelectedFromPlaylist(chosen) },
-                icon('x', 14),
-                'Remove from playlist'
-              ),
-              h(
-                'button.btn.btn-sm.btn-danger',
-                { type: 'button', onclick: () => removeSelectedFromLibrary(chosen) },
-                icon('trash', 14),
-                'Remove from library'
-              ),
+              () =>
+                h(
+                  'button.btn.btn-sm',
+                  { type: 'button', onclick: () => removeSelectedFromPlaylist(chosen) },
+                  icon('x', 14),
+                  'Remove from playlist'
+                ),
+              () =>
+                h(
+                  'button.btn.btn-sm.btn-danger',
+                  { type: 'button', onclick: () => removeSelectedFromLibrary(chosen) },
+                  icon('trash', 14),
+                  'Remove from library'
+                ),
             ],
           });
         }
@@ -164,7 +174,7 @@ export async function renderPlaylist(view, context) {
           const confirmed = await confirmDialog({
             title: `Remove ${trackIds.length} song${trackIds.length === 1 ? '' : 's'} from the library?`,
             message:
-              'They will be removed from your library and from every playlist they are in, and from the iPod on the next sync. This is not the same as taking them out of this playlist.',
+              'They leave your library, every playlist they are in, and the iPod on the next sync. This is not the same as taking them out of this playlist.',
             confirmLabel: 'Remove from library',
             danger: true,
           });
@@ -337,11 +347,7 @@ export async function renderPlaylist(view, context) {
           // so flagging them explains a count that would otherwise look wrong.
           blocks.push(
             notice(
-              h(
-                'div',
-                h('strong', `${orphaned.length} track${orphaned.length === 1 ? '' : 's'} no longer in your library. `),
-                h('span', 'These are skipped when syncing.')
-              ),
+              `${orphaned.length} track${orphaned.length === 1 ? '' : 's'} no longer in your library, so ${orphaned.length === 1 ? 'it is' : 'they are'} skipped when syncing.`,
               'warn',
               'warn'
             )
@@ -392,13 +398,16 @@ export async function renderPlaylist(view, context) {
           );
         } else {
           blocks.push(
-            h('div.card', listSlot),
-            selectionHost,
+            selectionTop,
             h(
-              'p.small.subtle',
-              { style: { marginTop: '12px' } },
-              'Drag a row, or use the arrows, to reorder. The order is what the iPod will show.'
-            )
+              'div.card',
+              selectAllRow(selection, {
+                total: order.length,
+                label: 'Select every song in this playlist',
+              }),
+              listSlot
+            ),
+            selectionHost
           );
         }
 

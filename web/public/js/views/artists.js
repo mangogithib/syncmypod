@@ -111,10 +111,7 @@ export async function renderArtists(view, context) {
           h(
             'div',
             h('strong', `${count} entr${count === 1 ? 'y names' : 'ies name'} more than one artist. `),
-            h(
-              'span',
-              'They came from a source that reports every credit as one string. Each one is checked against a real catalogue before being separated, so a band with an ampersand in its name is left alone.'
-            )
+            h('span', 'Each is checked against a catalogue before being separated.')
           ),
           run
         ),
@@ -200,7 +197,7 @@ export async function renderArtists(view, context) {
                 : null,
               data.artists.map((artist) =>
                 h(
-                  `div.list-row${artist.deezerId ? '.row-link' : ''}`,
+                  'div.list-row.row-link',
                   // The row itself opens the artist's page. It used to do
                   // nothing at all: the only way through was the Songs button,
                   // which goes to a filtered track list rather than the artist.
@@ -213,12 +210,14 @@ export async function renderArtists(view, context) {
                   h(
                     'a.list-main.list-main-link',
                     {
-                      href: artist.deezerId
-                        ? `#/artist/${encodeURIComponent(artist.deezerId)}`
-                        : `#/library?q=${encodeURIComponent(artist.name)}`,
-                      title: artist.deezerId
-                        ? `Open ${artist.name}`
-                        : `${artist.name} has no Deezer id, so their releases cannot be browsed`,
+                      // Always the artist's own page, by library id. It used to
+                      // fall back to a filtered song list for anyone with no
+                      // Deezer id stored, which is most artists added through
+                      // iTunes - so the row people expect to open an artist
+                      // opened a search instead. The page resolves the provider
+                      // id itself now.
+                      href: `#/artist-lib/${artist.id}`,
+                      title: `Open ${artist.name}`,
                     },
                     h('div.list-title', artist.name),
                     h(
@@ -230,11 +229,6 @@ export async function renderArtists(view, context) {
                   h(
                     'div.list-actions',
                     artist.followed ? badge('Following', 'accent') : null,
-                    h(
-                      'a.btn.btn-sm',
-                      { href: `#/library?q=${encodeURIComponent(artist.name)}` },
-                      'Songs'
-                    ),
                     artist.followed
                       ? h(
                           'button.btn.btn-sm',
@@ -289,9 +283,8 @@ export async function renderArtists(view, context) {
           notice(
             h(
               'div',
-              h('strong', 'Deezer is switched off. '),
-              h('span', 'New releases cannot be discovered until it is. '),
-              h('a', { href: '#/settings' }, 'How to set it up')
+              h('strong', 'Deezer is switched off, so new releases cannot be found. '),
+              h('a', { href: '#/settings' }, 'Settings')
             ),
             'warn',
             'warn'
@@ -316,8 +309,7 @@ export async function renderArtists(view, context) {
           emptyState({
             iconName: 'heart',
             title: 'Not following anyone yet',
-            body:
-              'Follow an artist and their new releases are added to your library automatically. Following never pulls in their back catalogue.',
+            body: 'New releases from an artist you follow are added automatically.',
             action: h('a.btn.btn-primary', { href: '#/search' }, 'Find an artist'),
           })
         );
@@ -416,7 +408,7 @@ export async function renderArtists(view, context) {
   async function unfollow(artist, onDone) {
     const confirmed = await confirmDialog({
       title: 'Unfollow artist?',
-      message: `New releases from ${artist.name} will no longer be added automatically. Songs already in your library stay.`,
+      message: `New releases from ${artist.name} stop arriving. Songs already in your library stay.`,
       confirmLabel: 'Unfollow',
       danger: true,
     });
@@ -465,11 +457,7 @@ export function followDialog(artist, onSaved, playlists) {
       h(
         'label.checkbox',
         autoAdd,
-        h(
-          'span',
-          h('div', 'Add new releases automatically'),
-          h('div.small.subtle', 'Off means they are recorded but nothing is added to your library.')
-        )
+        h('span', 'Add new releases automatically')
       ),
       h('label.checkbox', singles, h('span', 'Include singles and EPs')),
       h('label.checkbox', compilations, h('span', 'Include compilations')),
@@ -479,24 +467,19 @@ export function followDialog(artist, onSaved, playlists) {
         h(
           'span',
           h('div', 'Also import everything released so far'),
-          h(
-            'div.small.subtle',
-            'Adds the existing catalogue, not only future releases. This runs in the background and can take a few minutes.'
-          )
+          h('div.small.subtle', 'Runs in the background and can take a few minutes.')
         )
       ),
       playlists
         ? h(
             'div.field',
             h('label', 'Also add to playlist'),
-            playlistSelect,
-            h('span.hint', 'New tracks are appended to this playlist as well as the library.')
+            playlistSelect
           )
         : null,
-      notice(
-        'Following starts from today unless you ask for the back catalogue above. Existing releases are otherwise recorded as already seen.',
-        '',
-        'info'
+      h(
+        'p.small.subtle',
+        'Following starts from today unless you ask for the back catalogue above.'
       ),
       !artist.deezerId
         ? notice(

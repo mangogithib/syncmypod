@@ -142,13 +142,24 @@ class GuiServer:
             "server": stored.server_url,
             "deviceName": stored.device_name,
             "ffmpeg": {"found": found is not None, "detail": ffmpeg_finder.describe()},
-            # Only whether a session is saved. Asking YouTube what it will
-            # actually offer costs a request, and this runs on every page load.
-            # Only whether a session is saved. Which browser it came from is
-            # not the page's business any more: signing in tries them all, and
-            # the browser viewing this page is used to order the attempts
-            # server-side rather than to fill in a menu.
-            "youtube": {"signedIn": youtube_module.is_signed_in()},
+            # Which audio the user has asked for. Read from the stored config
+            # rather than held in the page, so it survives a reload and agrees
+            # with what a sync started from the terminal would do.
+            "audioQuality": stored.audio_quality,
+            # Whether a session is saved, and what it was last found to be
+            # worth. Not re-probed here: asking YouTube costs a request and a
+            # couple of seconds, and this runs on every page load. The stored
+            # verdict is what decides whether the Premium option can be chosen,
+            # so it has to travel with the state rather than being asked for.
+            #
+            # Which browser it came from is not the page's business: signing in
+            # tries them all, and the browser viewing this page is used to order
+            # the attempts server-side rather than to fill in a menu.
+            "youtube": {
+                "signedIn": youtube_module.is_signed_in(),
+                "premium": bool(stored.youtube_premium),
+                "checked": stored.youtube_checked_at is not None,
+            },
             "running": self.session.running,
             "backupBeforeSync": stored.backup_before_sync,
             "ipod": None,
@@ -190,7 +201,7 @@ class GuiServer:
         # Remembered rather than applied to this run alone. The page shows it as
         # a setting, so it has to still be off the next time the page is opened.
         if backup is not None:
-            self.set_backup_before_sync(backup)
+            self.save_settings({"backupBeforeSync": backup})
 
         self.session.reset()
         self.session.running = True
@@ -303,22 +314,48 @@ class GuiServer:
         """Forget the pairing on this computer only."""
         return {"unpaired": config_module.clear()}
 
-    def set_backup_before_sync(self, enabled: bool) -> dict[str, Any]:
-        """Turn the pre-sync snapshot on or off, and remember the choice.
+    def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Store whichever preferences the page sent.
 
-        Saved the moment it is changed rather than only when a sync starts, so
-        the toggle means what it looks like it means if the window is closed in
+        Only the keys present are touched. The page sends one at a time, and a
+        handler that wrote every field from the payload would reset the backup
+        toggle every time somebody picked an audio quality.
+
+        Saved the moment they change rather than when a sync starts, so a
+        setting means what it looks like it means if the window is closed in
         between.
         """
         stored = config_module.load()
-        if stored.backup_before_sync != enabled:
-            stored.backup_before_sync = enabled
+        changed = False
+
+        if "backupBeforeSync" in payload:
+            enabled = bool(payload.get("backupBeforeSync"))
+            if stored.backup_before_sync != enabled:
+                stored.backup_before_sync = enabled
+                changed = True
+                logger.info("Backup before sync is now %s", "on" if enabled else "off")
+
+        if "audioQuality" in payload:
+            quality = config_module.normalise_quality(payload.get("audioQuality"))
+            if stored.audio_quality != quality:
+                stored.audio_quality = quality
+                changed = True
+                logger.info("Audio quality is now %s", quality)
+
+        if changed:
             config_module.save(stored)
-            logger.info("Backup before sync is now %s", "on" if enabled else "off")
-        return {"backupBeforeSync": enabled}
+        return {
+            "backupBeforeSync": stored.backup_before_sync,
+            "audioQuality": stored.audio_quality,
+        }
 
     def youtube_check(self) -> dict[str, Any]:
-        """Ask YouTube what bitrate this session is offered."""
+        """Ask YouTube what bitrate this session is offered.
+
+        The answer is written to the config by `youtube.check` itself, so the
+        Premium option stays unlocked - or locked - across a restart without
+        the page having to ask again.
+        """
         available = youtube_module.check()
         return {
             "signedIn": available.signed_in,
@@ -697,10 +734,7 @@ def _make_handler(gui: GuiServer):
                     ),
                 )
             elif path == "/api/settings":
-                self._json(
-                    200,
-                    gui.set_backup_before_sync(bool(body.get("backupBeforeSync", True))),
-                )
+                self._json(200, gui.save_settings(body))
             elif path == "/api/unpair":
                 self._json(200, gui.unpair())
             elif path == "/api/youtube/check":

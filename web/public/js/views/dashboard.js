@@ -30,12 +30,16 @@ export async function renderDashboard(view, context) {
     ({ stats, recent, devices, playlists }) => {
       const blocks = [];
 
-      // Unresolved tracks are the one thing on this page that needs acting on.
-      // They do sync - with the artist and album blank, which the iPod files
-      // under "Unknown Artist" - so this is not a blocker, it is a "you may want
-      // to fix these". A track that is never going to resolve can be accepted
-      // from the Songs list, which stops it being counted here without hiding it
-      // or changing what syncs.
+      // Songs with no artist. They still sync, with the field blank, so this is
+      // a "worth fixing" rather than a blocker.
+      //
+      // **The link has to point at the same set this number counts.** It went
+      // to `state=unresolved`, which is the resolver's state machine, while the
+      // count is "has no artist and has not been accepted" - two different
+      // sets. A song corrected by hand is `manual` and can still have no
+      // artist, so it was counted here and missing from the list this link
+      // opened. Clearing everything the list showed left the warning up, with
+      // nothing on the page to explain why, and no way to make it go away.
       if (stats.needsAttention > 0) {
         blocks.push(
           h(
@@ -43,17 +47,11 @@ export async function renderDashboard(view, context) {
             icon('warn', 16),
             h(
               'div',
-              h('strong', `${formatNumber(stats.needsAttention)} track${stats.needsAttention === 1 ? '' : 's'} with no artist yet. `),
               h(
-                'span',
-                'They still sync, but reach the iPod with the artist and album blank. '
+                'strong',
+                `${formatNumber(stats.needsAttention)} song${stats.needsAttention === 1 ? '' : 's'} with no artist. `
               ),
-              h('a', { href: '#/library?state=unresolved' }, 'Review them'),
-              h(
-                'div.small',
-                { style: { marginTop: '4px' } },
-                'Select the ones that will never resolve and choose Stop flagging.'
-              )
+              h('a', { href: '#/library?state=flagged' }, 'Review')
             )
           )
         );
@@ -61,8 +59,8 @@ export async function renderDashboard(view, context) {
 
       // Tracks the local app could not fetch. Distinct from the row above:
       // those are in the library and sync with blank fields, these never
-      // reached the iPod at all, and the fix is different - a source URL rather
-      // than an artist name.
+      // reached the iPod at all, and the fix is a source URL rather than an
+      // artist name.
       if (stats.syncFailed > 0) {
         blocks.push(
           h(
@@ -72,11 +70,7 @@ export async function renderDashboard(view, context) {
               'div',
               h(
                 'strong',
-                `${formatNumber(stats.syncFailed)} track${stats.syncFailed === 1 ? '' : 's'} did not reach the iPod. `
-              ),
-              h(
-                'span',
-                'The last sync could not find audio for them. Paste a source URL on each one and they will go across next time. '
+                `${formatNumber(stats.syncFailed)} song${stats.syncFailed === 1 ? '' : 's'} did not reach the iPod. `
               ),
               h('a', { href: '#/library?state=sync-failed' }, 'See which')
             )
@@ -90,8 +84,7 @@ export async function renderDashboard(view, context) {
             h(
               'div',
               h('strong', 'No computer is paired yet. '),
-              h('span', 'The local app is what downloads audio and writes to the iPod. '),
-              h('a', { href: '#/devices' }, 'Pair a computer')
+              h('a', { href: '#/devices' }, 'Pair one')
             ),
             'accent',
             'info'
@@ -107,7 +100,7 @@ export async function renderDashboard(view, context) {
           stat('Artists', formatNumber(stats.artistCount), `${formatNumber(stats.followedCount)} followed`),
           stat('Playlists', formatNumber(stats.playlistCount)),
           stats.needsAttention > 0
-            ? stat('Needs attention', formatNumber(stats.needsAttention), 'No artist yet', true)
+            ? stat('No artist', formatNumber(stats.needsAttention), null, true)
             : stat('Ready to sync', formatNumber(stats.trackCount - stats.needsAttention))
         )
       );
@@ -142,8 +135,7 @@ function recentlyAdded({ tracks }) {
     h('div.card-head', h('h2', 'Recently added'), h('div.spacer'),
       h('a.small', { href: '#/library' }, 'All songs')),
     tracks.length === 0
-      ? h('div.card-body', h('p.muted.small',
-          'Nothing yet. Use Add music to search for songs, or Import to bring in a list or a playlist.'))
+      ? h('div.card-body', h('p.muted.small', 'Nothing yet.'))
       : h(
           'div.list',
           tracks.map((track) =>
@@ -223,7 +215,7 @@ function playlistPanel(playlists) {
             : null,
           h(
             'div.list-row',
-            h('span.small.subtle', `${syncing.length} of ${playlists.length} set to sync to the iPod`)
+            h('span.small.subtle', `${syncing.length} of ${playlists.length} syncing`)
           )
         )
   );

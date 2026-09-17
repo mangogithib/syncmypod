@@ -535,6 +535,36 @@ class TestTranscoding:
 
         assert seen["options"].lossy_quality == "high"
 
+    def test_each_setting_maps_to_a_real_pypodlib_quality(self):
+        """The three options the window offers, against what the encoder takes.
+
+        The names are this application's, not pypodlib's: it calls them
+        compact/balanced/high, which describe file size, where "Standard",
+        "High" and "Premium" describe what somebody is choosing. A typo in the
+        map would fall through to a default and quietly encode at the wrong
+        bitrate, which is the kind of thing nobody notices until a 160GB iPod
+        is full.
+        """
+        from pypodlib.sync.transcoder import _QUALITY_MUSIC_KBPS
+
+        from syncmypod_local import transcode
+        from syncmypod_local.config import AUDIO_QUALITY_CHOICES
+
+        assert set(transcode._LOSSY_QUALITY) == set(AUDIO_QUALITY_CHOICES)
+        for setting, pypod_name in transcode._LOSSY_QUALITY.items():
+            assert pypod_name in _QUALITY_MUSIC_KBPS, setting
+
+        kbps = {
+            setting: _QUALITY_MUSIC_KBPS[name]
+            for setting, name in transcode._LOSSY_QUALITY.items()
+        }
+        assert kbps["standard"] == 128
+        assert kbps["high"] == 256
+        # Premium prefers a stream that needs no encode at all; when the
+        # account turns out not to have one there is nothing to fall back to
+        # but the Opus, and re-encoding that at 256 is exactly `high`.
+        assert kbps["premium"] == 256
+
     def test_high_means_256kbps(self):
         """The one thing this rests on and does not own.
 

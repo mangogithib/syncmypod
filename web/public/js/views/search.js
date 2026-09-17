@@ -90,8 +90,7 @@ export async function renderSearch(view, context) {
         h(
           'div',
           h('strong', 'No metadata provider is configured. '),
-          h('span', 'Turn on Deezer or iTunes, or set a MusicBrainz contact. '),
-          h('a', { href: '#/settings' }, 'Set one up')
+          h('a', { href: '#/settings' }, 'Settings')
         ),
         'warn',
         'warn'
@@ -103,8 +102,7 @@ export async function renderSearch(view, context) {
       emptyState({
         iconName: 'search',
         title: 'Search for music to add',
-        body:
-          'Songs, albums and artists together. Results come from Deezer first, then iTunes, then MusicBrainz - metadata is taken from whichever answered, never from wherever the audio eventually comes from.',
+        body: 'Songs, albums and artists together.',
       })
     );
   }

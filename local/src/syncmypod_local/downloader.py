@@ -129,8 +129,22 @@ _BEST = (
 _WITHOUT_FFMPEG = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best"
 
 
-def format_selector(*, has_ffmpeg: bool) -> str:
-    """The yt-dlp format expression this application downloads with."""
+def format_selector(*, has_ffmpeg: bool, quality: str | None = None) -> str:
+    """The yt-dlp format expression this application downloads with.
+
+    The ladder is the same whichever quality is chosen, and that is not an
+    oversight. There are only two streams to pick between - the AAC everyone is
+    offered and the Opus of the same recording - and the Opus is the better of
+    them at every setting, because YouTube brickwalls the free AAC at 15.8kHz.
+    What the setting changes is the *encode* on the way to the iPod, which is
+    `transcode.py`, not what is fetched.
+
+    The one case where it changes what is fetched is a Premium account's
+    256kbps AAC, which the first rung already prefers and which needs no encode
+    at all. `quality` is accepted so the intent is visible at the call site and
+    so a future stream can be selected per setting without changing callers.
+    """
+    _ = quality
     return _BEST if has_ffmpeg else _WITHOUT_FFMPEG
 
 
@@ -149,6 +163,18 @@ def _postprocessors(*, has_ffmpeg: bool) -> list[dict[str, Any]]:
     if not has_ffmpeg:
         return []
     return [{"key": "FFmpegExtractAudio", "preferredcodec": "best", "preferredquality": None}]
+
+
+def _quality() -> str:
+    """The chosen audio setting, or the default if it cannot be read."""
+    try:
+        from . import config as config_module
+
+        return config_module.load().audio_quality
+    except Exception:
+        from .config import DEFAULT_AUDIO_QUALITY
+
+        return DEFAULT_AUDIO_QUALITY
 
 
 class DownloadError(Exception):
@@ -342,7 +368,7 @@ def _download(url: str, destination: Path, *, source: str) -> Download:
     # Whether the better stream can be used at all - see `_WITHOUT_FFMPEG`.
     found = ffmpeg_finder.find()
     options = _base_options() | {
-        "format": format_selector(has_ffmpeg=found is not None),
+        "format": format_selector(has_ffmpeg=found is not None, quality=_quality()),
         "postprocessors": _postprocessors(has_ffmpeg=found is not None),
         "outtmpl": str(destination / "source.%(ext)s"),
         "noplaylist": True,

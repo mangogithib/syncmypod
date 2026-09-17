@@ -12,7 +12,12 @@ import { renderSearch } from './views/search.js';
 import { renderSettings } from './views/settings.js';
 import { renderArtists } from './views/artists.js';
 import { renderAlbums } from './views/albums.js';
-import { renderAlbumPage, renderArtistPage } from './views/browse.js';
+import {
+  renderAlbumPage,
+  renderArtistPage,
+  renderLibraryAlbumPage,
+  renderLibraryArtistPage,
+} from './views/browse.js';
 
 // Application shell: session bootstrap, hash routing, navigation.
 
@@ -45,6 +50,12 @@ const routes = [
   // sidebar: these are pages about music that is not in the library yet.
   { path: 'artist/:id', title: 'Artist', render: renderArtistPage },
   { path: 'album/:id', title: 'Album', render: renderAlbumPage },
+  // The same two pages, reached from the library's own Albums and Artists
+  // lists, which hold a library id rather than a provider one. Separate routes
+  // rather than one that guesses which kind of id it was handed: the ids look
+  // identical, and getting it wrong shows somebody else's record.
+  { path: 'album-lib/:id', title: 'Album', render: renderLibraryAlbumPage },
+  { path: 'artist-lib/:id', title: 'Artist', render: renderLibraryArtistPage },
   { path: 'devices', title: 'Devices', render: renderDevices, nav: 'Devices', icon: 'device', group: 'Sync' },
   { path: 'settings', title: 'Settings', render: renderSettings, nav: 'Settings', icon: 'settings', group: 'Sync' },
 ];
@@ -139,8 +150,7 @@ function renderFooter() {
   mount(
     host,
     h('span.footer-brand', 'SyncMyPod'),
-    h('span.footer-sep', { 'aria-hidden': 'true' }, '·'),
-    h('span.footer-version', state.version ? `version ${state.version}` : 'version unknown')
+    h('span.footer-version', state.version || '')
   );
 }
 

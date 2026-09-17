@@ -109,6 +109,41 @@ iPod with an unverified tag.
 `manual` is sacred: automated resolution will not overwrite it without an
 explicit `overwriteManual` flag.
 
+### Standing sources
+
+A **source** is a playlist link somewhere else that this library follows. An
+import happens once; a source is re-read on a half-hour timer and whatever is
+new is added.
+
+It used to be re-read only when somebody opened the Sources page, which put the
+whole mechanism behind a page visit — a playlist that keeps up with another one
+has to keep up whether or not anyone is looking at the page it is configured
+on. Followed artists have had a timer since the beginning; this is the same
+idea for playlists.
+
+A source can be pointed at a playlist **here**, so everything it ever brings is
+appended to one that already exists rather than to a second playlist named
+after the source. The column had always been there and nothing could set it.
+
+Sources are additive: a track removed upstream stays, and removing a source
+keeps everything it brought. Same reasoning as the local app's ledger — "it
+disappeared from my library" is a far worse failure than "it is still there".
+
+### Another go at the songs nothing could identify
+
+A track imported from a video list arrives with a title and no artist, and a
+title alone is not enough to match on. Those used to sit in the library behind
+a notice offering to look them up, which is a chore rather than a choice —
+nobody was ever going to answer "no thanks, leave them broken".
+
+So it runs on its own, after every import that left something unresolved. The
+reason a second pass finds what the first missed is not cleverness: an import
+of three hundred tracks is three hundred provider lookups in a burst, Deezer
+and iTunes both rate limit, and a lookup that comes back empty under load is
+indistinguishable at the time from a track nothing knows about. The fix for
+that is a retry, not a prompt. One pass per user at a time, after a pause, and
+with no job row — nothing is watching it.
+
 ### Browsing
 
 Search returns songs, albums and artists together by default, because someone
@@ -118,11 +153,25 @@ itself. The three run as independent provider ladders in parallel — they
 fail independently, and falling back for one category should not drag the
 others onto a weaker source. The single-category filters remain.
 
-An album or artist result opens a **page** rather than a dialog: the artist's
-releases and popular tracks, or an album's track listing with the option to
-take two songs rather than all twelve. These read from the providers, not the
-library, because this is where you decide what to add — so by definition
-the music is not in the library yet.
+An album or artist opens a **page**, from a search result and from the
+library's own lists alike. It shows the whole release or discography with what
+you already hold marked on it, so every row carries the action that applies to
+it — Add when it is missing, Remove when it is yours.
+
+Both halves of that were once missing. A library album with no provider id
+opened a dialog listing only the songs already added, so the same record
+behaved differently depending on the door you came through and the version
+reached from your own library was the less useful of the two. A missing id is
+now looked up once, by name and album artist, and written back.
+
+**Identity is matched on the provider id columns, not only on `match_key`.**
+The key records the strongest identity a track was resolved under, so a
+recording hydrated through Deezer's `/track` endpoint is stored as `isrc:…`
+while an album listing — which returns no ISRC — asks about `dz:…`. Neither
+matched, so an album page offered to add songs already in the library and could
+not offer to remove them. The columns accumulate identities across providers
+and answer what the key cannot. Inside one album a title is a reliable key as
+well, so the library's own tracks for that album fill any gap left over.
 
 ### YouTube, on request
 
@@ -422,15 +471,27 @@ because the parser re-links tracks from the `ArtworkDB`'s own song ids.
 
 ### Audio quality
 
-There is no quality setting, and that is the design rather than an omission.
+Three settings, and the thing they choose is the **encode**, not the download.
 
-Signed out, YouTube offers exactly one AAC stream at roughly 128kbps. A YouTube
-Music Premium account is offered a second at 256kbps. There is nothing else to
-choose between, so the whole policy is one yt-dlp format expression —
-`bestaudio[ext=m4a]/...` — which resolves to whichever of the two the account
-is entitled to. A bitrate menu would have offered numbers that no source can
-supply, and encoding a 128kbps download at 256 produces a larger file holding
-identical sound.
+There used to be no setting, on the reasoning that YouTube offers one AAC
+stream to everybody and a second to Premium, so there is nothing to pick
+between. That was true about the download and missed the rest: an iPod cannot
+play Opus, the Opus stream is what gets fetched (see *Conversion*), and so
+every track is re-encoded on the way across. 128kbps against 256 is a real
+trade between space and sound on a device with a fixed disk, and it is the
+user's to make.
+
+| Setting | What lands on the iPod |
+|---|---|
+| `standard` | Opus, re-encoded to 128kbps AAC. About half the space. |
+| `high` | Opus, re-encoded to 256kbps AAC. The default. |
+| `premium` | YouTube's own 256kbps AAC, written across untouched. |
+
+`premium` is the only one that asks anything of the user, and it is offered
+greyed out until a check confirms the account has a subscription — an option
+that can be picked and then quietly does something else is worse than one that
+says it cannot be picked yet. It degrades to `high` if the subscription lapses,
+because the Opus is then the only stream left and 256 is what `high` does to it.
 
 Signing in means borrowing a browser's session, because YouTube decides what to
 offer from the request's cookies and there is no API for it. **Only
@@ -444,6 +505,23 @@ What gets reported is measured, not asserted: a signed-in account without
 Premium is indistinguishable from no account at all, so `youtube.check()` asks
 what bitrate is actually on offer and shows that.
 
+**The session is used only when it buys something.** A saved session is carried
+on a download if, and only if, the last check found the account has Premium.
+That is not caution, it is a reported bug: signing in with an ordinary account
+made the probe return no results at all and every track of the sync that
+followed failed. A signed-in request is attributable and subject to bot checks
+an anonymous one is not, and without Premium the cookies unlock nothing — the
+256kbps stream is the only thing they were ever for. So the rule is exactly the
+value proposition.
+
+**The session renews itself.** The browser profile that signed in is kept, so
+the cookies can be rebuilt from it without a password. Once they are a week old
+a sync starts the same profile headless and takes fresh ones — no window, no
+typing, and no consequence beyond an anonymous request if it cannot be done.
+Headless is right here and wrong for a sign-in: Google will not accept a
+password in a browser it can tell is automated, but restoring a session the
+profile already holds involves no password at all.
+
 ### Conversion
 
 Delegated to pyPodLib rather than driven directly, which is why `transcode.py`
@@ -453,11 +531,12 @@ is the second module importing it.
 A clickwheel iPod also refuses AAC that is not Low Complexity — the HE-AAC a
 source may return plays as silence — and refuses sample rates above 48kHz and
 24-bit depth, and the limits differ by model. pyPodLib already encodes all of
-that, keyed to the device currently open.
+that, keyed to the device currently open. The bitrate is the one part this
+project decides, from the setting above.
 
-The common case does no conversion at all: the downloader asks YouTube for the
-AAC stream before the Opus one, so the file usually arrives already playable.
-Re-encoding a lossy source into another lossy format is pure loss.
+The one case that does no conversion at all is a Premium account's 256kbps AAC,
+which the format ladder prefers and which arrives already playable. Re-encoding
+that would be pure loss.
 
 ### Why pyPodLib is quarantined
 

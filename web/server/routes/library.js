@@ -3,6 +3,7 @@ import { rateLimit, requireUser } from '../auth/middleware.js';
 import { one, query, transaction } from '../db/pool.js';
 import { badRequest, handler, id, notFound, pagination, str } from '../lib/api.js';
 import { matchKey } from '../lib/normalise.js';
+import * as deezer from '../providers/deezer.js';
 import * as library from '../services/library.js';
 import { appendToPlaylist } from '../services/playlist-writes.js';
 import { countUnresolved, startRematch } from '../services/rematch.js';
@@ -74,11 +75,14 @@ libraryRoutes.post(
     if (items.length === 0) return res.json({ known: {} });
     if (items.length > 500) throw badRequest('Too many items in one request (max 500).');
 
-    // Every candidate key, remembered against the caller's own id for the item
-    // so the answer can be handed back in the shape the page asked in.
-    const keysByRef = new Map();
+    // Every candidate identity, remembered against the caller's own id for the
+    // item so the answer can be handed back in the shape the page asked in.
+    const wantedByRef = new Map();
     const allKeys = new Set();
     const allIsrcs = new Set();
+    const allDeezer = new Set();
+    const allItunes = new Set();
+    const allMbids = new Set();
 
     items.forEach((item, index) => {
       const ref = String(item?.ref ?? index);
@@ -86,6 +90,9 @@ libraryRoutes.post(
       const title = str(item?.title, 'Title', { max: 500 });
       const artist = str(item?.artist, 'Artist', { max: 500 });
       const album = str(item?.album, 'Album', { max: 500 });
+      const deezerId = str(item?.deezerId, 'deezerId', { max: 60 });
+      const itunesId = str(item?.itunesId, 'itunesId', { max: 60 });
+      const mbid = str(item?.mbid, 'mbid', { max: 60 });
 
       const candidates = [];
       const push = (parts) => {
@@ -95,28 +102,42 @@ libraryRoutes.post(
       };
 
       if (isrc) push({ isrc });
-      if (item?.deezerId) push({ deezerId: str(item.deezerId, 'deezerId', { max: 60 }) });
-      if (item?.itunesId) push({ itunesId: str(item.itunesId, 'itunesId', { max: 60 }) });
-      if (item?.mbid) push({ mbid: str(item.mbid, 'mbid', { max: 60 }) });
+      if (deezerId) push({ deezerId });
+      if (itunesId) push({ itunesId });
+      if (mbid) push({ mbid });
       if (title) push({ name: title, extra: [artist, album].filter(Boolean).join(' ') });
 
-      if (isrc) allIsrcs.add(isrc.toUpperCase().replace(/[^A-Z0-9]/g, ''));
-      keysByRef.set(ref, { candidates, isrc });
+      const normalisedIsrc = isrc ? isrc.toUpperCase().replace(/[^A-Z0-9]/g, '') : null;
+      if (normalisedIsrc) allIsrcs.add(normalisedIsrc);
+      if (deezerId) allDeezer.add(deezerId);
+      if (itunesId) allItunes.add(itunesId);
+      if (mbid) allMbids.add(mbid);
+
+      wantedByRef.set(ref, { candidates, isrc: normalisedIsrc, deezerId, itunesId, mbid });
     });
 
     const rows = await library.knownTracks(req.user.id, {
       keys: [...allKeys],
       isrcs: [...allIsrcs],
+      deezerIds: [...allDeezer],
+      itunesIds: [...allItunes],
+      mbids: [...allMbids],
     });
 
     const byKey = new Map(rows.map((row) => [row.matchKey, row.id]));
     const byIsrc = new Map(rows.filter((r) => r.isrc).map((r) => [r.isrc, r.id]));
+    const byDeezer = new Map(rows.filter((r) => r.deezerId).map((r) => [String(r.deezerId), r.id]));
+    const byItunes = new Map(rows.filter((r) => r.itunesId).map((r) => [String(r.itunesId), r.id]));
+    const byMbid = new Map(rows.filter((r) => r.mbid).map((r) => [String(r.mbid), r.id]));
 
     const known = {};
-    for (const [ref, { candidates, isrc }] of keysByRef) {
+    for (const [ref, wanted] of wantedByRef) {
       const hit =
-        candidates.map((key) => byKey.get(key)).find(Boolean) ??
-        (isrc ? byIsrc.get(isrc.toUpperCase().replace(/[^A-Z0-9]/g, '')) : undefined);
+        wanted.candidates.map((key) => byKey.get(key)).find(Boolean) ??
+        (wanted.isrc ? byIsrc.get(wanted.isrc) : undefined) ??
+        (wanted.deezerId ? byDeezer.get(wanted.deezerId) : undefined) ??
+        (wanted.itunesId ? byItunes.get(wanted.itunesId) : undefined) ??
+        (wanted.mbid ? byMbid.get(wanted.mbid) : undefined);
       if (hit) known[ref] = Number(hit);
     }
 
@@ -485,6 +506,72 @@ libraryRoutes.get(
   })
 );
 
+// One album, for its own page.
+//
+// The page shows the whole release rather than only the songs already added,
+// which needs a provider id - and a library album does not always carry one.
+// So a missing id is looked up once, by name and album artist, and written
+// back. That turns "some albums open a page and some open a dialog" into one
+// behaviour, which is what it should have been.
+//
+// The lookup is best-effort in the strict sense: it never fails the request.
+// Without it the page still lists what the library holds.
+libraryRoutes.get(
+  '/albums/:id',
+  handler(async (req, res) => {
+    const albumId = id(req.params.id, 'Album id');
+    const album = await library.getAlbum(req.user.id, albumId);
+    if (!album) throw notFound('Album not found.');
+
+    if (!album.deezerId && deezer.isEnabled()) {
+      album.deezerId = await findAlbumOnDeezer(album);
+      if (album.deezerId) {
+        await library.rememberAlbumDeezerId(albumId, album.deezerId).catch(() => {});
+      }
+    }
+
+    res.json(album);
+  })
+);
+
+// Deezer's own id for an album the library only knows by name.
+//
+// Matched on the album name and, where there is one, the album artist. A name
+// alone is not enough - "Greatest Hits" belongs to several hundred people - so
+// a candidate whose artist does not match is rejected rather than accepted as
+// the best of a bad set.
+async function findAlbumOnDeezer(album) {
+  try {
+    const term = [album.name, album.artistName].filter(Boolean).join(' ');
+    const found = await deezer.searchAll(term, { types: 'album', limit: 10 });
+    const wantedName = normaliseLoosely(album.name);
+    const wantedArtist = normaliseLoosely(album.artistName || '');
+
+    for (const candidate of found.albums || []) {
+      if (normaliseLoosely(candidate.name) !== wantedName) continue;
+      if (!wantedArtist) return candidate.deezerId || null;
+      const credit = normaliseLoosely((candidate.artists || []).map((a) => a.name).join(' '));
+      if (credit.includes(wantedArtist) || wantedArtist.includes(credit)) {
+        return candidate.deezerId || null;
+      }
+    }
+  } catch (err) {
+    console.error('[library] deezer album lookup failed:', err.message);
+  }
+  return null;
+}
+
+// Case, punctuation and spacing removed. Enough to tell "Rockstar" from
+// "Rockstar (Original Motion Picture Soundtrack)" apart from a real mismatch,
+// without pulling in the resolver's scoring for a yes/no question.
+function normaliseLoosely(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u0027\u0060]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 libraryRoutes.get(
   '/artists',
   handler(async (req, res) => {
@@ -498,6 +585,53 @@ libraryRoutes.get(
     );
   })
 );
+
+// One artist, for the page that opens from the Artists list.
+//
+// Same problem as an album: the page is provider-backed and an artist stored
+// from iTunes has no Deezer id, so the row was a dead end. Looked up once by
+// name and written back.
+libraryRoutes.get(
+  '/artists/:id',
+  handler(async (req, res) => {
+    const artistId = id(req.params.id, 'Artist id');
+    const artist = await library.getArtistForPage(req.user.id, artistId);
+    if (!artist) throw notFound('Artist not found.');
+
+    if (!artist.deezerId && deezer.isEnabled()) {
+      artist.deezerId = await findArtistOnDeezer(artist.name);
+      if (artist.deezerId) {
+        await library.rememberArtistDeezerId(artistId, artist.deezerId).catch(() => {});
+      }
+    }
+
+    res.json(artist);
+  })
+);
+
+// Which library artist a provider page is about, so it can lead with the songs
+// already held. Returns null rather than 404 - "none" is an ordinary answer.
+libraryRoutes.get(
+  '/artists/by-deezer/:deezerId',
+  handler(async (req, res) => {
+    const deezerId = str(req.params.deezerId, 'deezerId', { max: 60 });
+    res.json({ artist: deezerId ? await library.findArtistByDeezerId(req.user.id, deezerId) : null });
+  })
+);
+
+async function findArtistOnDeezer(name) {
+  try {
+    const found = await deezer.searchAll(name, { types: 'artist', limit: 5 });
+    const wanted = normaliseLoosely(name);
+    const hit = (found.artists || []).find(
+      (candidate) => normaliseLoosely(candidate.name) === wanted
+    );
+    return hit?.deezerId || null;
+  } catch (err) {
+    console.error('[library] deezer artist lookup failed:', err.message);
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Another go at the songs nothing could identify

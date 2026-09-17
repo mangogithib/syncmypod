@@ -119,32 +119,93 @@ class TestTheSavedSession:
         assert not youtube.is_signed_in()
         assert youtube.cookie_options() == {}
 
-    def test_a_saved_session_is_handed_to_yt_dlp(self, config_home, monkeypatch):
+    def _save_a_session(self, monkeypatch, *, kbps):
+        """Sign in, with the probe answering a given bitrate."""
         monkeypatch.setattr(
-            youtube, "check", lambda: youtube.Availability(best_aac_kbps=256, signed_in=True)
+            youtube,
+            "check",
+            lambda *_a, **_k: youtube._remembered(
+                youtube.Availability(best_aac_kbps=kbps, signed_in=True)
+            ),
         )
         monkeypatch.setattr(
             "yt_dlp.cookies.extract_cookies_from_browser",
             lambda *_a, **_k: jar_with(cookie("SID", ".youtube.com")),
         )
         youtube.sign_in("firefox")
+
+    def test_a_premium_session_is_handed_to_yt_dlp(self, config_home, monkeypatch):
+        self._save_a_session(monkeypatch, kbps=256)
 
         assert youtube.is_signed_in()
+        assert youtube.premium_observed()
         assert youtube.cookie_options() == {"cookiefile": str(youtube.cookies_path())}
 
-    def test_signing_out_deletes_it(self, config_home, monkeypatch):
-        monkeypatch.setattr(
-            youtube, "check", lambda: youtube.Availability(best_aac_kbps=130, signed_in=True)
-        )
+    def test_a_session_without_premium_is_not_used_for_downloads(
+        self, config_home, monkeypatch
+    ):
+        """The fix for a sign-in that made every track fail.
+
+        Without Premium the cookies unlock nothing - the 256kbps stream is the
+        only thing they were ever for - while a signed-in request is subject to
+        bot checks an anonymous one is not. On the machine this was reported
+        from the probe came back with no results at all and the sync that
+        followed failed every track. So the session is saved, and left out of
+        the requests it cannot help.
+        """
+        self._save_a_session(monkeypatch, kbps=128)
+
+        assert youtube.is_signed_in(), "the session is still saved"
+        assert not youtube.premium_observed()
+        assert youtube.cookie_options() == {}
+        # check() has to send them to find out what they are worth.
+        assert youtube.cookie_options(force=True) == {"cookiefile": str(youtube.cookies_path())}
+
+    def test_a_probe_that_answers_nothing_counts_as_no_premium(self, config_home, monkeypatch):
+        """The exact symptom: signed in, and YouTube returns no results."""
         monkeypatch.setattr(
             "yt_dlp.cookies.extract_cookies_from_browser",
             lambda *_a, **_k: jar_with(cookie("SID", ".youtube.com")),
         )
+        monkeypatch.setattr(
+            youtube,
+            "check",
+            lambda *_a, **_k: youtube._remembered(
+                youtube.Availability(
+                    best_aac_kbps=None,
+                    signed_in=True,
+                    error="YouTube returned no results to check against.",
+                )
+            ),
+        )
         youtube.sign_in("firefox")
+
+        assert not youtube.premium_observed()
+        assert youtube.cookie_options() == {}
+
+    def test_signing_out_deletes_it(self, config_home, monkeypatch):
+        self._save_a_session(monkeypatch, kbps=256)
 
         assert youtube.forget()
         assert not youtube.is_signed_in()
         assert not youtube.forget(), "reported deleting something twice"
+
+    def test_signing_out_forgets_that_the_account_had_premium(self, config_home, monkeypatch):
+        """Otherwise the next session inherits the last one's verdict.
+
+        `cookie_options` decides whether to send the cookies from this flag, so
+        a stale `true` would hand a brand new, unchecked session straight to
+        yt-dlp - which is the case the flag exists to prevent.
+        """
+        from syncmypod_local import config as config_module
+
+        self._save_a_session(monkeypatch, kbps=256)
+        assert youtube.premium_observed()
+
+        youtube.forget()
+
+        assert config_module.load().youtube_premium is None
+        assert not youtube.premium_observed()
 
     def test_an_unknown_browser_is_refused_before_anything_is_read(self, config_home):
         with pytest.raises(youtube.YouTubeError, match="not a browser"):

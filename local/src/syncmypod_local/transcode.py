@@ -64,12 +64,30 @@ class Converted:
         return self.path.suffix.lstrip(".").lower()
 
 
-def prepare(source: Path, destination: Path) -> Converted:
+# What each of this application's settings asks pypodlib for.
+#
+# pypodlib's own names are about file size; these are about what the user is
+# choosing. "standard" is its `compact`, 128kbps - half the space, and the
+# bitrate most people's libraries have always been. "high" is its `high`, 256 -
+# what the iTunes Store sold, and the default here.
+#
+# `premium` maps to the same 256 encode. It is not a different encode, it is a
+# preference for a stream that needs no encode at all; when the account turns
+# out not to have Premium there is nothing to fall back to but the Opus, and
+# re-encoding that at 256 is exactly what `high` does.
+_LOSSY_QUALITY = {"standard": "compact", "high": "high", "premium": "high"}
+
+
+def prepare(source: Path, destination: Path, *, quality: str | None = None) -> Converted:
     """Return a version of *source* the open device can play.
 
     Call this only after the iPod has been opened: pypodlib decides the target
     from whichever device is current, so the answer for a 5th gen Video and a
     Classic are allowed to differ.
+
+    `quality` is one of this application's settings. Left out, the stored one
+    is read - which is what every caller in a sync does, so the setting does
+    not have to be threaded through the whole run.
     """
     from pypodlib.sync.transcoder import (
         TranscodeOptions,
@@ -78,10 +96,8 @@ def prepare(source: Path, destination: Path) -> Converted:
         transcode,
     )
 
-    # "high" is 256kbps where the default is 192. The docstring has the
-    # measurements; the short version is that this is the difference between
-    # keeping the source's top octave and rolling it off.
-    options = TranscodeOptions(ffmpeg_path=_ffmpeg_path(), lossy_quality="high")
+    lossy = _LOSSY_QUALITY.get(quality or _stored_quality(), "high")
+    options = TranscodeOptions(ffmpeg_path=_ffmpeg_path(), lossy_quality=lossy)
 
     try:
         plan = resolve_transcode_plan(source, options=options)
@@ -117,6 +133,18 @@ def prepare(source: Path, destination: Path) -> Converted:
         was_transcoded=bool(result.was_transcoded),
         target=plan.target.value,
     )
+
+
+def _stored_quality() -> str:
+    """The chosen setting, or the default if the config cannot be read."""
+    try:
+        from . import config as config_module
+
+        return config_module.load().audio_quality
+    except Exception:
+        from .config import DEFAULT_AUDIO_QUALITY
+
+        return DEFAULT_AUDIO_QUALITY
 
 
 def available() -> bool:

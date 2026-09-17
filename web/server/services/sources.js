@@ -37,7 +37,7 @@ const STALE_AFTER_MS = 30 * 60_000;
 // cannot be reached is a typo or a private playlist, and finding that out now -
 // while the user is looking at the box they just pasted into - is far better
 // than adding it and showing an error next to it forever.
-export async function addSource(userId, input) {
+export async function addSource(userId, input, { targetPlaylistId = null } = {}) {
   const text = String(input || '').trim();
   if (!text) throw new SourceError('Paste a playlist link first.');
 
@@ -59,15 +59,21 @@ export async function addSource(userId, input) {
   }
 
   const row = await one(
-    `INSERT INTO watched_sources (user_id, kind, ref, name, artwork_url, last_seen_count)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO watched_sources
+       (user_id, kind, ref, name, artwork_url, last_seen_count, target_playlist_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (user_id, kind, ref) DO UPDATE
         SET name = EXCLUDED.name,
             artwork_url = EXCLUDED.artwork_url,
             enabled = TRUE,
-            last_error = NULL
+            last_error = NULL,
+            -- A playlist named on this attempt wins; leaving the field out
+            -- keeps whatever the source was already pointed at, so re-adding a
+            -- link does not silently detach it from its playlist.
+            target_playlist_id =
+              COALESCE(EXCLUDED.target_playlist_id, watched_sources.target_playlist_id)
      RETURNING id`,
-    [userId, kind, ref, read.name, read.artworkUrl, read.tracks.length]
+    [userId, kind, ref, read.name, read.artworkUrl, read.tracks.length, targetPlaylistId]
   );
 
   // Imported straight away rather than waiting for the next check. Adding a
@@ -101,6 +107,19 @@ export async function setEnabled(userId, id, enabled) {
   const { rowCount } = await query(
     'UPDATE watched_sources SET enabled = $3 WHERE user_id = $1 AND id = $2',
     [userId, id, Boolean(enabled)]
+  );
+  return rowCount > 0;
+}
+
+// Points a source at a playlist here, or at none.
+//
+// `last_added` is cleared with it, because that badge says "this many arrived
+// last time" and the number belongs to the old destination.
+export async function setTargetPlaylist(userId, id, targetPlaylistId) {
+  const { rowCount } = await query(
+    `UPDATE watched_sources SET target_playlist_id = $3, last_added = 0
+      WHERE user_id = $1 AND id = $2`,
+    [userId, id, targetPlaylistId || null]
   );
   return rowCount > 0;
 }
@@ -188,6 +207,34 @@ export async function checkDueSources(userId) {
     );
   }
   return due.length;
+}
+
+// Every user's due sources, on a timer.
+//
+// `checkDueSources` runs when somebody opens the Sources page, which is the
+// wrong place for the whole mechanism to live: a source is meant to keep a
+// playlist here in step with one somewhere else, and that has to happen whether
+// or not anyone is looking at the page it is configured on. Followed artists
+// have had a timer since the beginning; this is the same idea for playlists.
+//
+// Ordered oldest-first and capped, so one sweep is a bounded amount of
+// outbound traffic however many sources exist.
+export async function checkAllDueSources({ limit = 40 } = {}) {
+  const due = await many(
+    `SELECT id, user_id AS "userId" FROM watched_sources
+      WHERE enabled
+        AND (last_checked_at IS NULL OR last_checked_at < now() - ($1 || ' milliseconds')::interval)
+   ORDER BY last_checked_at NULLS FIRST
+      LIMIT $2`,
+    [String(STALE_AFTER_MS), limit]
+  );
+
+  for (const source of due) {
+    await checkSource(source.userId, source.id).catch((err) => {
+      console.error(`[sources] scheduled check ${source.id} failed:`, err.message);
+    });
+  }
+  return { checked: due.length };
 }
 
 // Records where a source's tracks land, so the next check adds to the same

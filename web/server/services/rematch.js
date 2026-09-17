@@ -32,6 +32,66 @@ import { resolveTrack, saveResolvedTrack } from './resolver.js';
 
 const DEFAULT_LIMIT = 200;
 
+// ---------------------------------------------------------------------------
+// Running it without being asked
+// ---------------------------------------------------------------------------
+//
+// This used to be a button. A notice appeared above the Songs list saying "6
+// songs have no artist yet", and pressing it identified three of them - which
+// makes the button a chore rather than a choice, because nobody would ever
+// press "no thanks, leave them broken".
+//
+// The reason the second pass finds what the first missed is not cleverness. An
+// import of three hundred tracks is three hundred provider lookups in a burst,
+// and Deezer and iTunes both rate limit; a lookup that comes back empty under
+// load is indistinguishable, at the time, from a track nothing knows about. So
+// the fix is a retry, not a prompt, and it belongs after every import rather
+// than in the user's hands.
+//
+// Three properties keep it cheap and safe to run unattended:
+//
+//   * one pass per user at a time, so two imports finishing together do not
+//     start two passes over the same rows;
+//   * a pause first, so the retry does not land inside the same burst that
+//     caused the misses;
+//   * no job row. The button's pass created one, because someone was watching
+//     it. Nothing is watching this, and an import history filled with
+//     "Looking up unresolved songs" says nothing worth reading.
+const inFlight = new Set();
+
+// How long to wait after an import before retrying. Long enough for a provider
+// rate-limit window to pass, short enough that the songs are identified before
+// anyone goes looking for them.
+const RETRY_DELAY_MS = 20_000;
+
+export function scheduleRematch(userId, { delayMs = RETRY_DELAY_MS } = {}) {
+  const key = String(userId);
+  if (inFlight.has(key)) return false;
+  inFlight.add(key);
+
+  // unref, so a pending retry never holds the process open during a shutdown.
+  const timer = setTimeout(async () => {
+    try {
+      const outstanding = await countUnresolved(userId);
+      if (outstanding === 0) return;
+      const report = await rematchUnresolved(userId);
+      if (report.resolved > 0) {
+        console.log(
+          `[rematch] identified ${report.resolved} of ${report.examined} for user ${userId}`
+        );
+      }
+    } catch (err) {
+      // Nothing is waiting on this and nothing depends on it. A track that
+      // stays unresolved is exactly what it was before the pass ran.
+      console.error(`[rematch] background pass for user ${userId} failed:`, err.message);
+    } finally {
+      inFlight.delete(key);
+    }
+  }, delayMs);
+  timer.unref?.();
+  return true;
+}
+
 export async function countUnresolved(userId) {
   const row = await one(
     `SELECT count(*)::int AS n

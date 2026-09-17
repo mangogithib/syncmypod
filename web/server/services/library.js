@@ -1,4 +1,4 @@
-import { many, one } from '../db/pool.js';
+import { many, one, query } from '../db/pool.js';
 
 // Reading the library.
 //
@@ -47,6 +47,13 @@ const TRACK_COLUMNS = `
 // any device still paired - which is the question being asked ("did my last
 // sync get everything?") rather than a per-device matrix nobody wants.
 //
+// **A track that has since landed anywhere is not a failure.** That is the
+// correction, and it was reported from a real library: the Overview claimed 14
+// songs had never reached the iPod while every one of them was on it. A failed
+// row is not cleared when a later run succeeds on a *different* device, and a
+// second computer is the ordinary case rather than an exotic one. So a failure
+// only counts while no paired device holds the track.
+//
 // A LATERAL rather than a join: it must not multiply rows when a track is on
 // two devices, and the failure that matters is the newest one.
 const SYNC_FAILURE_JOIN = `
@@ -58,6 +65,14 @@ const SYNC_FAILURE_JOIN = `
        AND d.user_id = lt.user_id
        AND d.revoked_at IS NULL
        AND dt.state = 'failed'
+       AND NOT EXISTS (
+             SELECT 1
+               FROM device_tracks ok
+               JOIN devices od ON od.id = ok.device_id
+              WHERE ok.track_id = t.id
+                AND od.user_id = lt.user_id
+                AND od.revoked_at IS NULL
+                AND ok.state = 'synced')
   ORDER BY dt.synced_at DESC NULLS LAST
      LIMIT 1
   ) fail ON TRUE`;
@@ -239,15 +254,31 @@ export async function getTrack(userId, trackId) {
 // halves of the OR matter: `match_key` catches the common case, and the ISRC
 // column catches a track stored under a provider id that is now being offered
 // with an ISRC, or the reverse.
-export async function knownTracks(userId, { keys, isrcs }) {
-  if ((keys?.length ?? 0) === 0 && (isrcs?.length ?? 0) === 0) return [];
+// **Provider ids are matched against their own columns, not only the key.**
+// That was the gap. `match_key` records the *strongest* identity a track was
+// resolved under, so a recording hydrated through Deezer's /track endpoint is
+// stored as `isrc:...` - and an album listing, which returns no ISRC, arrives
+// asking about `dz:...`. Neither the key nor the ISRC matched, so an album page
+// offered to add songs that were already in the library and could not offer to
+// remove them.
+//
+// The columns are populated by the resolver and accumulate across providers, so
+// asking them directly answers the question the key cannot.
+export async function knownTracks(userId, { keys, isrcs, deezerIds, itunesIds, mbids }) {
+  const lists = [keys, isrcs, deezerIds, itunesIds, mbids];
+  if (lists.every((list) => (list?.length ?? 0) === 0)) return [];
   return many(
-    `SELECT DISTINCT t.id, t.match_key AS "matchKey", t.isrc
+    `SELECT DISTINCT t.id, t.match_key AS "matchKey", t.isrc,
+            t.deezer_id AS "deezerId", t.itunes_id AS "itunesId", t.mbid
        FROM library_tracks lt
        JOIN tracks t ON t.id = lt.track_id
       WHERE lt.user_id = $1
-        AND (t.match_key = ANY($2::text[]) OR (t.isrc IS NOT NULL AND t.isrc = ANY($3::text[])))`,
-    [userId, keys || [], isrcs || []]
+        AND (t.match_key = ANY($2::text[])
+             OR (t.isrc      IS NOT NULL AND t.isrc      = ANY($3::text[]))
+             OR (t.deezer_id IS NOT NULL AND t.deezer_id = ANY($4::text[]))
+             OR (t.itunes_id IS NOT NULL AND t.itunes_id = ANY($5::text[]))
+             OR (t.mbid      IS NOT NULL AND t.mbid::text = ANY($6::text[])))`,
+    [userId, keys || [], isrcs || [], deezerIds || [], itunesIds || [], mbids || []]
   );
 }
 
@@ -299,6 +330,93 @@ export async function listAlbums(userId, { search, limit = 60, offset = 0 } = {}
 
 // Artists represented in the library. Counts every credit, primary or featured,
 // which is the behaviour that makes a featured-artist tag worth having.
+// One album in the library, for its own page.
+//
+// Separate from listAlbums because the page needs the provider id to fetch the
+// full release with, and a library album does not always have one - an album
+// assembled from tracks resolved through iTunes carries an iTunes id and no
+// Deezer one. Looking it up is the difference between a page that shows the
+// whole record and one that shows only the four songs you happened to add.
+export async function getAlbum(userId, albumId) {
+  return one(
+    `SELECT al.id,
+            al.name,
+            al.artwork_url  AS "artworkUrl",
+            al.release_year AS "releaseYear",
+            al.total_tracks AS "totalTracks",
+            al.album_type   AS "albumType",
+            al.deezer_id    AS "deezerId",
+            al.itunes_id    AS "itunesId",
+            al.mbid,
+            aa.id           AS "artistId",
+            aa.name         AS "artistName",
+            aa.deezer_id    AS "artistDeezerId",
+            count(DISTINCT lt.track_id)::int AS "trackCount"
+       FROM albums al
+  LEFT JOIN artists aa ON aa.id = al.album_artist_id
+       JOIN tracks t   ON t.album_id = al.id
+       JOIN library_tracks lt ON lt.track_id = t.id AND lt.user_id = $1
+      WHERE al.id = $2
+   GROUP BY al.id, aa.id`,
+    [userId, albumId]
+  );
+}
+
+// Remembers a provider id worked out after the fact, so the next open is a
+// straight fetch rather than a search. Never overwrites one already stored.
+export async function rememberAlbumDeezerId(albumId, deezerId) {
+  if (!deezerId) return;
+  await query(
+    `UPDATE albums SET deezer_id = $2, updated_at = now()
+      WHERE id = $1 AND deezer_id IS NULL`,
+    [albumId, String(deezerId)]
+  );
+}
+
+// The same for an artist. The Artists list links straight to a provider page,
+// so an artist with no id there is a dead end on the one page built for
+// browsing them.
+export async function getArtistForPage(userId, artistId) {
+  return one(
+    `SELECT a.id, a.name, a.image_url AS "imageUrl", a.deezer_id AS "deezerId",
+            a.itunes_id AS "itunesId", a.mbid,
+            count(DISTINCT lt.track_id)::int AS "trackCount"
+       FROM artists a
+       JOIN track_artists ta ON ta.artist_id = a.id
+       JOIN library_tracks lt ON lt.track_id = ta.track_id AND lt.user_id = $1
+      WHERE a.id = $2
+   GROUP BY a.id`,
+    [userId, artistId]
+  );
+}
+
+export async function rememberArtistDeezerId(artistId, deezerId) {
+  if (!deezerId) return;
+  await query(
+    `UPDATE artists SET deezer_id = $2, updated_at = now()
+      WHERE id = $1 AND deezer_id IS NULL`,
+    [artistId, String(deezerId)]
+  );
+}
+
+// The library artist a provider page is about, if there is one. What lets the
+// artist page put "songs you already have" above the discography without the
+// browser having to carry an id through a link.
+export async function findArtistByDeezerId(userId, deezerId) {
+  return one(
+    `SELECT a.id, a.name,
+            count(DISTINCT lt.track_id)::int AS "trackCount"
+       FROM artists a
+       JOIN track_artists ta ON ta.artist_id = a.id
+       JOIN library_tracks lt ON lt.track_id = ta.track_id AND lt.user_id = $1
+      WHERE a.deezer_id = $2
+   GROUP BY a.id
+   ORDER BY count(DISTINCT lt.track_id) DESC
+      LIMIT 1`,
+    [userId, String(deezerId)]
+  );
+}
+
 export async function listArtists(userId, { search, limit = 100, offset = 0 } = {}) {
   const params = [userId];
   const where = ['lt.user_id = $1'];
@@ -402,10 +520,25 @@ export async function libraryStats(userId) {
        -- Tracks the local app could not put on a paired iPod. Counted here so
        -- the overview can say so: the sync knows, the server has always stored
        -- it, and until now the only way to find out was to look in the database.
+       --
+       -- Two conditions that were missing and made this number a lie. The
+       -- track has to still be in the library - removing a song left its
+       -- failure behind and the Overview kept counting it forever - and no
+       -- paired device may already hold it, because a failed row is not
+       -- cleared by a later success on another computer.
        (SELECT count(DISTINCT dt.track_id)::int
           FROM device_tracks dt
           JOIN devices d ON d.id = dt.device_id
-         WHERE d.user_id = $1 AND d.revoked_at IS NULL AND dt.state = 'failed')
+          JOIN library_tracks lt ON lt.track_id = dt.track_id AND lt.user_id = d.user_id
+         WHERE d.user_id = $1 AND d.revoked_at IS NULL AND dt.state = 'failed'
+           AND NOT EXISTS (
+                 SELECT 1
+                   FROM device_tracks ok
+                   JOIN devices od ON od.id = ok.device_id
+                  WHERE ok.track_id = dt.track_id
+                    AND od.user_id = $1
+                    AND od.revoked_at IS NULL
+                    AND ok.state = 'synced'))
          AS "syncFailed",
        -- Songs the local app looked for and could not find. Known
        -- without an iPod being attached, which is the whole point of

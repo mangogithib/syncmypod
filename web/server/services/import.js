@@ -3,6 +3,7 @@ import * as deezer from '../providers/deezer.js';
 import * as playlistReaders from '../providers/playlists.js';
 import * as sources from './sources.js';
 import { appendToPlaylist } from './playlist-writes.js';
+import { scheduleRematch } from './rematch.js';
 import { resolveAndSave } from './resolver.js';
 
 // Bulk-importing tracks into the library.
@@ -373,6 +374,7 @@ async function processItems(
     jobTotal = null,
   }
 ) {
+  let leftUnresolved = 0;
   const before = carried || { processed: 0, added: 0, skipped: 0, failed: 0 };
   const total = jobTotal ?? items.length;
   let processed = 0;
@@ -410,6 +412,7 @@ async function processItems(
       if (targetPlaylistId) await appendToPlaylist(targetPlaylistId, trackId);
 
       if (resolution.state !== 'resolved') {
+        leftUnresolved++;
         report.push({
           title: item.title,
           state: resolution.state,
@@ -463,6 +466,12 @@ async function processItems(
       finished,
     ]
   );
+
+  // Anything the catalogues did not recognise gets a second attempt, on its
+  // own, once the burst of lookups this import just made has died down. See
+  // scheduleRematch - most of what it recovers was a rate limit rather than a
+  // song nobody has heard of.
+  if (finished && leftUnresolved > 0) scheduleRematch(userId);
 
   return { added, skipped, failed };
 }

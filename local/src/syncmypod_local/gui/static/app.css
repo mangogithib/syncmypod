@@ -65,6 +65,139 @@ body {
   white-space: nowrap;
 }
 
+/* --- The pairing, in the header ----------------------------------------- */
+
+/* Who this computer is to the library, and the one action that applies to it.
+   It was a card in the grid, which gave a permanent panel to three lines that
+   never change and one button nobody presses twice. */
+.topbar-account {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--sidebar-fg);
+}
+
+.account-name {
+  font-weight: 600;
+  color: var(--sidebar-fg-strong);
+  white-space: nowrap;
+}
+
+.account-sep {
+  opacity: 0.45;
+}
+
+/* The address is the part that can be long, so it is the part that gives way.
+   On a narrow window it goes entirely: the name and the button are what the
+   header is for. */
+.account-server {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-action {
+  flex: none;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--sidebar-fg);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.account-action:hover:not(:disabled) {
+  color: var(--sidebar-fg-strong);
+  border-color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.account-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (max-width: 640px) {
+  .account-sep,
+  .account-server {
+    display: none;
+  }
+}
+
+/* --- Picking one of several --------------------------------------------- */
+
+/* The audio quality options. A radio each, with the row as the target: a 13px
+   circle is the indicator, not the thing to aim at. */
+.choices {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.choice:hover {
+  border-color: var(--border-strong);
+}
+
+/* The selected one, marked on the container rather than only on the circle -
+   :has is what lets the row know what its own input is doing. */
+.choice:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.choice input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+  flex: none;
+}
+
+.choice-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.choice-title {
+  font-weight: 600;
+}
+
+.choice-detail {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* Why an option cannot be picked, said where the option is. */
+.choice-note {
+  font-size: var(--text-xs);
+  color: var(--warn);
+  margin-top: 2px;
+}
+
+.choice-locked {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.choice-locked:hover {
+  border-color: var(--border);
+}
+
 /* --- Layout ------------------------------------------------------------- */
 
 .page {

@@ -41,26 +41,23 @@ function platformLabel(kind) {
 
 export async function renderSources(view, context) {
   const listSlot = h('div');
+  // Playlists here, so a source can be pointed at one. Loaded once for the
+  // page: every row's dropdown and the add form need the same list.
+  let playlists = [];
 
-  mount(
-    view,
-    // No heading here: the page header above already says Sources, and saying
-    // it twice is the kind of thing that makes an interface feel unconsidered.
-    h(
-      'p.page-intro',
-      'Playlists this library follows. They are re-read whenever you open this page, and anything new is added. Nothing is ever removed.'
-    ),
-    addCard(),
-    listSlot
-  );
+  mount(view, spinner('Loading sources...'));
 
-  // Names for the platform badges, before the list renders.
-  try {
-    ({ kinds: platformLabels } = await api.sources());
-  } catch {
-    // Cosmetic; the raw key is a fine fallback.
-  }
+  // Both before anything renders: the add form needs the playlist list, and
+  // the platform names label every row.
+  const [kinds, ownPlaylists] = await Promise.all([
+    api.sources().then((data) => data.kinds).catch(() => ({})),
+    api.playlists().then((data) => data.playlists).catch(() => []),
+  ]);
+  if (!context.isCurrent()) return;
+  platformLabels = kinds;
+  playlists = ownPlaylists;
 
+  mount(view, addCard(), listSlot);
   await loadSources();
 
   // --- adding ---------------------------------------------------------------
@@ -68,9 +65,27 @@ export async function renderSources(view, context) {
   function addCard() {
     const input = h('input.input', {
       type: 'text',
-      placeholder: 'Paste a playlist link from any service',
+      placeholder: 'Paste a playlist link',
+      'aria-label': 'Playlist link',
     });
     const submit = h('button.btn.btn-primary', { type: 'submit' }, icon('plus', 15), 'Follow');
+
+    // Where its songs should land.
+    //
+    // The mechanism has always been there - a source remembers a playlist and
+    // appends to it on every check - but nothing could choose one, so a source
+    // always made its own playlist named after itself. "Keep my Driving
+    // playlist in step with that one" was not expressible, which is the main
+    // thing anybody wants a source for.
+    const target = h(
+      'select.select',
+      { 'aria-label': 'Add its songs to' },
+      h('option', { value: '' }, 'A new playlist named after it')
+    );
+
+    for (const playlist of playlists) {
+      target.append(h('option', { value: String(playlist.id) }, playlist.name));
+    }
 
     return h(
       'div.card',
@@ -90,7 +105,7 @@ export async function renderSources(view, context) {
               submit.disabled = true;
               submit.textContent = 'Reading...';
               try {
-                const { source } = await api.addSource(url);
+                const { source } = await api.addSource(url, target.value || null);
                 input.value = '';
                 toast(`Now following ${source.name}.`, 'ok');
                 await loadSources();
@@ -103,15 +118,8 @@ export async function renderSources(view, context) {
               }
             },
           },
-          h(
-            'div.field',
-            h('label', 'Playlist link'),
-            input,
-            h(
-              'span.hint',
-              'Spotify, Apple Music, YouTube, YouTube Music and Deezer all work, public or unlisted. Copying the address straight out of the browser or an app’s share menu is fine, even if it points at one song inside the playlist.'
-            )
-          ),
+          h('div.field', input),
+          h('div.field', h('label', 'Add its songs to'), target),
           h('div', submit)
         )
       )
@@ -143,7 +151,7 @@ export async function renderSources(view, context) {
           ? emptyState({
               iconName: 'list',
               title: 'Nothing followed yet',
-              body: 'Paste a playlist link above and this library will keep up with it.',
+              body: 'A followed playlist is re-read every half hour, and anything new is added.',
             })
           : h('div.list', sources.map(sourceRow))
       )
@@ -191,7 +199,7 @@ export async function renderSources(view, context) {
       'button.btn.btn-sm.btn-danger',
       {
         type: 'button',
-        title: 'Stop following. Tracks already imported are kept.',
+        title: 'Stop following. Songs already imported are kept.',
         onclick: async () => {
           if (
             !window.confirm(
@@ -210,6 +218,41 @@ export async function renderSources(view, context) {
         },
       },
       icon('trash', 14)
+    );
+
+    // Which playlist here it feeds. Editable in place: pointing a source at a
+    // different playlist is the one setting it has, and it is not worth a
+    // dialog.
+    const target = h(
+      'select.select.select-sm',
+      {
+        'aria-label': `Where ${source.name} adds its songs`,
+        onchange: async () => {
+          try {
+            await api.setSourcePlaylist(source.id, target.value || null);
+            toast(
+              target.value
+                ? `New songs go to ${target.selectedOptions[0].textContent}.`
+                : 'New songs go to the library only.',
+              'ok'
+            );
+          } catch (err) {
+            toast(err.message, 'error');
+            target.value = source.targetPlaylistId ? String(source.targetPlaylistId) : '';
+          }
+        },
+      },
+      h('option', { value: '' }, 'Library only'),
+      playlists.map((playlist) =>
+        h(
+          'option',
+          {
+            value: String(playlist.id),
+            selected: String(playlist.id) === String(source.targetPlaylistId),
+          },
+          playlist.name
+        )
+      )
     );
 
     return h(
@@ -239,7 +282,13 @@ export async function renderSources(view, context) {
       source.lastAdded > 0
         ? badge(`+${formatNumber(source.lastAdded)} new`, 'ok')
         : null,
-      h('div.list-actions', h('label.checkbox', { style: { margin: 0 } }, follow), check, remove)
+      h(
+        'div.list-actions',
+        target,
+        h('label.checkbox', { style: { margin: 0 } }, follow),
+        check,
+        remove
+      )
     );
   }
 

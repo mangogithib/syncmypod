@@ -35,7 +35,7 @@ import httpx
 
 from . import config as config_module
 from . import device as device_module
-from . import downloader, ledger, tagging, transcode, workspace
+from . import downloader, ledger, tagging, transcode, workspace, youtube
 from .api import ApiError, DeviceApi
 
 logger = logging.getLogger(__name__)
@@ -345,6 +345,14 @@ def run(
         raise SyncError(
             "This computer is not paired with a library. Run: syncmypod pair <server> <code>"
         )
+
+    # A saved YouTube session goes stale on its own, and a stale one is refused
+    # rather than downgraded - so a run weeks after the last one would quietly
+    # lose the Premium stream it was set up for. Renewed here, silently, from
+    # the browser profile the sign-in kept: no window, no password, and no
+    # consequence at all if it cannot be done.
+    if youtube.ensure_fresh():
+        say("youtube-refreshed", {})
 
     with DeviceApi(stored.server_url, stored.token) as api:
         say("hello", {})

@@ -8,7 +8,6 @@ import {
   debounce,
   emptyState,
   formatDuration,
-  formatNumber,
   modal,
   notice,
   pager,
@@ -19,8 +18,12 @@ import {
 // The songs table: search, filter, sort, page, and per-track actions.
 //
 // Filter and sort state lives in the URL hash query string, so a filtered view
-// can be linked to and survives a reload. The dashboard links straight to
-// #/library?state=unresolved on the strength of that.
+// can be linked to and survives a reload. The Overview links straight to
+// #/library?state=flagged on the strength of that.
+//
+// There used to be a notice at the top offering to look up the songs with no
+// artist. It is gone, and so is the button: identifying them is now something
+// the server does on its own after every import. See services/rematch.js.
 
 export async function renderLibrary(view, context) {
   const query = readQuery();
@@ -36,6 +39,10 @@ export async function renderLibrary(view, context) {
 
   const results = h('div');
   // Outside `results`, so re-rendering the table does not take the bar with it.
+  // Two of them: a selection made at the foot of fifty rows should not need a
+  // scroll back to the top before it can be acted on, and the reverse is just
+  // as true.
+  const selectionTop = h('div', { hidden: true });
   const selectionHost = h('div', { hidden: true });
 
   // `lastData` is what the bar needs to turn selected ids back into tracks for
@@ -74,155 +81,6 @@ export async function renderLibrary(view, context) {
   );
   stateFilter.value = state.state;
 
-  offerRematch();
-
-  // Songs with a title and nothing else, offered another go.
-  //
-  // These were close to unmatchable before YouTube Music: a title on its own is
-  // not enough to identify a recording, so they were stored honestly empty and
-  // left for a human. YouTube Music answers with a real artist, which usually
-  // makes them resolvable - so the work a person would have had to do by hand
-  // is worth trying automatically first.
-  async function offerRematch() {
-    let count = 0;
-    try {
-      ({ count } = await api.unresolvedCount());
-    } catch {
-      return; // Informational; never break the page over it.
-    }
-    if (!context.isCurrent() || count === 0) {
-      mount(rematchSlot);
-      return;
-    }
-
-    const run = h(
-      'button.btn.btn-sm.btn-primary',
-      { type: 'button', onclick: () => startRematch(run) },
-      'Look them up'
-    );
-
-    mount(
-      rematchSlot,
-      notice(
-        h(
-          'div.row-between',
-          h(
-            'div',
-            h(
-              'strong',
-              `${formatNumber(count)} song${count === 1 ? ' has' : 's have'} no artist yet. `
-            ),
-            h(
-              'span',
-              'They arrived with a title and nothing else, so they will not sync. YouTube Music can usually identify them now.'
-            )
-          ),
-          run
-        ),
-        '',
-        'info'
-      )
-    );
-  }
-
-  async function startRematch(button) {
-    button.disabled = true;
-    button.textContent = 'Looking up...';
-    try {
-      const { jobId, total } = await api.rematchUnresolved();
-      watchRematch(jobId, total);
-    } catch (err) {
-      toast(err.message, 'error');
-      button.disabled = false;
-      button.textContent = 'Look them up';
-    }
-  }
-
-  // The same shape the importers use: the server works in the background and
-  // this polls, so closing the dialog does not stop it.
-  function watchRematch(jobId, total) {
-    const bar = h('div.progress-bar', { style: { width: '0%' } });
-    const line = h('p.muted', 'Starting...');
-    const detail = h('div');
-
-    let stopped = false;
-
-    modal({
-      title: 'Looking up songs with no artist',
-      // Closing stops the polling, not the work. The pass carries on
-      // server-side, same as an import.
-      onClose: () => {
-        stopped = true;
-      },
-      body: [
-        line,
-        h('div.progress', bar),
-        detail,
-        notice(
-          'Each song is looked up on YouTube Music and then checked against a real catalogue. Anything still unrecognised is left exactly as it was.',
-          '',
-          'info'
-        ),
-      ],
-    });
-
-    const poll = async () => {
-      if (stopped) return;
-      try {
-        const job = await api.importJob(jobId);
-        const percent = total > 0 ? Math.round((job.processed / total) * 100) : 0;
-        bar.style.width = `${percent}%`;
-
-        if (job.status === 'done') {
-          line.textContent =
-            job.added > 0
-              ? `Identified ${formatNumber(job.added)} of ${formatNumber(job.processed)}. ${formatNumber(job.skipped)} still unknown.`
-              : `None of the ${formatNumber(job.processed)} could be identified. They are unchanged.`;
-          if (job.report?.length) {
-            mount(
-              detail,
-              h(
-                'div.card',
-                { style: { marginTop: '12px', maxHeight: '260px', overflowY: 'auto' } },
-                h(
-                  'div.list',
-                  job.report.map((entry) =>
-                    h(
-                      'div.list-row',
-                      { style: { padding: '8px 12px' } },
-                      h(
-                        'div.list-main',
-                        h('div.small.subtle', entry.title),
-                        h('div.small', { style: { fontWeight: 500 } }, entry.reason)
-                      )
-                    )
-                  )
-                )
-              )
-            );
-          }
-          stopped = true;
-          load();
-          offerRematch();
-          context?.refreshStats?.();
-          return;
-        }
-
-        if (job.status === 'error') {
-          line.textContent = job.error || 'That stopped with an error.';
-          stopped = true;
-          return;
-        }
-
-        line.textContent = `${formatNumber(job.processed)} of ${formatNumber(total)} checked, ${formatNumber(job.added)} identified...`;
-      } catch {
-        // A dropped poll is not a failed job.
-      }
-      setTimeout(poll, 1200);
-    };
-    poll();
-  }
-
   const onSearch = debounce(() => {
     state.q = searchBox.value.trim();
     state.offset = 0;
@@ -230,14 +88,8 @@ export async function renderLibrary(view, context) {
   });
   searchBox.addEventListener('input', onSearch);
 
-  // Offered only when there is something to offer it for, and it disappears
-  // once there is not. A button that is permanently there and usually does
-  // nothing teaches people to ignore it.
-  const rematchSlot = h('div');
-
   mount(
     view,
-    rematchSlot,
     h(
       'div.toolbar',
       h('div.search-input', icon('search', 15), searchBox),
@@ -250,6 +102,7 @@ export async function renderLibrary(view, context) {
         'Add music'
       )
     ),
+    selectionTop,
     results,
     selectionHost
   );
@@ -297,10 +150,7 @@ export async function renderLibrary(view, context) {
       return emptyState({
         iconName: 'music',
         title: state.q || state.state ? 'No songs match' : 'Your library is empty',
-        body:
-          state.q || state.state
-            ? 'Try a different search, or clear the filter.'
-            : 'Search for songs to add, or import a list of tracks.',
+        body: state.q || state.state ? 'Try a different search.' : null,
         action:
           state.q || state.state
             ? h('button.btn', {
@@ -342,7 +192,15 @@ export async function renderLibrary(view, context) {
             'thead',
             h(
               'tr',
-              h('th.col-check', { 'aria-label': 'Select' }),
+              // Select-all lives here rather than as a "Select page" button in
+              // the action bar. It is where every list with checkboxes has put
+              // it, and unlike a button in the bar it can show a half-selected
+              // state - which is what makes one press mean "take the rest".
+              h(
+                'th.col-check',
+                { 'aria-label': 'Select all' },
+                selection.headerCheckbox({ label: 'Select all songs on this page' })
+              ),
               sortHeader('Title', 'title'),
               sortHeader('Artist', 'artist', '.col-artist'),
               // Classed so a phone can drop them. Title, artist and the row
@@ -487,45 +345,51 @@ export async function renderLibrary(view, context) {
   // same two things the per-row buttons offer, which is the point - a selection
   // should not be a different vocabulary.
   function renderSelectionBar() {
-    selectionBar(selectionHost, selection, {
+    selectionBar([selectionTop, selectionHost], selection, {
       total: lastData.tracks.length,
       onRender: () => renderSelectionBar(),
+      // Built per bar rather than shared: one element cannot be in two places,
+      // so a shared button would move to whichever bar rendered last.
       actions: [
-        h(
-          'button.btn.btn-sm',
-          {
-            type: 'button',
-            onclick: () => addToPlaylistDialog(selectedTracks()),
-          },
-          icon('list', 14),
-          'Add to playlist'
-        ),
+        () =>
+          h(
+            'button.btn.btn-sm',
+            {
+              type: 'button',
+              onclick: () => addToPlaylistDialog(selectedTracks()),
+            },
+            icon('list', 14),
+            'Add to playlist'
+          ),
         // Offered only when the selection contains something that is actually
         // being flagged. On a list of resolved songs it would do nothing, and a
         // button that does nothing is worse than no button.
         flaggable().length > 0
-          ? h(
-              'button.btn.btn-sm',
-              { type: 'button', onclick: () => dismissSelected(true) },
-              icon('check', 14),
-              'Stop flagging'
-            )
+          ? () =>
+              h(
+                'button.btn.btn-sm',
+                { type: 'button', onclick: () => dismissSelected(true) },
+                icon('check', 14),
+                'Stop flagging'
+              )
           : null,
         dismissed().length > 0
-          ? h(
-              'button.btn.btn-sm',
-              { type: 'button', onclick: () => dismissSelected(false) },
-              icon('warn', 14),
-              'Flag again'
-            )
+          ? () =>
+              h(
+                'button.btn.btn-sm',
+                { type: 'button', onclick: () => dismissSelected(false) },
+                icon('warn', 14),
+                'Flag again'
+              )
           : null,
-        h(
-          'button.btn.btn-sm.btn-danger',
-          { type: 'button', onclick: () => removeSelected() },
-          icon('trash', 14),
-          'Remove'
-        ),
-      ],
+        () =>
+          h(
+            'button.btn.btn-sm.btn-danger',
+            { type: 'button', onclick: () => removeSelected() },
+            icon('trash', 14),
+            'Remove'
+          ),
+      ].filter(Boolean),
     });
   }
 
@@ -549,7 +413,7 @@ export async function renderLibrary(view, context) {
       selection.clear();
       toast(
         dismiss
-          ? `${tracks.length} song${tracks.length === 1 ? '' : 's'} will no longer be flagged. They still sync, with the artist blank.`
+          ? `${tracks.length} song${tracks.length === 1 ? '' : 's'} no longer flagged.`
           : `${tracks.length} song${tracks.length === 1 ? '' : 's'} flagged again.`,
         'ok'
       );
@@ -573,8 +437,8 @@ export async function renderLibrary(view, context) {
       title: `Remove ${tracks.length} song${tracks.length === 1 ? '' : 's'}?`,
       message:
         tracks.length === 1
-          ? `"${tracks[0].title}" will be removed from your library and from any playlist it is in, and from the iPod on the next sync.`
-          : `${tracks.length} songs will be removed from your library and from any playlist they are in, and from the iPod on the next sync.`,
+          ? `"${tracks[0].title}" leaves your library, every playlist it is in, and the iPod on the next sync.`
+          : `${tracks.length} songs leave your library, every playlist they are in, and the iPod on the next sync.`,
       confirmLabel: 'Remove',
       danger: true,
     });
@@ -594,7 +458,7 @@ export async function renderLibrary(view, context) {
   async function removeTrack(track) {
     const confirmed = await confirmDialog({
       title: 'Remove from library?',
-      message: `"${track.title}" will be removed from your library and from any playlist it is in. It will also be removed from the iPod on the next sync.`,
+      message: `"${track.title}" leaves your library, every playlist it is in, and the iPod on the next sync.`,
       confirmLabel: 'Remove',
       danger: true,
     });
@@ -744,7 +608,7 @@ export function editTrackDialog(track, onSaved) {
         'div.field',
         h('label', 'Artist'),
         artistField.element,
-        h('span.hint', 'Multiple artists are joined with a comma. This is what gets written to the iPod tag.')
+        h('span.hint', 'Separate several artists with a comma.')
       ),
       h('div.field', h('label', 'Album'), albumField.element),
       h(
@@ -756,16 +620,9 @@ export function editTrackDialog(track, onSaved) {
         'div.field',
         h('label', 'Audio source link'),
         sourceUrl,
-        h(
-          'span.hint',
-          'Optional. Paste a link and the local app downloads exactly that instead of searching for a match - which is the fix when the search keeps finding the wrong recording, or finds nothing at all. It does not change the metadata above: that still comes from the catalogues.'
-        )
+        h('span.hint', 'Optional. Downloads exactly this instead of searching.')
       ),
-      notice(
-        'Saving marks this track as manually edited. Automatic resolution will then leave it alone.',
-        '',
-        'info'
-      ),
+      h('p.small.subtle', 'Saving marks this track as manually edited, and automatic resolution will leave it alone.'),
     ],
     footer: [
       h(

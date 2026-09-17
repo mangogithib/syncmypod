@@ -28,14 +28,14 @@ const PROVIDERS = [
     label: 'Deezer',
     order: 'Tried first',
     about:
-      'No account or key. Its track endpoint returns properly ordered artist credits and an ISRC, which is why it goes first.',
+      'Ordered artist credits and an ISRC, which is why it goes first.',
   },
   {
     name: 'itunes',
     label: 'iTunes',
     order: 'Second',
     about:
-      'No account or key. Strong on film and regional catalogue, but reports every artist as one combined string - correct for the iPod tag, without the structure.',
+      'Strong on film and regional catalogue. Reports every artist as one string.',
   },
   {
     name: 'musicbrainz',
@@ -44,14 +44,14 @@ const PROVIDERS = [
     offLabel: 'Not configured',
     offWarn: true,
     about:
-      'Asked only when Deezer and iTunes have no answer. It requires every client to identify itself with a contactable address and throttles those that do not, so it stays off until one is set. A fake address gets the instance blocked.',
+      'Asked only when the other two have no answer. Needs a real contact address: it throttles clients that do not identify themselves, and blocks fake ones.',
   },
   {
     name: 'youtube',
     label: 'YouTube',
     order: 'Search and import',
     about:
-      'Needs no account and no key. Powers searching and importing a public playlist link, and is the named fallback in the resolver for regional and very recent releases the licensed catalogues have not got.',
+      'Searching, playlist imports, and the fallback for releases the licensed catalogues have not got.',
   },
 ];
 
@@ -209,7 +209,7 @@ function providerCard(data, reload) {
       h(
         'p.muted',
         { style: { marginBottom: '20px' } },
-        'Every track is re-tagged against a real catalogue before it reaches the iPod, whatever source the audio came from. They are tried in the order below, each one only asked what the one above it could not answer.'
+        'Every track is re-tagged against a real catalogue before it reaches the iPod. Tried in order, each asked only what the one above could not answer.'
       ),
       h(
         'form.stack',

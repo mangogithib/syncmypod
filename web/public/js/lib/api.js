@@ -95,6 +95,13 @@ export const api = {
     request('POST', `/api/library/tracks/${trackId}/resolve`, options || {}),
   albums: (params) => request('GET', `/api/library/albums${qs(params)}`),
   artists: (params) => request('GET', `/api/library/artists${qs(params)}`),
+  // One album or artist, for its own page. The server fills in a provider id
+  // the row does not carry, so the page can show the whole release rather than
+  // only what has been added.
+  libraryAlbum: (albumId) => request('GET', `/api/library/albums/${albumId}`),
+  libraryArtist: (artistId) => request('GET', `/api/library/artists/${artistId}`),
+  libraryArtistByDeezer: (deezerId) =>
+    request('GET', `/api/library/artists/by-deezer/${encodeURIComponent(deezerId)}`),
 
   // --- playlists ---------------------------------------------------------
   playlists: () => request('GET', '/api/playlists'),
@@ -139,8 +146,6 @@ export const api = {
   deviceHistory: (deviceId) => request('GET', `/api/devices/${deviceId}/history`),
 
   // --- import ------------------------------------------------------------
-  previewTrackList: (text, order) => request('POST', '/api/import/preview', { text, order }),
-  importTrackList: (payload) => request('POST', '/api/import/track-list', payload),
   importPlaylist: (payload) => request('POST', '/api/import/playlist', payload),
   importPlatforms: () => request('GET', '/api/import/platforms'),
   importJobs: () => request('GET', '/api/import/jobs'),
@@ -151,17 +156,18 @@ export const api = {
 
   suggestArtists: (q) => request('GET', `/api/suggest/artists?q=${encodeURIComponent(q)}`),
   suggestAlbums: (q) => request('GET', `/api/suggest/albums?q=${encodeURIComponent(q)}`),
-  unresolvedCount: () => request('GET', '/api/library/unresolved/count'),
   combinedArtistCount: () => request('GET', '/api/artists/combined/count'),
   repairCombinedArtists: () => request('POST', '/api/artists/combined/repair'),
-  rematchUnresolved: () => request('POST', '/api/library/unresolved/rematch'),
 
   // --- standing sources ---------------------------------------------------
   sources: () => request('GET', '/api/sources'),
-  addSource: (url) => request('POST', '/api/sources', { url }),
+  addSource: (url, targetPlaylistId) =>
+    request('POST', '/api/sources', { url, targetPlaylistId: targetPlaylistId || null }),
   checkSource: (sourceId) => request('POST', `/api/sources/${sourceId}/check`),
   setSourceEnabled: (sourceId, enabled) =>
     request('PATCH', `/api/sources/${sourceId}`, { enabled }),
+  setSourcePlaylist: (sourceId, targetPlaylistId) =>
+    request('PATCH', `/api/sources/${sourceId}`, { targetPlaylistId: targetPlaylistId || null }),
   removeSource: (sourceId) => request('DELETE', `/api/sources/${sourceId}`),
 
   // --- instance settings -------------------------------------------------

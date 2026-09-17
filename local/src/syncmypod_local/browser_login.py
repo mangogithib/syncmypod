@@ -300,6 +300,18 @@ def profile_dir(base: Path) -> Path:
     return base / PROFILE_DIRNAME
 
 
+def has_profile(base: Path) -> bool:
+    """Whether a sign-in has already happened in a browser started here.
+
+    What makes a silent refresh possible: the profile holds the session, so
+    starting it again restores it without a password. An empty directory does
+    not count - a profile Chrome has actually written to has a Local State file
+    in it.
+    """
+    profile = profile_dir(base)
+    return profile.is_dir() and any(profile.iterdir())
+
+
 def _youtube_only(cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:
     kept = []
     for cookie in cookies:
@@ -318,12 +330,20 @@ def collect_cookies(
     *,
     timeout: float = DEFAULT_TIMEOUT,
     on_opened=None,
+    headless: bool = False,
 ) -> list[dict[str, Any]]:
     """Open a browser, wait for a YouTube sign-in, and return its cookies.
 
     Only youtube.com cookies are returned. ``on_opened`` is called with the
     browser's name once the window is up, so a caller can say what is happening
     rather than appearing to hang while somebody types a password.
+
+    ``headless`` is for renewing a session that already exists, never for
+    establishing one. Google refuses to accept a password in a browser it can
+    tell is automated, which is exactly why the sign-in window is a real one -
+    but restoring a session the profile already holds involves no password and
+    no typing, so it has no reason to appear on screen. See
+    `youtube.refresh_session`.
     """
     browser = find_browser()
     if browser is None:
@@ -337,20 +357,33 @@ def collect_cookies(
     port = _free_port()
 
     # The executable is a path this module resolved itself, never user input.
+    arguments = [
+        str(browser.executable),
+        f"--user-data-dir={profile}",
+        f"--remote-debugging-port={port}",
+        # A fresh profile otherwise opens onboarding and default-browser
+        # tabs in front of the page the user is meant to be looking at.
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--no-service-autorun",
+    ]
+    if headless:
+        # The "new" headless mode, which is a real browser without a window
+        # rather than the old separate implementation that behaved differently
+        # in ways that mattered. --disable-gpu is what keeps it quiet on
+        # Windows, where the old mode complains without it.
+        arguments += ["--headless=new", "--disable-gpu", "--window-size=1280,900"]
+    arguments.append(START_URL)
+
     process = subprocess.Popen(
-        [
-            str(browser.executable),
-            f"--user-data-dir={profile}",
-            f"--remote-debugging-port={port}",
-            # A fresh profile otherwise opens onboarding and default-browser
-            # tabs in front of the page the user is meant to be looking at.
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--no-service-autorun",
-            START_URL,
-        ],
+        arguments,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        # No console window for the browser on Windows. Without it, a silent
+        # refresh from the packaged windowed build flashes a black box.
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if sys.platform in ("win32", "cygwin")
+        else 0,
     )
 
     deadline = time.monotonic() + timeout

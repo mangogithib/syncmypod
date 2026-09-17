@@ -29,6 +29,7 @@ import { syncRoutes } from './routes/sync.js';
 import { loadSettings } from './services/app-settings.js';
 import { checkDueFollows } from './services/follows.js';
 import { failOrphanedJobs } from './services/import.js';
+import { checkAllDueSources } from './services/sources.js';
 
 const serverDir = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(serverDir, '..', 'public');
@@ -204,15 +205,35 @@ function startHousekeeping() {
     }
   };
 
+  // Followed playlists.
+  //
+  // These used to be re-read only when somebody opened the Sources page, which
+  // put the whole point of a source - a playlist here staying in step with one
+  // somewhere else - behind a page visit. A song added on a phone at lunchtime
+  // should be on the iPod that evening without anyone navigating anywhere.
+  const sources = async () => {
+    try {
+      const result = await checkAllDueSources();
+      if (result.checked > 0) console.log(`[sources] checked ${result.checked} source(s)`);
+    } catch (err) {
+      console.error('[sources]', err.message);
+    }
+  };
+
   // unref() so these timers never hold the process open during shutdown.
   setInterval(hourly, 60 * 60 * 1000).unref();
   // Followed artists are checked every six hours. New releases appear on a
   // weekly cadence, so anything more frequent is just API traffic.
   setInterval(follows, 6 * 60 * 60 * 1000).unref();
+  // Playlists change far more often than discographies, and re-reading one is
+  // a single request. Half an hour matches the staleness window the page check
+  // already uses, so the two cannot disagree about what "due" means.
+  setInterval(sources, 30 * 60 * 1000).unref();
 
   // A first pass shortly after boot rather than immediately, so startup is not
   // competing with an outbound API sweep.
   setTimeout(follows, 60 * 1000).unref();
+  setTimeout(sources, 90 * 1000).unref();
 }
 
 async function start() {

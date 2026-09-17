@@ -10,6 +10,16 @@
     <link rel="stylesheet" href="/static/app.css" />
   </head>
   <body>
+    <!--
+      The header carries the identity of the pairing: which library this
+      computer is attached to, which computer it is registered as, and the one
+      action that applies to that - unpairing it.
+
+      It used to be a card in the grid titled "Library", which listed the
+      computer's name, the server address that is already in this bar, and a
+      line reading "Audio tools: ready" that nobody has ever needed to be told.
+      A whole panel to say a thing was fine.
+    -->
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">
@@ -21,7 +31,7 @@
         </span>
         <span class="brand-name">SyncMyPod</span>
       </div>
-      <span class="topbar-meta" id="server-label"></span>
+      <div class="topbar-account" id="account"></div>
     </header>
 
     <main class="page">
@@ -30,18 +40,15 @@
         the layout; nothing in it is content, so there is no template string
         anywhere that could put a track title into the DOM as HTML.
       -->
+      <!-- Only ever visible before this computer is paired; the header takes
+           over once it is. -->
+      <section id="pairing"></section>
+
       <section class="cards">
         <article class="card" id="card-ipod">
           <h2 class="card-title">iPod</h2>
           <div class="card-body" id="ipod-body">
             <p class="muted">Looking for a device…</p>
-          </div>
-        </article>
-
-        <article class="card" id="card-library">
-          <h2 class="card-title">Library</h2>
-          <div class="card-body" id="library-body">
-            <p class="muted">Checking…</p>
           </div>
         </article>
 

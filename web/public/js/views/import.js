@@ -1,56 +1,26 @@
 import { api } from '../lib/api.js';
 import { h, mount } from '../lib/dom.js';
-import {
-  badge,
-  debounce,
-  formatNumber,
-  formatRelative,
-  modal,
-  notice,
-  toast,
-} from '../lib/ui.js';
+import { badge, formatNumber, formatRelative, modal, notice, toast } from '../lib/ui.js';
 
-// Bulk import.
+// Bulk import: a playlist link from any service, read once.
 //
-// Two boxes, neither needing an account or a key:
+// Which service it is comes from the address, so there is one box rather than
+// one per platform; the reader for each lives in providers/playlists.js.
 //
-//   * A playlist link from any service. Which one it is comes from the address;
-//     the reader for each lives in providers/playlists.js.
-//   * A pasted list of tracks, one per line. The universal route - it works for
-//     a library held anywhere, including an export, a spreadsheet, or something
-//     typed out by hand.
+// **The pasted track list is gone from this page.** It was a second box doing
+// the same job by a worse route - type "Artist - Title" on three hundred lines
+// and pick which side is which - and it made a page with one job look like a
+// page with two. The endpoint behind it is untouched, so nothing that used it
+// is broken; it simply is not the thing to offer somebody who has a playlist
+// link in their clipboard.
 //
-// The Spotify integration that used to be here needed OAuth, and went when
-// Spotify started refusing Web API access to apps whose owner is not a Premium
-// subscriber.
+// An import happens once, as the playlist is that afternoon. Sources is the
+// page for a playlist that keeps changing.
 
 export async function renderImport(view, context) {
   const jobsSlot = h('div');
 
-  mount(
-    view,
-    notice(
-      h(
-        'div',
-        h('strong', 'Every imported track is re-resolved. '),
-        h(
-          'span',
-          'Whatever you paste is treated as a hint, not as metadata. Each line is matched against a real catalogue, so a rough "Artist - Title" still lands with proper credits, artwork and a track number.'
-        )
-      ),
-      '',
-      'info'
-    ),
-    h('div.grid-2', playlistCard(), trackListCard()),
-    h(
-      'p.small.subtle',
-      { style: { marginTop: '4px' } },
-      'These import once, as the playlist is now. To keep up with a playlist that is still being added to, follow it under ',
-      h('a', { href: '#/sources' }, 'Sources'),
-      ' instead.'
-    ),
-    jobsSlot
-  );
+  mount(view, playlistCard(), jobsSlot);
 
   await loadJobs();
 
@@ -65,151 +35,14 @@ export async function renderImport(view, context) {
     }
   }
 
-  // --- pasted list ---------------------------------------------------------
-
-  function trackListCard() {
-    const textarea = h('textarea.textarea', {
-      rows: 9,
-      placeholder: 'Arijit Singh - Kesariya\nRadiohead - Karma Police\nSid Sriram - Uyire',
-      style: { fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)' },
-    });
-
-    const orderSelect = h(
-      'select.select',
-      h('option', { value: 'artist-title' }, 'Artist - Title'),
-      h('option', { value: 'title-artist' }, 'Title - Artist')
-    );
-
-    const playlistName = h('input.input', { type: 'text', placeholder: 'Optional' });
-    const previewSlot = h('div');
-    const submit = h('button.btn.btn-primary', { type: 'submit' }, 'Import list');
-
-    // Live preview of how the lines will be read.
-    //
-    // "Artist - Title" and "Title - Artist" are indistinguishable to a machine,
-    // and getting it backwards across 300 lines is tedious to undo. Showing the
-    // first few parsed rows makes the right choice obvious before committing.
-    const preview = debounce(async () => {
-      const text = textarea.value;
-      if (!text.trim()) {
-        mount(previewSlot);
-        return;
-      }
-      try {
-        const result = await api.previewTrackList(text, orderSelect.value);
-        mount(
-          previewSlot,
-          h(
-            'div',
-            { style: { marginTop: '4px' } },
-            h(
-              'div.small.muted',
-              { style: { marginBottom: '6px' } },
-              `${formatNumber(result.total)} line${result.total === 1 ? '' : 's'} understood as:`
-            ),
-            h(
-              'div.card',
-              h(
-                'div.list',
-                result.sample.map((entry) =>
-                  h(
-                    'div.list-row',
-                    { style: { padding: '6px 12px' } },
-                    h(
-                      'div.list-main',
-                      h('div.small', { style: { fontWeight: 500 } }, entry.title || '(no title)'),
-                      h('div.small.subtle', entry.artist || 'no artist - will search on title alone')
-                    )
-                  )
-                )
-              )
-            ),
-            result.total > result.sample.length
-              ? h('div.small.subtle', { style: { marginTop: '6px' } },
-                  `and ${formatNumber(result.total - result.sample.length)} more`)
-              : null
-          )
-        );
-      } catch (err) {
-        mount(previewSlot, notice(err.message, 'danger', 'warn'));
-      }
-    }, 400);
-
-    textarea.addEventListener('input', preview);
-    orderSelect.addEventListener('change', preview);
-
-    return h(
-      'div.card',
-      h('div.card-head', h('h2', 'Paste a list of tracks'), h('div.spacer'), badge('No account needed', 'ok')),
-      h(
-        'div.card-body',
-        h(
-          'form.stack',
-          {
-            onsubmit: async (event) => {
-              event.preventDefault();
-              if (!textarea.value.trim()) {
-                toast('Paste some tracks first.', 'error');
-                return;
-              }
-              submit.disabled = true;
-              try {
-                const name = playlistName.value.trim();
-                const response = await api.importTrackList({
-                  text: textarea.value,
-                  order: orderSelect.value,
-                  playlistName: name || undefined,
-                  createPlaylist: Boolean(name),
-                });
-                watchJob(response.jobId, name || 'Pasted list');
-                textarea.value = '';
-                playlistName.value = '';
-                mount(previewSlot);
-              } catch (err) {
-                toast(err.message, 'error');
-              } finally {
-                submit.disabled = false;
-              }
-            },
-          },
-          h(
-            'div.field',
-            h('label', 'One track per line'),
-            textarea,
-            h(
-              'span.hint',
-              'Also accepts tab-separated columns and quoted CSV, so a spreadsheet or a Spotify export pasted straight in will work.'
-            )
-          ),
-          h('div.field', h('label', 'Each line reads as'), orderSelect),
-          previewSlot,
-          h(
-            'div.field',
-            h('label', 'Also create a playlist called'),
-            playlistName,
-            h('span.hint', 'Leave blank to add to your library only. An existing playlist with the same name is added to rather than duplicated.')
-          ),
-          h('div', submit)
-        )
-      )
-    );
-  }
-
-  // --- any playlist link ---------------------------------------------------
-
-  // One box for every service.
-  //
-  // There used to be a card each for Deezer and YouTube, which asked the user to
-  // classify their own link before pasting it. The address already says which
-  // service it is, so the box reads it and gets on with it. Adding a platform
-  // is a reader in providers/playlists.js and a line in this hint.
   function playlistCard() {
     const input = h('input.input', {
       type: 'text',
-      placeholder: 'Paste a playlist link from any service',
+      placeholder: 'Paste a playlist link',
+      'aria-label': 'Playlist link',
     });
     const createPlaylist = h('input', { type: 'checkbox', checked: true });
-    const submit = h('button.btn.btn-primary', { type: 'submit' }, 'Import playlist');
+    const submit = h('button.btn.btn-primary', { type: 'submit' }, 'Import');
     const platformSlot = h('div.small.subtle', { style: { marginTop: '6px' } });
 
     // Filled from the server rather than hardcoded here, so this list cannot
@@ -217,23 +50,13 @@ export async function renderImport(view, context) {
     api
       .importPlatforms()
       .then(({ platforms }) => {
-        mount(
-          platformSlot,
-          h('span', 'Works with '),
-          h('strong', platforms.map((p) => p.label).join(', ')),
-          h('span', '.')
-        );
+        mount(platformSlot, h('span', platforms.map((p) => p.label).join(', ')));
       })
       .catch(() => {});
 
     return h(
       'div.card',
-      h(
-        'div.card-head',
-        h('h2', 'Import a playlist'),
-        h('div.spacer'),
-        badge('No account needed', 'ok')
-      ),
+      h('div.card-head', h('h2', 'Import a playlist'), h('div.spacer'), badge('No account needed', 'ok')),
       h(
         'div.card-body',
         h(
@@ -258,34 +81,19 @@ export async function renderImport(view, context) {
                 toast(err.message, 'error');
               } finally {
                 submit.disabled = false;
-                submit.textContent = 'Import playlist';
+                submit.textContent = 'Import';
               }
             },
           },
-          h(
-            'div.field',
-            h('label', 'Playlist link'),
-            input,
-            h(
-              'span.hint',
-              'The playlist must be public or unlisted. Copying the address straight out of the browser or an app\u2019s share menu works, even if it points at one song inside the playlist.'
-            ),
-            platformSlot
-          ),
+          h('div.field', input, platformSlot),
           h('label.checkbox', createPlaylist, h('span', 'Recreate it as a playlist here')),
-          notice(
-            h(
-              'div',
-              h('strong', 'Every track is checked against a real catalogue first. '),
-              h(
-                'span',
-                'Credits from a music service - Spotify, Apple Music, Deezer - are records, so they survive even when a track cannot be matched. A YouTube playlist is a list of videos, so its titles are only ever used as a search: those tracks arrive with a title alone until you fill the artist in.'
-              )
-            ),
-            '',
-            'info'
-          ),
-          h('div', submit)
+          h('div', submit),
+          h(
+            'p.small.subtle',
+            'This imports once. To keep up with a playlist that is still changing, follow it under ',
+            h('a', { href: '#/sources' }, 'Sources'),
+            '.'
+          )
         )
       )
     );
@@ -310,7 +118,7 @@ export async function renderImport(view, context) {
         statusLine,
         h('div.progress', progressBar),
         detail,
-        notice('This runs on the server. You can close this and it will carry on.', '', 'info'),
+        h('p.small.subtle', 'This runs on the server. You can close this and it will carry on.'),
       ],
     });
 
@@ -336,13 +144,20 @@ export async function renderImport(view, context) {
         }
 
         // Per-item problems, once there is a final answer to report.
+        //
+        // No "fix them in the library" line any more: songs that arrive with a
+        // title and nothing else are looked up again on their own a moment
+        // later, so most of this list resolves itself. See services/rematch.js.
         if (job.status === 'done' && Array.isArray(job.report) && job.report.length > 0) {
           mount(
             detail,
             h(
               'div',
-              h('p.small', { style: { fontWeight: 600, margin: '8px 0' } },
-                `${job.report.length} track${job.report.length === 1 ? '' : 's'} need attention:`),
+              h(
+                'p.small',
+                { style: { fontWeight: 600, margin: '8px 0' } },
+                `${job.report.length} track${job.report.length === 1 ? '' : 's'} could not be matched yet:`
+              ),
               h(
                 'div.card',
                 h(
@@ -359,11 +174,7 @@ export async function renderImport(view, context) {
                     )
                   )
                 )
-              ),
-              h('p.small.subtle', { style: { marginTop: '8px' } },
-                h('span', 'Fix them in '),
-                h('a', { href: '#/library?state=unresolved' }, 'the library'),
-                h('span', '.'))
+              )
             )
           );
         }
@@ -396,10 +207,14 @@ export async function renderImport(view, context) {
     poll();
   }
 
+  // The last 25, which is what the server returns. Older ones are of no use:
+  // an import is a thing that happened, and the report that mattered was shown
+  // while it was running.
   function jobHistory(jobs) {
     const sourceLabel = {
       'track-list': 'Pasted list',
       'deezer-playlist': 'Deezer playlist',
+      rematch: 'Looked up missing artists',
     };
 
     return h(
@@ -408,7 +223,7 @@ export async function renderImport(view, context) {
       h('div.card-head', h('h2', 'Recent imports')),
       h(
         'div.list',
-        jobs.map((job) =>
+        jobs.slice(0, 25).map((job) =>
           h(
             'div.list-row',
             h(
@@ -432,5 +247,4 @@ export async function renderImport(view, context) {
       )
     );
   }
-
 }

@@ -179,7 +179,7 @@ a:hover { text-decoration: underline; }
 }
 
 .footer-brand { font-weight: 600; color: var(--text-muted); }
-.footer-sep { opacity: 0.5; }
+.footer-version { font-variant-numeric: tabular-nums; }
 
 /* ---------------------------------------------------------------------------
    Metadata providers
@@ -601,7 +601,38 @@ tr:hover .row-check,
 .list-row:hover .row-check,
 .row-check:focus-visible,
 .row-check:checked,
+.row-check:indeterminate,
 .selecting .row-check {
+  opacity: 1;
+}
+
+/* Select-all, in the column header. Same rules as a row's box - invisible on a
+   list nobody is selecting from, shown on hover so it can be found, and always
+   shown once a selection is running. A partly-selected list shows it in the
+   indeterminate state, which is what makes one press mean "take the rest". */
+.row-check-all { cursor: pointer; }
+thead tr:hover .row-check-all { opacity: 1; }
+
+/* The same thing above a flex list, which has no column headings of its own.
+   Quiet to the point of invisibility until it is wanted: it sits above rows
+   somebody is usually only reading. */
+.list-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  min-height: 34px;
+}
+.list-head-label {
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+  opacity: 0;
+  transition: opacity 90ms var(--ease);
+}
+.list-head:hover .row-check-all,
+.list-head:hover .list-head-label,
+.selecting .list-head-label {
   opacity: 1;
 }
 
@@ -627,7 +658,10 @@ tr.row-selected > td,
 }
 
 /* Floats over the foot of the view: it must not move the rows being selected,
-   and on a phone it needs to be where a thumb already is. */
+   and on a phone it needs to be where a thumb already is.
+   There are two of them - see selectionBar() - so a selection made at the top
+   of a long list is actionable without scrolling to the bottom, and the other
+   way round. */
 .selection-bar {
   position: sticky;
   bottom: var(--space-4);
@@ -642,6 +676,14 @@ tr.row-selected > td,
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-lg);
+}
+
+/* The upper one sticks to the top of the viewport instead, under the topbar. */
+.selection-bar-top {
+  position: sticky;
+  top: var(--space-3);
+  bottom: auto;
+  margin: 0 0 var(--space-3);
 }
 
 .selection-count { font-size: var(--text-sm); color: var(--text-muted); }
@@ -1231,6 +1273,25 @@ code {
 .segmented .btn {
   flex: 1 1 0;
   min-width: 0;
+}
+
+/* The icon-only variant, for a view switch sitting in a toolbar. It must not
+   stretch the way the two-tab version does - there is nothing to read in it,
+   so a full-width button would be a large target for a small decision. */
+.segmented-sm { margin-bottom: 0; gap: 0; }
+.segmented-sm .btn {
+  flex: none;
+  padding: 6px 10px;
+  border-radius: 0;
+}
+.segmented-sm .btn:first-child {
+  border-top-left-radius: var(--radius);
+  border-bottom-left-radius: var(--radius);
+}
+.segmented-sm .btn:last-child {
+  border-top-right-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+  margin-left: -1px;
 }
 
 /* --- Name suggestions ----------------------------------------------------- */

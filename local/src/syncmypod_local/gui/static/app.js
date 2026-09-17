@@ -69,14 +69,13 @@ async function refreshState() {
     return null;
   }
 
-  el("server-label").textContent = data.paired ? data.server : "Not paired";
   // Reflected from the stored setting rather than left at the markup's default,
   // so a box the user unticked last time is still unticked.
   if (typeof data.backupBeforeSync === "boolean") {
     el("opt-backup").checked = data.backupBeforeSync;
   }
+  renderAccount(data);
   renderIpod(data);
-  renderLibrary(data);
   renderYouTube(data);
 
   // Both halves have to be present before a sync can do anything: an iPod to
@@ -142,34 +141,44 @@ function renderIpod(data) {
   body.append(line);
 }
 
-function renderLibrary(data) {
-  const body = el("library-body");
-  clear(body);
+function renderAccount(data) {
+  const host = el("account");
+  clear(host);
 
   if (!data.paired) {
-    renderPairingForm(body);
+    // Nothing to show up here until there is a pairing. The form goes in the
+    // page, where there is room for it.
+    renderPairingForm(el("pairing"));
     return;
   }
+  clear(el("pairing"));
 
-  body.append(node("p", "device-name", data.deviceName || "This computer"));
-  body.append(node("p", "subtle", data.server));
+  host.append(
+    node("span", "account-name", data.deviceName || "This computer"),
+    node("span", "account-sep", "·"),
+    node("span", "account-server", data.server)
+  );
 
-  const rows = node("dl", "rows");
-  row(rows, "Audio tools", data.ffmpeg.found ? "ready" : "missing");
-  body.append(rows);
-
-  const unpair = node("button", "link-button", "Unpair this computer");
+  const unpair = node("button", "account-action", "Unpair");
   unpair.type = "button";
-  unpair.style.marginTop = "12px";
+  unpair.title = "Forget this library on this computer";
   unpair.addEventListener("click", async () => {
     unpair.disabled = true;
     await api("/api/unpair", { method: "POST", body: "{}" }).catch(() => {});
     refreshState();
   });
-  body.append(unpair);
+  host.append(unpair);
 
+  // ffmpeg only gets a word when it is missing.
+  //
+  // It had a row of its own reading "Audio tools: ready", which is a line of
+  // text that is true on every machine the application works on - so it was
+  // only ever noise, and the one case it existed for was the case where it
+  // says something else. That case is a failure, and a failure belongs where
+  // failures go rather than in a status line nobody reads.
   if (!data.ffmpeg.found) {
-    body.append(
+    const body = el("youtube-body");
+    body.prepend(
       node(
         "p",
         "notice notice-danger",
@@ -190,13 +199,17 @@ function renderLibrary(data) {
   traded for a device token, exactly as the command did it.
 */
 
-function renderPairingForm(body) {
-  body.append(node("p", "device-name", "Not paired"));
+function renderPairingForm(host) {
+  clear(host);
+  const body = node("article", "card card-pair");
+  host.append(body);
+
+  body.append(node("h2", "card-title", "Pair this computer"));
   body.append(
     node(
       "p",
       "subtle",
-      "Generate a pairing code in your library's web interface, under Devices."
+      "Generate a code in your library's web interface, under Devices."
     )
   );
 
@@ -256,47 +269,142 @@ function labelled(text, control) {
 /* -- audio source -------------------------------------------------------- */
 
 /*
-  Signed out, YouTube hands over one AAC stream at about 128kbps; a Premium
-  account is offered the same recording at 256. That difference is the only
-  thing this card exists to communicate, so the bitrate is the headline and
-  everything else is support for it.
+  What gets written to the iPod, as a choice rather than a paragraph.
 
-  The bitrate is not fetched on page load. Asking YouTube costs a request and a
-  couple of seconds, and the page should open immediately - so it shows whether
-  a session is saved, and checks only when asked.
+  This card used to explain the whole policy and offer nothing: several
+  sentences about Opus, AAC, Premium and browser sessions, and one button. The
+  explanation was accurate and it was also the wrong shape - it described a
+  decision that had already been made for the user, in the place where they
+  expected to make one.
+
+  There are three real options and each differs in one thing:
+
+    standard  128kbps AAC - about half the space.
+    high      256kbps AAC - the default, and what the iTunes Store sold.
+    premium   YouTube's own 256kbps AAC, copied across without re-encoding.
+
+  Only Premium asks anything of the user, which is why it is the only one with
+  a sign-in attached - and why it is disabled, with the reason stated, until a
+  check confirms the account actually has one. An option that can be picked and
+  then quietly does something else is worse than one that says it cannot be
+  picked yet.
 */
 
-let youtubeState = { signedIn: false, detail: null, premium: false };
+let youtubeState = { signedIn: false, premium: false, checked: false, detail: null };
+let audioQuality = "high";
+
+const QUALITY_OPTIONS = [
+  {
+    value: "standard",
+    title: "Standard",
+    detail: "128kbps AAC. About half the space.",
+  },
+  {
+    value: "high",
+    title: "High",
+    detail: "256kbps AAC. Recommended.",
+  },
+  {
+    value: "premium",
+    title: "Premium",
+    detail: "YouTube's own 256kbps stream, copied across without re-encoding.",
+    needsPremium: true,
+  },
+];
 
 function renderYouTube(data) {
   if (data && data.youtube) {
     youtubeState = { ...youtubeState, ...data.youtube };
   }
+  if (data && typeof data.audioQuality === "string") {
+    audioQuality = data.audioQuality;
+  }
 
   const body = el("youtube-body");
   clear(body);
 
-  const headline = youtubeState.detail
-    ? youtubeState.detail
-    : youtubeState.signedIn
-      ? "Signed in"
-      : "Opus, converted to 256kbps AAC";
-  body.append(node("p", "headline", headline));
+  const list = node("div", "choices");
+  for (const option of QUALITY_OPTIONS) list.append(qualityChoice(option));
+  body.append(list);
 
-  body.append(
-    node(
-      "p",
-      "subtle",
-      youtubeState.signedIn
-        ? "Using your saved YouTube session."
-        : "Highest quality YouTube offers for free. Premium adds a 256kbps AAC stream that needs no conversion."
-    )
-  );
+  body.append(youtubeControls());
 
+  if (youtubeState.error) {
+    body.append(node("p", "notice notice-warn", youtubeState.error));
+  }
+
+  const panel = cookieFilePanel();
+  if (panel) body.append(panel);
+}
+
+function qualityChoice(option) {
+  const locked = Boolean(option.needsPremium) && !youtubeState.premium;
+
+  const input = node("input");
+  input.type = "radio";
+  input.name = "audio-quality";
+  input.value = option.value;
+  input.checked = audioQuality === option.value;
+  input.disabled = locked;
+  input.addEventListener("change", () => {
+    if (input.checked) setQuality(option.value);
+  });
+
+  const text = node("span", "choice-text");
+  text.append(node("span", "choice-title", option.title));
+  text.append(node("span", "choice-detail", option.detail));
+  if (locked) {
+    // Why it cannot be chosen, beside the thing that cannot be chosen.
+    text.append(
+      node(
+        "span",
+        "choice-note",
+        youtubeState.signedIn
+          ? "This account has no YouTube Music Premium, so that stream is not offered to it."
+          : "Needs a YouTube Music Premium account."
+      )
+    );
+  }
+
+  const label = node("label", "choice" + (locked ? " choice-locked" : ""));
+  label.append(input, text);
+  return label;
+}
+
+async function setQuality(value) {
+  const previous = audioQuality;
+  audioQuality = value;
+  try {
+    const result = await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify({ audioQuality: value }),
+    });
+    audioQuality = result.audioQuality || value;
+  } catch (error) {
+    audioQuality = previous;
+    youtubeState = { ...youtubeState, error: error.message };
+    renderYouTube(null);
+  }
+}
+
+// The sign-in controls, which exist for exactly one reason: the Premium option.
+//
+// Signed out there is one button. Signed in the account is labelled by what it
+// is worth rather than by an address - whether it has Premium is the only
+// property of it this application can see, or has any use for.
+function youtubeControls() {
   const actions = node("div", "card-actions");
 
   if (youtubeState.signedIn) {
-    const check = node("button", "button button-small", "Check quality");
+    actions.append(
+      node(
+        "span",
+        "badge " + (youtubeState.premium ? "badge-ok" : "badge-warn"),
+        youtubeState.premium ? "Premium account" : "Signed in, no Premium"
+      )
+    );
+
+    const check = node("button", "button button-small", "Check again");
     check.type = "button";
     check.addEventListener("click", () => youtubeCall(check, "/api/youtube/check"));
     actions.append(check);
@@ -306,63 +414,43 @@ function renderYouTube(data) {
     out.addEventListener("click", async () => {
       out.disabled = true;
       await api("/api/youtube/sign-out", { method: "POST", body: "{}" }).catch(() => {});
-      youtubeState = { ...youtubeState, signedIn: false, detail: null, premium: false };
+      // Leaving Premium selected after signing out would be a setting that
+      // cannot be honoured, so it drops to the one it degrades to anyway.
+      if (audioQuality === "premium") await setQuality("high");
+      youtubeState = { signedIn: false, premium: false, checked: false, detail: null };
       renderYouTube(null);
     });
     actions.append(out);
-  } else {
-    // No browser picker. Whichever browser is signed in to YouTube is found by
-    // trying them, because "which browser are you signed in to YouTube in" is a
-    // question most people cannot answer and should not be asked.
-    const signIn = node("button", "button button-small button-primary", "Sign in to YouTube");
-    signIn.type = "button";
-    // This can take minutes: if no installed browser can be read, the server
-    // opens a browser window and waits for the sign-in to finish in it. The
-    // label has to say that, or a window appearing looks like something broke.
-    signIn.addEventListener("click", () =>
-      youtubeCall(signIn, "/api/youtube/sign-in", {}, "Waiting for sign-in…")
-    );
-    actions.append(signIn);
-
-    body.append(
-      node(
-        "p",
-        "subtle",
-        "If this computer's browser cannot hand over its session, a browser window opens - sign in to YouTube there and leave it to close itself."
-      )
-    );
-
-    // The way out when reading the browser cannot work. On Windows, Chromium
-    // seals its cookies and Firefox may not be installed, which leaves nothing
-    // for the button above to find however many times it is pressed.
-    const useFile = node("button", "button button-small", "Use a cookies.txt file");
-    useFile.type = "button";
-    useFile.addEventListener("click", () => {
-      const panel = el("youtube-cookie-file");
-      panel.hidden = !panel.hidden;
-      if (!panel.hidden) panel.querySelector("input").focus();
-    });
-    actions.append(useFile);
+    return actions;
   }
 
-  body.append(actions);
+  // No browser picker. Whichever browser is signed in to YouTube is found by
+  // trying them, because "which browser are you signed in to YouTube in" is a
+  // question most people cannot answer and should not be asked.
+  //
+  // This can take minutes: if no installed browser can be read, the server
+  // opens a browser window and waits for the sign-in to finish in it. The busy
+  // label has to say so, or a window appearing looks like something broke.
+  const signIn = node("button", "button button-small button-primary", "Sign in to YouTube");
+  signIn.type = "button";
+  signIn.addEventListener("click", () =>
+    youtubeCall(signIn, "/api/youtube/sign-in", {}, "Waiting for sign-in\u2026")
+  );
+  actions.append(signIn);
 
-  if (!youtubeState.signedIn) {
-    body.append(cookieFilePanel());
-  }
+  // The way out when reading a browser cannot work. On Windows, Chromium seals
+  // its cookies and Firefox may not be installed, which leaves nothing for the
+  // button above to find however many times it is pressed.
+  const useFile = node("button", "button button-small", "Use a cookies.txt file");
+  useFile.type = "button";
+  useFile.addEventListener("click", () => {
+    const panel = el("youtube-cookie-file");
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) panel.querySelector("input").focus();
+  });
+  actions.append(useFile);
 
-  if (youtubeState.error) {
-    body.append(node("p", "notice notice-warn", youtubeState.error));
-  }
-  if (youtubeState.signedIn && youtubeState.detail && !youtubeState.premium) {
-    body.append(
-      node(
-        "p",
-        "subtle",
-        "256kbps needs an active YouTube Music Premium subscription on that account."
-      )
-    );
-  }
+  return actions;
 }
 
 
@@ -370,6 +458,10 @@ function renderYouTube(data) {
 // the user's own machine, and a picked file arrives as bytes with its real path
 // stripped, which is precisely the thing needed here.
 function cookieFilePanel() {
+  // Nothing to import once there is a session, and the panel's own button is
+  // not rendered then either.
+  if (youtubeState.signedIn) return null;
+
   const panel = node("div", "cookie-file");
   panel.id = "youtube-cookie-file";
   panel.hidden = true;
@@ -378,7 +470,7 @@ function cookieFilePanel() {
     node(
       "p",
       "subtle",
-      "Export cookies.txt from any browser while signed in to YouTube, then give the path to it here."
+      "Export cookies.txt from a browser signed in to YouTube, then give its path here."
     )
   );
 

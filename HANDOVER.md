@@ -13,9 +13,90 @@ state of play, what was built most recently, and the eight things that were
 tried and got wrong before they were got right. Then come back to section 3,
 which is the one rule the whole design rests on.
 
-**Last updated:** 13 September 2026, end of day.
+**Last updated:** 17 September 2026, end of day.
 
 ---
+
+## 0. What changed on 17 September
+
+A pass over both halves, from a list of things noticed in use. Every item below
+was reproduced before it was changed, and the web changes were verified against
+the live instance rather than reasoned about.
+
+### Four things that were actually broken
+
+**The Overview counted songs the link could not show.** `needsAttention` counts
+"no artist, not yet accepted"; the Review link went to `state=unresolved`, which
+is the resolver's state machine. A song corrected by hand reads `manual` and can
+still have no artist, so it was counted and then missing from the list the link
+opened - clear everything the list shows and the warning stays up, with nothing
+on the page to explain why. The link now points at `state=flagged`, which is the
+same predicate the count uses.
+
+**"14 tracks did not reach the iPod" when all fourteen were on it.** Two
+conditions were missing from the count. A failed `device_tracks` row survives
+the track leaving the library, and it is not cleared by a later success on a
+*different* paired computer. Both are now excluded, in the count and in the
+`sync-failed` filter, which share a definition.
+
+**Album pages offered to add songs already in the library.** `match_key` records
+the strongest identity a track was resolved under, so a recording hydrated
+through Deezer's `/track` endpoint is stored as `isrc:...` while an album
+listing - which returns no ISRC - asks about `dz:...`. `/api/library/known` now
+matches the provider id columns as well, which is what the key cannot answer.
+
+**Signing in to YouTube without Premium broke every sync.** Reported from a real
+machine: the probe returned "YouTube returned no results to check against" and
+the sync that followed failed every track. A signed-in request is attributable
+and subject to bot checks an anonymous one is not, and without Premium the
+cookies unlock nothing - the 256kbps stream is the only thing they were ever
+for. The session is now carried only when a check has found Premium. See
+`youtube.cookie_options`.
+
+### The metadata dropdown that would not accept an answer
+
+Picking a suggestion wrote the name into the field, and writing into the field
+was what the dropdown watched for - so it looked the name up again and reopened
+under the caret. Three things fixed it: a flag so the module ignores its own
+write, a cancellable debounce so a queued lookup does not fire afterwards, and a
+generation counter for a request already in flight. A chosen artist now also
+gets its `", "` and the caret after it, ready for the next one.
+
+### Selection, which was the interaction people actually complained about
+
+- Shift-clicking the **checkbox** forced `additive` and never extended a range.
+  Tick row 1, shift-tick row 40, get two songs. It reads the shift key now.
+- Dragging a finger scrolled the page instead of selecting, because the
+  `touchmove` listener was registered `passive` and so could not call
+  `preventDefault`. It is non-passive, and prevents the scroll only while a
+  long-press drag is actually in progress - an ordinary swipe still scrolls.
+- "Select page" in the action bar became a checkbox in the column header, with
+  a real indeterminate state. Lists with no column headings got a strip of
+  their own (`selectAllRow`).
+- The action bar renders at **both** ends of the list.
+
+### The local app's window
+
+The "Library" card is gone. It gave a panel to the computer's name, the server
+address that is already in the title bar, and a line reading "Audio tools:
+ready" that is true on every machine the application works on. The name and an
+Unpair button moved into the header; ffmpeg speaks up only when it is missing.
+
+The audio card stopped explaining and started offering: three options, one
+sentence each. Premium is disabled with its reason stated until a check confirms
+the account has a subscription, because an option that can be picked and then
+quietly does something else is worse than one that says it cannot be picked yet.
+
+### What is still not tested
+
+Unchanged and still the biggest gap: **there is no JavaScript test suite.** This
+pass added roughly another 900 lines of front end. It was verified by driving
+the live instance - selection, the suggest dropdown, the album and artist pages,
+add and remove round trips - but none of that is repeatable by CI. See section 6.
+
+The local app's headless session refresh was exercised against a real profile
+and returns cleanly when the profile holds no session; the path where it *does*
+hold one has not been run, because no Premium account was available.
 
 ## 1. Where things stand
 
@@ -24,11 +105,11 @@ which is the one rule the whole design rests on.
 | Web library manager | Working, deployed, publicly reachable over HTTPS |
 | Metadata resolution | Working — Deezer → iTunes → MusicBrainz → YouTube Music. **No API keys anywhere** |
 | Search | Combined by default; YouTube Music as a named fallback |
-| Artist and album pages | Working — browse a discography before adding anything |
-| Import: a playlist link | **Spotify, Apple Music, YouTube, YouTube Music, Deezer** in one box |
-| Import: a pasted list | Working — dash, tab and CSV shapes |
-| Sources (followed playlists) | Same five services, re-read when the page is opened |
-| Re-matching songs with no artist | Working — a re-run of the resolver, merged into existing rows |
+| Artist and album pages | **One page whichever door you came through**, full release listing, Add or Remove per row. Artist pages lead with your own songs |
+| Import: a playlist link | **Spotify, Apple Music, YouTube, YouTube Music, Deezer** in one box. The only thing on the page |
+| Import: a pasted list | Endpoint still there; **taken off the Import page** — one box doing the job by a worse route |
+| Sources (followed playlists) | Same five services. **Re-read on a half-hour timer**, and each can be pointed at a playlist here |
+| Re-matching songs with no artist | **Automatic** after any import that left something unresolved. The button is gone |
 | Splitting combined artist credits | Working — checked against Deezer, so real bands survive |
 | Metadata autocomplete | Working — library names first, completing the name under the caret |
 | Followed artists | Working — future releases, optionally the back catalogue |
@@ -36,17 +117,18 @@ which is the one rule the whole design rests on.
 | Local app: the sync engine | Working, verified on real hardware — a blank restored iPod included. **Four downloads at a time** |
 | Playlists on the device | Working — **written to MHSD 3, the dataset the iPod reads.** Reconciled every sync |
 | Album art on the device | Working — verified by decoding it back off the iPod |
-| Source stream taken | **Opus since 15 September**, converted to 256kbps AAC. YouTube's free AAC is cut at 15.8kHz; the Opus runs to 20kHz. See section 5 |
+| Source stream taken | **Opus since 15 September.** YouTube's free AAC is cut at 15.8kHz; the Opus runs to 20kHz. See section 5 |
+| Audio quality setting | **New 17 September** — Standard (128), High (256, default), Premium (no re-encode). Premium is greyed out until a check confirms the subscription |
 | Audio quality on the device | **Fixed 14 September** — every AAC file was recorded as an MP3 in the iTunesDB, which is what made the iPod screech. See section 5 |
 | Backup before a sync | On by default, and **can now be turned off** — a toggle in the app, `--no-backup` on the CLI |
-| YouTube Premium sign-in (local) | Reads a browser where it can, else **opens one of its own** and takes the session from it |
+| YouTube Premium sign-in (local) | Reads a browser where it can, else **opens one of its own**. The session **renews itself headless**, and is **only sent when the account has Premium** — see section 5 |
 | Local app: GUI | Working — nothing needs a terminal. **A window of its own since 15 September**, not a browser tab |
 | Knowing what cannot be synced | **`check-matches`** searches without downloading and reports it per track, so it no longer takes a sync to find out |
 | Songs with no artist | **Unknown artist** at the top of the Artists list, 16 of them. The metadata badges are gone - see section 5 |
 | Pagination | Page size and jump-to-page, one `pager()` shared by every list |
 | A track's audio source | A link field in the metadata editor. Pasting one clears "failed to sync" and "not found" |
 | Settings | Four uniform provider rows, each with its own test. Change password is a dialog. Version in the footer |
-| Selecting several songs at once | Working — click/shift/ctrl on a pointer, long press then drag on a phone. Bulk add to playlist, remove from playlist, remove from library |
+| Selecting several songs at once | **Fixed 17 September** — shift now works on the checkbox, dragging a finger no longer scrolls the page, select-all is in the column header, and the action bar is at both ends of the list |
 | Downloadable build | **Published — 0.2.2**, built and attached by CI from the `local-v0.2.2` tag. `SyncMyPod.exe` is windowed; `syncmypod-cli.exe` is the CLI |
 | Phone layout | Working — measured at 375px, list rows included |
 | CI | Green. Parses every file, checks for undefined references, checks the api client, runs migrations |

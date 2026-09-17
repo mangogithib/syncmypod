@@ -244,10 +244,10 @@ async function pairDialog(onPaired) {
       h('div.pair-code', grouped),
       h('p.small.subtle', { style: { textAlign: 'center' } },
         h('span', 'Expires in '), countdown, h('span', '. One use only.')),
-      notice(
-        'The code is exchanged for a token stored on that computer. Your password is never saved there, and you can revoke the token at any time.',
-        '',
-        'info'
+      h(
+        'p.small.subtle',
+        { style: { textAlign: 'center' } },
+        'The code becomes a token on that computer. Your password is never saved there.'
       )
     );
 
@@ -329,7 +329,7 @@ function serverDetails(serverUrl) {
                 h('strong', 'This instance is not served over HTTPS. '),
                 h(
                   'span',
-                  'Pairing codes and tokens travel in the clear. Acceptable on a trusted private network; put it behind HTTPS before exposing it to the internet.'
+                  'Pairing codes and tokens travel in the clear. Fine on a private network, not on the internet.'
                 )
               ),
               'warn',

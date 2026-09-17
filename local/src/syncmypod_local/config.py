@@ -18,6 +18,24 @@ from platformdirs import user_config_dir
 APP_NAME = "SyncMyPod"
 CONFIG_FILENAME = "config.json"
 
+# What can go in `Config.audio_quality`, and what each one means.
+#
+#   standard  Opus, re-encoded to 128kbps AAC. Roughly half the space.
+#   high      Opus, re-encoded to 256kbps AAC. The default, and what the
+#             iTunes Store sold; measured to reproduce the source to within
+#             0.2dB in every band - see transcode.py.
+#   premium   YouTube's own 256kbps AAC stream, written across untouched. Only
+#             a YouTube Music Premium account is offered one, so this falls
+#             back to `high` on an account that is not.
+AUDIO_QUALITY_CHOICES = ("standard", "high", "premium")
+DEFAULT_AUDIO_QUALITY = "high"
+
+
+def normalise_quality(value: object) -> str:
+    """A stored or submitted quality, or the default if it is not one of them."""
+    text = str(value or "").strip().lower()
+    return text if text in AUDIO_QUALITY_CHOICES else DEFAULT_AUDIO_QUALITY
+
 
 def config_dir() -> Path:
     """The per-user config directory, chosen by the platform's own convention.
@@ -76,6 +94,26 @@ class Config:
     # so it is a setting rather than a rule.
     backup_before_sync: bool = True
 
+    # Which audio to put on the iPod. One of AUDIO_QUALITY_CHOICES.
+    #
+    # There was no setting at all, and the reasoning for that was sound as far
+    # as it went: YouTube offers one AAC stream to everybody and a second to
+    # Premium, so there is nothing to choose between. What it missed is that
+    # the *conversion* is a choice. An iPod cannot play Opus, so the Opus
+    # stream is re-encoded on the way across, and 128kbps against 256 is a real
+    # trade between space and sound on a device with a fixed disk.
+    audio_quality: str = "high"
+
+    # What the last check found the signed-in account is offered.
+    #
+    # Stored rather than re-probed, because asking costs a request and a couple
+    # of seconds and the answer changes about as often as a subscription does.
+    # It decides two things: whether the Premium option can be chosen at all,
+    # and - see youtube.cookie_options - whether the saved session is used for
+    # downloading, which it should not be when it buys nothing.
+    youtube_premium: bool | None = None
+    youtube_checked_at: float | None = None
+
     @property
     def is_paired(self) -> bool:
         return bool(self.server_url and self.token)
@@ -94,6 +132,7 @@ class Config:
             "last_ipod_name": self.last_ipod_name,
             "last_ipod_model": self.last_ipod_model,
             "backup_before_sync": self.backup_before_sync,
+            "audio_quality": self.audio_quality,
         }
 
 
@@ -122,7 +161,24 @@ def load() -> Config:
         # Absent means a config written before the setting existed, and the
         # safe reading of that is the default rather than "switched off".
         backup_before_sync=bool(raw.get("backup_before_sync", True)),
+        # An unrecognised value - hand-edited, or written by a newer build -
+        # falls back rather than being passed on to an encoder that will not
+        # understand it.
+        audio_quality=normalise_quality(raw.get("audio_quality")),
+        youtube_premium=_optional_bool(raw.get("youtube_premium")),
+        youtube_checked_at=_optional_float(raw.get("youtube_checked_at")),
     )
+
+
+def _optional_bool(value: object) -> bool | None:
+    return None if value is None else bool(value)
+
+
+def _optional_float(value: object) -> float | None:
+    try:
+        return None if value is None else float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def save(config: Config) -> Path:
@@ -143,6 +199,9 @@ def save(config: Config) -> Path:
         "last_ipod_name": config.last_ipod_name,
         "last_ipod_model": config.last_ipod_model,
         "backup_before_sync": config.backup_before_sync,
+        "audio_quality": config.audio_quality,
+        "youtube_premium": config.youtube_premium,
+        "youtube_checked_at": config.youtube_checked_at,
     }
 
     # Written to a temporary file and moved into place, so an interrupted write
