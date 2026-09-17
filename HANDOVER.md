@@ -42,15 +42,53 @@ which is the one rule the whole design rests on.
 | YouTube Premium sign-in (local) | Reads a browser where it can, else **opens one of its own** and takes the session from it |
 | Local app: GUI | Working — nothing needs a terminal. **A window of its own since 15 September**, not a browser tab |
 | Knowing what cannot be synced | **`check-matches`** searches without downloading and reports it per track, so it no longer takes a sync to find out |
+| Songs with no artist | **Unknown artist** at the top of the Artists list, 16 of them. The metadata badges are gone - see section 5 |
+| Pagination | Page size and jump-to-page, one `pager()` shared by every list |
+| A track's audio source | A link field in the metadata editor. Pasting one clears "failed to sync" and "not found" |
+| Settings | Four uniform provider rows, each with its own test. Change password is a dialog. Version in the footer |
 | Selecting several songs at once | Working — click/shift/ctrl on a pointer, long press then drag on a phone. Bulk add to playlist, remove from playlist, remove from library |
-| Downloadable build | **Published — 0.2.2**, built and attached by CI from the `local-v0.2.2` tag. `SyncMyPod.exe` is windowed; `syncmypod.exe` is the CLI |
+| Downloadable build | **Published — 0.2.2**, built and attached by CI from the `local-v0.2.2` tag. `SyncMyPod.exe` is windowed; `syncmypod-cli.exe` is the CLI |
 | Phone layout | Working — measured at 375px, list rows included |
 | CI | Green. Parses every file, checks for undefined references, checks the api client, runs migrations |
 | Connected YouTube account | **Removed.** Needed a per-instance Google client *and* a Test users entry |
 | **A web test suite** | **Still none. The biggest gap — see section 6** |
 
-About 23,900 lines: 55 JavaScript files, 17 Python modules, 8 SQL migrations.
-**285 Python tests, all passing. Zero JavaScript tests.**
+About 23,200 lines of code: 16,100 in 56 JavaScript files, 7,100 in 18 Python
+modules, plus 10 SQL migrations and the CSS.
+
+**285 Python tests, all passing. Zero JavaScript tests** - and the 15-17
+September work added roughly 1,500 lines of untested front end. See the warning
+below and section 6.
+
+### Read this before trusting the table above
+
+**The signed-in web pages have not been looked at by the person who changed
+them.** Everything listed for 15-17 September was written from the source,
+syntax-checked with `node --check`, run through `check-references.mjs` on the
+exact deployed bytes, and its queries exercised against the live database - and
+then deployed without anybody clicking through it. There is no session to log in
+with from a terminal, and no test suite to stand in for one.
+
+Two bugs reached Mohamed that way, and both were the kind only a click finds: a
+metadata save that had returned a 500 for as long as the dialog had existed, and
+a packaged executable that opened a window onto a server it had just shut down.
+Three releases in a row of the local app did not work.
+
+So: **click through it.** Particularly Artists (Unknown artist is new),
+selecting rows in Songs, the two dropdowns in the pager, and saving a metadata
+edit. Anything in that table marked as working after 14 September means "the
+code is right as far as it can be read", not "somebody used it".
+
+**And there is no excuse for not doing it.** Section 8 has carried the recipe
+the whole time and it was overlooked: make a temporary account, use the app as
+that user, delete it afterwards.
+
+```bash
+ssh root@100.96.249.123 'cd /root/syncmypod && docker compose exec app npm run create-user -- checkme "<password>"'
+```
+
+Mohamed's own password is recorded nowhere, which is the reason this kept being
+skipped - but it was never the obstacle it looked like.
 
 Swept for dead code on 13 September across all three languages - unused Python
 defs, JS exports nothing imports, CSS classes no markup carries. Three things
@@ -102,19 +140,23 @@ tracks themselves are all still in the library.
 
 <https://github.com/mangogithib/syncmypod/releases/latest>
 
-`SyncMyPod-0.1.6-windows-x64.zip`, 175MB. Unpack anywhere and run
-`syncmypod.exe`. Everything — pairing included — happens in the window that
-opens.
+`SyncMyPod-0.2.2-windows-x64.zip`, 184MB. Unpack anywhere and run
+**`SyncMyPod.exe`** - a window of its own, no console. Everything, pairing
+included, happens in it. `syncmypod-cli.exe` is beside it for commands.
 
 **Cut a release by pushing a tag, and nothing else.**
 
 ```bash
-git tag -a local-v0.1.6 -m "..." && git push origin local-v0.1.6
+git tag -a local-v0.2.2 -m "..." && git push origin local-v0.2.2
 ```
 
 `release.yml` then runs the full suite on a Windows runner, builds with
 PyInstaller and attaches the zip to a published release, so the download is the
-build the tests passed against. 0.1.6 was cut this way and it worked cleanly.
+build the tests passed against.
+
+**A green run does not mean a correct zip.** 0.2.0 and 0.2.1 were both built
+green and published without the windowed executable in them. Unzip the asset and
+check - section 7 has the one-liner.
 
 The trap is doing both: **creating a release through the API also creates the
 tag**, which fires the same workflow, which builds its own copy and replaces a
@@ -616,6 +658,38 @@ Four things that cost time or would have:
   `__Secure-*PSID` on youtube.com appears when an account is attached and not
   before. Reading the page's address instead breaks the next time Google
   changes a redirect.
+
+### The three web-side decisions worth knowing before changing that code
+
+Most of the 15-17 September front-end work is obvious from reading it. These
+three are not, and each was arrived at after the naive version was wrong.
+
+**`POST /api/library/known` compares several keys per item, not one.** The
+artist and album pages read from the providers so they work for music not added
+yet, which also meant every row offered "Add" - including the forty added last
+week - and "Add all 12" on an album owned in full reported adding twelve when it
+added none.
+
+Answering "do I have this" needs the library's own idea of identity, and
+`matchKey` prefers an ISRC and falls back to a provider id. So the same
+recording is stored as `isrc:...` when it was resolved through Deezer's track
+endpoint, which returns one, and arrives back as `dz:...` from an album
+listing, which does not. Comparing a single key misses it and offers a
+duplicate. Every key an item could plausibly have been stored under is tried,
+plus the ISRC column directly. One query, no provider calls.
+
+**A selection drops anything that scrolls off the page, and the button says
+"Select page".** Both for the same reason: a paged list cannot promise more than
+it is showing. Acting on ids the user can no longer see is how a bulk Remove
+deletes something nobody looked at, and a header checkbox that means "this page"
+while looking like "everything" is a lie with a delete button attached.
+
+**Toggling a checkbox repaints rows in place rather than re-running the view's
+loader.** The first version called `load()` on every click - a request and a
+full table rebuild to tick one box, which also threw away the scroll position.
+`createSelection` keeps a registry of the rows on screen and syncs them
+directly, which is also what makes shift-selecting forty rows one repaint
+instead of forty.
 
 ### Backing up an iPod with two identical files failed on Windows
 
@@ -1484,9 +1558,24 @@ Roughly in the order it is worth doing.
 
 ### 1. A web-side test suite, and a route smoke test first
 
-Still none, and it is now the clearest gap. Four bugs reached the user's screen
-in three days and every one would have been caught by the simplest possible
-test:
+Still none, and after 15-17 September it is not merely the clearest gap, it is
+the thing standing between this project and being trustworthy. That work added
+roughly 1,500 lines of front end - selection, a shared pager, the Unknown artist
+list, a source-link field, a rebuilt Settings page - and **not one line of it is
+covered by anything**. It was deployed on the strength of `node --check`, a
+reference check and some queries run by hand.
+
+Two bugs reached Mohamed in that window, both of the sort only a click finds:
+
+- a metadata save that had returned a 500 for as long as the dialog existed,
+  because `getTrack` selected `fail.error` without joining `fail`. The Songs
+  list *does* include the join, so the page those columns are most visible on
+  worked perfectly and the broken one was never opened;
+- a packaged executable that opened a window onto a server it had just shut
+  down, three releases running.
+
+Six bugs, then, reached the user's screen across the project's life, and every
+one would have been caught by the simplest possible test:
 
 - the Import page threw `loadJobs is not defined`;
 - a route used `rateLimit` its file never imported, and the container
@@ -1495,7 +1584,11 @@ test:
   `_req` and the new line said `req`;
 - `api.importJob` was called by two views and was never on the api client, so
   every import and every re-match died at "Lost track of the import" the
-  instant it started.
+  instant it started;
+- `getTrack` referenced a table it never joined, so every metadata save 500'd;
+- a backtick inside a SQL comment closed the JavaScript template literal around
+  it. `node --check` did catch that one before it deployed, which is exactly
+  what it is for.
 
 `scripts/check-references.mjs` now catches the first two and the fourth. It did
 **not** catch the third, and cannot: it flags identifiers *called* as functions,
@@ -1514,6 +1607,21 @@ Then unit tests, which need no new dependency - Node has `node --test`. The
 resolver, `lib/normalise.js` (`matchKey`, `scoreCandidate`, `titleOverlap`,
 `answerExplains`) and `services/artist-split.js` are pure logic with real
 regression history; the band list in section 5 is ready-made fixtures.
+
+**A tried-and-discarded idea, so it is not tried again.** A static check for
+"this query uses an alias it never joined" was written on 15 September to catch
+the `getTrack` bug class, and thrown away: it reported 202 findings on a clean
+tree. It cannot tell a query from a fragment, and `EXCLUDED`, `INSERT INTO`,
+LATERAL bodies and CTEs all look like violations. SQL alias resolution needs a
+real parser. The structural fix was better - `trackSelect(from, extraColumns)`
+returns the columns *and* the join, so there is no way to ask for one without
+the other - and a check that cries wolf gets switched off.
+
+**Getting a session for a test is the unsolved part.** Every interesting page is
+behind a login, which is exactly why none of this could be verified by hand.
+`server/scripts/create-user.js` exists and CI already runs Postgres, so a test
+can make its own user and post to `/api/auth/login` for a cookie. That is the
+first thing to build, before any page test.
 
 ### 1a. Work out what else the simulated iPod is hiding
 
@@ -1568,15 +1676,19 @@ The two things that beat it are a Premium subscription and the user's own files.
 
 ### 2a. Refetching what is already on the device
 
-Not done, and not asked for. The 453 tracks synced before 15 September were
-downloaded as 15.8kHz AAC, and the ledger correctly sees them as present, so
-they keep the quality they were synced at. Re-fetching them would mean hours of
-downloading and deleting files that are already there, which is the user's call
-rather than a default.
+Not done, and **no longer needed for the case it was written for.** The 453
+tracks synced before 15 September were downloaded as 15.8kHz AAC and the ledger
+correctly saw them as present, so they kept the quality they were synced at -
+but the device was wiped on 15 September and everything came down again through
+the fixed path. Verified on the hardware: 48kHz, 241-256kbps. Section 8 has the
+numbers.
 
-`build_plan` is where it would go - the branch that appends to
-`already_present` - paired with a removal of the old file once the new one has
-landed.
+It is still the right feature eventually, for the next time the download path
+improves and a library is too large to wipe casually. `build_plan` is where it
+goes - the branch that appends to `already_present` - paired with a removal of
+the old file once the new one has landed. Wiping is the blunt version and it
+worked here because the library was 453 tracks and a full backup existed
+first.
 
 ### 3. A "needs attention" view
 
@@ -1586,8 +1698,11 @@ than blocking. A further 7 could not be fetched at all and are a different
 problem with a different fix: a source URL rather than an artist name.
 
 Both are visible now, which they were not before 13 September: the Overview
-carries a banner for each, and the Songs filter has `state=unresolved` and
-`state=sync-failed`. What is still missing is a way to *act* on them in bulk.
+carries a banner for each, and the Songs filter has `state=no-artist` and
+`state=sync-failed`. (It was `state=unresolved` until 15 September - see
+"The metadata badges are gone" above for why the filters are named after the
+song rather than the resolver.) Acting on them in bulk arrived on 15 September
+too: select them in the Songs list.
 Re-matching has taken everything YouTube Music could identify, so the remaining
 15 genuinely need a human, and editing them one at a time from the Songs list is
 the only way at the moment. A filtered view with inline artist entry is the
@@ -1684,6 +1799,12 @@ The full suite takes about three minutes; most of it is writing and signing
 simulated iTunesDB files, which is the part worth not mocking. The tests need
 ffmpeg on `PATH` or in `_bin` — they convert audio for real.
 
+`tests/conftest.py` points `SYNCMYPOD_CONFIG_DIR` and `SYNCMYPOD_BACKUP_DIR` at
+a per-test `tmp_path`. **Do not remove that.** Without it every test that runs a
+sync takes a real iPod backup into the running user's profile, which is how a
+genuine Windows bug stayed hidden for weeks: a warm content-addressed blob store
+short-circuits the write that was failing. See section 5.
+
 ### Checking the web tool
 
 There is no test suite, so these two are the whole safety net. Run both before
@@ -1746,13 +1867,34 @@ python scripts/build.py --skip-ffmpeg   # when _bin is already populated
 Writes `local/dist/SyncMyPod-<version>-windows-x64.zip`. Pushing a `local-v*`
 tag makes CI do the same and publish a release with the zip attached.
 
-**Check the zip is actually current before handing it over.** On 11 September a
-build predating the pairing commit was described as up to date; Mohamed caught
-it. A quick check:
+The bundle contains **two** executables, and `build.py` fails if either is
+missing:
+
+| | |
+|---|---|
+| `SyncMyPod.exe` | windowed, no console. What people double-click |
+| `syncmypod-cli.exe` | the console build, for `sync`, `check-matches`, scripting |
+
+They must keep names that differ by more than case. They were `SyncMyPod` and
+`syncmypod`, which is one filename on Windows, and two releases shipped without
+the windowed one while PyInstaller reported success.
+
+**Unzip the published asset and look at it.** Twice now a release has been
+tagged, built green and announced while being wrong - once a build predating the
+pairing commit, once missing half its executables. Neither was visible from the
+outside:
 
 ```bash
-cd local/dist && unzip -p SyncMyPod-*.zip '*/_internal/**/app.js' | grep -c renderPairingForm
+# what actually shipped, straight from the release
+python -c "
+import zipfile
+z = zipfile.ZipFile('SyncMyPod-0.2.2-windows-x64.zip')
+print([n for n in z.namelist() if n.lower().endswith('.exe') and '_internal' not in n])
+"
 ```
+
+And then **run it**. Every packaged-app bug in this project was invisible until
+the exe was double-clicked.
 
 ---
 
@@ -1761,11 +1903,17 @@ cd local/dist && unzip -p SyncMyPod-*.zip '*/_internal/**/app.js' | grep -c rend
 - **The library is Mohamed's own music.** Earlier versions of this file called
   it test data; that stopped being true on 12 September. Do not clear it. The
   numbers are in section 1.
-- **15 songs have a title and no artist**, and **7 could not be fetched at
-  all.** Both are visible now - the first on the Overview and under
-  `#/library?state=unresolved`, the second under `#/library?state=sync-failed`.
-  The first needs a human to type an artist; the second needs a source URL
-  pasted on each.
+- **The library was cut from 695 tracks to 102 on 17 September**, by Mohamed,
+  using the new bulk removal. Do not read an old count in this file as current -
+  check it:
+  ```bash
+  ssh root@100.96.249.123 "cd /root/syncmypod && docker compose exec -T db     psql -U syncmypod -d syncmypod -c 'SELECT count(*) FROM library_tracks;'"
+  ```
+- **7 songs have a title and no artist**, all 7 still flagged, and **16 could
+  not be fetched at all.** The first are under Artists > Unknown artist and
+  `#/library?state=no-artist`; the second under `#/library?state=sync-failed`.
+  The first need an artist typed in, or accepting with Stop flagging; the second
+  need a source link pasted on each - which now also clears the failed badge.
 - **One device is paired**: MANR-LT001. The four older rows were revoked on
   12 September and are only of historical interest.
 - **Two different iPods have been used, and the current one is blank.** The
@@ -1775,21 +1923,39 @@ cd local/dist && unzip -p SyncMyPod-*.zip '*/_internal/**/app.js' | grep -c rend
   it exactly is `IPod.restore(snapshot_id)`.
 
   The one in use now is a **5.5th gen 80GB (MA450, serial 8K719QF4V9R,
-  `ChecksumType.NONE`)**, mounted at `D:` when plugged in. It arrived restored
-  and never synced, with no database at all - which is what produced the
-  "iTunesDB was not found" failure, see section 5. It now holds **436 tracks and
-  the "Liked" playlist with 92 of its 94**, and Mohamed has confirmed the
-  playlist shows on the device under Music > Playlists.
+  `ChecksumType.NONE`)**, mounted at `E:` on the current machine. It arrived
+  restored and never synced, with no database at all - which is what produced
+  the "iTunesDB was not found" failure, see section 5.
+
+  **It was wiped on 15 September at Mohamed's request** - all 453 tracks, their
+  files, the artwork database, the ledger and the stale Play Counts - so that
+  everything would come down again through the fixed audio path. A full snapshot
+  was taken first: `20260915T095402_411613Z`, 472 files, 1.82GB, validated. That
+  matters because some tracks cannot be re-found on YouTube; if a re-sync loses
+  something, it is recoverable from there.
+
+  **Both September fixes are now confirmed on the hardware**, read off the device
+  on 17 September after Mohamed had re-synced:
+
+  | | before | now |
+  |---|---|---|
+  | filetype in the iTunesDB | `MP3 ` on 453 AAC files | `M4A ` on all 51 |
+  | `mp3_flag` | 1 | 0 |
+  | audio | AAC-LC 44.1kHz, 128kbps | AAC-LC 48kHz, 241-256kbps |
+
+  That is the evidence the screeching fix and the Opus change actually landed,
+  rather than only passing their tests.
 - **The paired-device config on disk may be stale.** On 13 September
   `%LOCALAPPDATA%\SyncMyPod\config.json` named device "Mo Desktop", whose token
   had been revoked, while the running GUI reported itself as "MANR-LT001" and
   worked. The running process and the file disagreed and the cause was never
   established. **If the app starts up unpaired, that is why** - re-pair from the
   GUI and it is fixed.
-- **Mohamed was running 0.1.3 while 0.1.6 was being built.** Anything synced
-  from a build older than 0.1.6 writes playlists to MHSD 2 only, which undoes
-  the playlist on the device. Worth checking `syncmypod.exe --version` before
-  debugging a playlist that has gone missing again.
+- **Check which build is actually running before debugging anything.** Mohamed
+  was on 0.1.3 while 0.1.6 was being built, and on 0.1.8 while 0.2.2 existed.
+  A build older than 0.1.6 writes playlists to MHSD 2 only, which undoes the
+  playlist on the device; one older than 0.1.7 labels every AAC file as an MP3.
+  `syncmypod-cli.exe --version` settles it in a second.
 - **`local/src/syncmypod_local/_bin` holds ~149MB of ffmpeg** and `local/dist` the
   built zips. Both gitignored, both inside a OneDrive-synced folder, so they sync
   anyway. Moving the project out of OneDrive was offered and never answered;
@@ -1827,17 +1993,29 @@ Read sections 2 and 3 first - the premise, and the metadata rule. Then this.
 ### The state of play in three sentences
 
 The web tool and the local app both work end to end, and the local app is
-published as **0.1.6** with the Windows build attached to the release by CI.
-Metadata comes from four sources in a fixed order and needs no keys; playlists
-can be imported or followed from five services, also with no keys. The web half
-still has no tests at all, which is where the next bugs will come from and where
-the next work should go.
+published as **0.2.2** with the Windows build attached to the release by CI -
+`SyncMyPod.exe` for the window, `syncmypod-cli.exe` for commands. Metadata comes
+from four sources in a fixed order and needs no keys; playlists can be imported
+or followed from five services, also with no keys. The web half still has no
+tests at all, which is where the last four bugs came from and where the next
+work should go.
 
-**If you are picking this up after 13 September**, the three things most likely
-to matter are: playlists go in MHSD 3 or the iPod cannot see them; YouTube will
-block a machine that syncs a large library, and that is not the same as a track
-being missing; and the duration guard is unsatisfiable for artists with no
-"- Topic" upload, which is why the relaxed 40-second pass exists.
+**If you are picking this up after 17 September**, the five things most likely
+to matter:
+
+1. **The web front end is untested and largely unclicked.** Read "Read this
+   before trusting the table above" in section 1 before believing anything in
+   that table dated after 14 September.
+2. **Playlists go in MHSD 3** or the iPod cannot see them.
+3. **Every AAC file used to be recorded as an MP3** in the iTunesDB, which is
+   what made the iPod screech. Fixed, and old devices heal on the next sync -
+   but it is the shape of bug to expect from pypodlib 0.1.0, and `device.py`
+   now carries two such workarounds.
+4. **YouTube will block a machine that syncs a large library**, and that is not
+   the same as a track being missing. It is also why matching stays on the
+   user's machine and not on the server.
+5. **The duration guard is unsatisfiable** for artists with no "- Topic"
+   upload, which is why the relaxed 40-second pass exists.
 
 ### What was built on 12 September, and why
 
@@ -1879,7 +2057,46 @@ of chasing them.
 | Playlists reconciled every sync | A playlist edit is work even when every song is already on the device |
 | A relaxed 40s pass for longer uploads | The catalogue's duration is the release's; YouTube often has only the video, with an intro |
 
-### Fourteen things that were got wrong first
+### What was built on 14-17 September, and why
+
+Four days, in the order it happened.
+
+**The screeching, which was the reason for all of it.** Mohamed reported random
+noise on the iPod. The files were perfect - all 453 probed as AAC-LC and decoded
+without a warning - and the iTunesDB said every one of them was an MP3. A case
+mismatch inside pypodlib. Section 5 has it.
+
+**Then the obvious follow-up question**: if the files are fine, is the quality
+as good as it can be? Nobody had measured, so it was measured: YouTube's free
+AAC is brickwalled at 15.8kHz and its Opus runs to 20kHz. The download now takes
+the Opus and converts it, which **overturned a decision recorded on
+13 September** - section 4 keeps both the old reasoning and the number that
+overturned it, because an entry that simply flipped would lose why it was
+believed.
+
+**Then a long list of web UI requests**, all of which are in the status table:
+uniform Settings, multi-select with bulk actions, a real pager, the artist and
+album pages showing what you already own, a source-link field, Unknown artist
+replacing the metadata badges.
+
+**Then the local app as a real window**, which took three releases to get right
+and is the cautionary tale of the whole project. See below.
+
+**A proposal that was turned down with reasons**, and is worth not re-proposing:
+moving audio matching to the server as a background job. The goal was right and
+is met by `check-matches`; the mechanism fails on the bot check, would need a
+Google credential on a public box, and would mean porting 200 lines of tuned
+scoring to JavaScript. Section 4 has the full argument and the YouTube Data API
+route if it is ever revisited.
+
+**One question answered without writing anything:** the local app is already
+standalone and server-agnostic. No address is baked in anywhere -
+`config.server_url` defaults to `""`, the pairing form's placeholder is
+`your-server.example.org:8444`. Somebody who forks the repo, runs
+`docker compose up` and downloads the exe types their own address in and pairs.
+That was the design all along; it just had not been said out loud.
+
+### Eighteen things that were got wrong first
 
 Every one of these was written, deployed, and then corrected. They are the
 cheapest thing in this file.
@@ -1937,6 +2154,27 @@ cheapest thing in this file.
    with a permission error that reads like a real bug. Twice it sent the search
    after a "leak" of download folders that belonged to the other run. See
    section 7.
+15. **Shipping a desktop window three times before it worked.** pywebview could
+   not initialise pythonnet inside a frozen bundle (0.1.8); app mode opened a
+   window and then shut the server down under it, because a Chromium launcher
+   exits after handing off (0.1.9); and the two executables were named
+   `SyncMyPod` and `syncmypod`, which is one filename on Windows, so the
+   windowed one was silently overwritten and never shipped (0.2.0, 0.2.1). Each
+   failure was only visible by running the packaged exe, which was not done
+   until the user did it.
+16. **Believing a green build.** PyInstaller reported building both executables,
+   logged both as successful and exited zero while producing one. `build.py` now
+   checks for both by name. A build that silently produces less than it was
+   asked for is worse than one that breaks.
+17. **Writing a static SQL checker instead of fixing the structure.** It
+   reported 202 findings on clean code. `trackSelect()` - which returns the
+   columns and the join together, so one cannot be had without the other - is
+   ten lines and cannot be got wrong.
+18. **Letting the test suite write to the real user profile.** Every test that
+   ran a sync took a real iPod backup into `%LOCALAPPDATA%`. It was untidy for
+   weeks and then it hid a genuine Windows bug, because a warm blob store makes
+   that bug impossible to hit. `tests/conftest.py` isolates both directories
+   now.
 
 ### Five habits that paid for themselves
 
@@ -1959,15 +2197,43 @@ cheapest thing in this file.
   came from reasoning about pypodlib's API. Reading the raw iTunesDB, and
   writing an A/B pair to the real iPod to test a theory, is what actually
   settled both the playlist bug and the one before it.
+- **Run the thing you built.** Every bug that reached Mohamed in September was
+  in code that had been read carefully and never executed - the packaged exe,
+  the edit dialog, the artist page. The audio work went the other way: probing
+  453 real files and measuring two real streams is what found both the MP3
+  labelling and the 15.8kHz ceiling, and neither was guessable from the source.
+- **Unzip the release.** 0.2.0 and 0.2.1 were published, tagged and announced
+  without either containing the executable they existed to add. One
+  `zipfile.ZipFile(...).namelist()` would have said so in a second.
 
 ### The one thing to do next
 
-**A web test suite**: a route smoke test first, then something that runs the
-page. CI already runs Postgres for the migrations job, so booting the app
-against it and asserting no GET route returns 500 is perhaps forty lines. It
-covers three of the four bugs that have reached the user's screen. It does not
-cover the fourth - `api.importJob`, where every route was fine and the browser
-could not read them - which is the argument for the second half.
+**A web test suite.** Not because it is the most interesting work left - it is
+not - but because nothing else in this file is trustworthy without it.
 
-The web half is about 8,000 lines with no tests at all, and it is where every
-bug a user has actually seen has come from.
+The order that follows from the six bugs in section 6:
+
+1. **Get a session.** `server/scripts/create-user.js` plus a POST to
+   `/api/auth/login`. Everything worth testing is behind a login, and not having
+   one is why two days of front-end work shipped unclicked.
+2. **A route smoke test.** CI already runs Postgres for the migrations job, so
+   booting the app against it and asserting no GET route returns 500 is perhaps
+   forty lines. It catches four of the six, including the `getTrack` 500 that had
+   been live for weeks.
+3. **Something that runs the page.** The other two - `api.importJob` and every
+   UI bug - had perfectly healthy routes and a browser that could not use them.
+   A route test cannot see those.
+
+16,100 lines of JavaScript, no tests, and every bug a user has actually seen has
+come from it. Meanwhile the Python half has 285 tests and has never surprised
+anybody twice.
+
+### And one thing not to do
+
+Do not go looking for more audio quality. It was measured properly on
+15 September and the ceiling is the source: 145kbps Opus is what YouTube gives
+for free, the conversion to 256kbps AAC reproduces it to within 0.2dB, and 320k
+or ALAC buy 0.03% and 0.045% of waveform energy for 1.2x and 3.6x the space.
+Section 5 has the numbers. The only two things that raise the ceiling are a
+Premium subscription, which is already handled, and the local-files source in
+section 6.
