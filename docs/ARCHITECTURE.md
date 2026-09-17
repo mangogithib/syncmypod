@@ -157,6 +157,36 @@ library membership, playlist places and what a device is holding all move onto
 the kept row before the other is deleted, so nothing is lost and the next sync
 re-downloads nothing.
 
+#### What is folded without being asked
+
+Two rows that both have an identity is a judgement. **A placeholder against an
+identified row is not**, and that case is merged automatically by the re-match
+pass — see `identifiedTwin`.
+
+A placeholder is a row nothing recognised: all it carries is a title somebody
+typed into a video description. It is not a claim about a different recording;
+it is the absence of a claim. So when exactly one *resolved* row in the same
+library has the same normalised title, the placeholder is folded into it.
+
+Four conditions, each doing work:
+
+| Condition | What it rejects |
+|---|---|
+| The twin is `resolved` | two placeholders merging into each other |
+| Normalised titles match exactly | a song against its reprise or unplugged cut |
+| Placeholder has no artist, or shares a name | a cover — "Kagaz" by someone else keeps no name in common |
+| Exactly one candidate | two identified rows with one title, which is the ambiguous case |
+
+Artist names are compared as **token sets**, because the two sides never agree
+on spelling: the same song arrived once as `Garvit Priyansh,Jonita,Aniket` and
+once as `Garvit-Priyansh, Priyansh Srivastava, Jonita Gandhi, Garvit Soni,
+Aniket Shukla`. Words of three letters or fewer are dropped — an initial or
+"the" matching is not evidence.
+
+The ordinary route is still preferred and runs first: if the catalogue can
+identify the placeholder, `saveResolvedTrack` returns the identity's row and
+the merge happens on evidence rather than on a title.
+
 ### What decides an album on the device
 
 The album string, and the album artist beside it. Both are grouping keys, and

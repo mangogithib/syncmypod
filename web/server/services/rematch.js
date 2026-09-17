@@ -75,9 +75,10 @@ export function scheduleRematch(userId, { delayMs = RETRY_DELAY_MS } = {}) {
       const outstanding = await countUnresolved(userId);
       if (outstanding === 0) return;
       const report = await rematchUnresolved(userId);
-      if (report.resolved > 0) {
+      if (report.resolved > 0 || report.joined > 0) {
         console.log(
-          `[rematch] identified ${report.resolved} of ${report.examined} for user ${userId}`
+          `[rematch] identified ${report.resolved} and folded ${report.joined} ` +
+            `second copies, of ${report.examined} examined, for user ${userId}`
         );
       }
     } catch (err) {
@@ -194,7 +195,8 @@ async function runRematchJob(jobId, userId, limit) {
 // `onProgress` is called after each track so a job row can be kept current.
 export async function rematchUnresolved(userId, { limit = DEFAULT_LIMIT, onProgress } = {}) {
   const pending = await many(
-    `SELECT t.id, t.title, t.duration_ms AS "durationMs", t.match_key AS "matchKey"
+    `SELECT t.id, t.title, t.duration_ms AS "durationMs", t.match_key AS "matchKey",
+            t.artist_credit AS "artistCredit"
        FROM tracks t
        JOIN library_tracks lt ON lt.track_id = t.id
       WHERE lt.user_id = $1 AND ${REMATCHABLE}
@@ -203,18 +205,31 @@ export async function rematchUnresolved(userId, { limit = DEFAULT_LIMIT, onProgr
     [userId, limit]
   );
 
-  const report = { examined: 0, resolved: 0, stillUnknown: 0, merged: 0, failed: 0, fixed: [] };
+  const report = {
+    examined: 0,
+    resolved: 0,
+    stillUnknown: 0,
+    merged: 0,
+    joined: 0,
+    failed: 0,
+    fixed: [],
+  };
 
   for (const track of pending) {
     report.examined++;
     try {
-      const outcome = await rematchOne(track);
+      const outcome = await rematchOne(userId, track);
       if (outcome.resolved) {
         report.resolved++;
         if (outcome.merged) report.merged++;
         if (report.fixed.length < 100) {
           report.fixed.push({ was: track.title, now: outcome.title, artist: outcome.artist });
         }
+      } else if (outcome.joined) {
+        report.joined++;
+        console.log(
+          `[rematch] "${track.title}" was a second copy of a song already in the library`
+        );
       } else {
         report.stillUnknown++;
       }
@@ -228,7 +243,7 @@ export async function rematchUnresolved(userId, { limit = DEFAULT_LIMIT, onProgr
   return report;
 }
 
-async function rematchOne(track) {
+async function rematchOne(userId, track) {
   // Just ask the resolver again.
   //
   // This used to do its own YouTube Music lookup with its own guards, because
@@ -243,7 +258,17 @@ async function rematchOne(track) {
     title: track.title,
     durationMs: track.durationMs,
   });
-  if (resolution.state !== 'resolved') return { resolved: false };
+
+  if (resolution.state !== 'resolved') {
+    // Nothing recognised it. Before giving up, ask whether the library already
+    // holds this song under a row that something *did* recognise.
+    const twin = await identifiedTwin(userId, track);
+    if (twin) {
+      await absorb(track.id, twin.id);
+      return { resolved: false, joined: true, into: twin.id };
+    }
+    return { resolved: false };
+  }
 
   const resolvedId = await saveResolvedTrack(resolution);
   const merged = String(resolvedId) !== String(track.id);
@@ -255,6 +280,70 @@ async function rematchOne(track) {
     title: resolution.track.title,
     artist: resolution.track.artists?.map((a) => a.name).join(', ') || '',
   };
+}
+
+// The row this placeholder is a second copy of, if there is exactly one.
+//
+// **Why this is allowed to act on its own where the review is not.** The
+// duplicates review compares two rows that both have an identity, and deciding
+// whether they are one recording or a song and its remaster is a judgement. This
+// is the other shape: one side is a placeholder - nothing recognised it, so all
+// it carries is a title somebody typed into a video description - and the other
+// has been confirmed against a catalogue. A placeholder is not a claim about a
+// different recording; it is the absence of a claim.
+//
+// Four conditions, and every one of them is doing work:
+//
+//   * the twin must be `resolved`, so a catalogue vouches for it. Two
+//     placeholders are never merged into each other.
+//   * the normalised titles must match exactly. Decorations stay, so a song and
+//     its reprise or unplugged version are different titles and stay apart.
+//   * the placeholder must have no artist, or share a name with the twin. This
+//     is what rejects a cover: "Kagaz" by somebody else has no name in common
+//     with "Kagaz" by Garvit-Priyansh, and stays its own song.
+//   * there must be exactly one candidate. Two identified rows with the same
+//     title is precisely the ambiguous case, and it belongs in the review.
+async function identifiedTwin(userId, track) {
+  const candidates = await many(
+    `SELECT t.id, t.artist_credit AS "artistCredit"
+       FROM library_tracks lt
+       JOIN tracks t ON t.id = lt.track_id
+      WHERE lt.user_id = $1
+        AND t.id <> $2
+        AND t.metadata_state = 'resolved'
+        AND regexp_replace(lower(t.title), '[^a-z0-9]+', '', 'g') = $3`,
+    [userId, track.id, normaliseTitle(track.title)]
+  );
+  if (candidates.length !== 1) return null;
+
+  const twin = candidates[0];
+  const mine = nameTokens(track.artistCredit);
+  if (mine.size === 0) return twin; // nothing to contradict it
+  const theirs = nameTokens(twin.artistCredit);
+  return [...mine].some((token) => theirs.has(token)) ? twin : null;
+}
+
+function normaliseTitle(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+// The words in an artist credit, for asking whether two credits name any of the
+// same people. Compared as a set rather than as a string because the two sides
+// come from different places and never agree on spelling: the same song arrived
+// once as "Garvit Priyansh,Jonita,Aniket" and once as "Garvit-Priyansh, Priyansh
+// Srivastava, Jonita Gandhi, Garvit Soni, Aniket Shukla".
+//
+// Short words are dropped. "the", "dj" and an initial are shared by artists who
+// have nothing to do with each other, and one of them matching is not evidence.
+function nameTokens(credit) {
+  return new Set(
+    String(credit || '')
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((word) => word.length > 2)
+  );
 }
 
 // Moves everything pointing at `oldId` onto `newId`, then deletes the old row.
