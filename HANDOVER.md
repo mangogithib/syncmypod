@@ -161,6 +161,35 @@ sentence each. Premium is disabled with its reason stated until a check confirms
 the account has a subscription, because an option that can be picked and then
 quietly does something else is worse than one that says it cannot be picked yet.
 
+### Measured on the hardware: Cover Flow lags the database
+
+Reported after a 0.2.4 sync - the Albums menu was right, Cover Flow still showed
+nine covers for Musafir Cafe and two for Bethlehem Kudumba Unit. Read off the
+attached device rather than reasoned about:
+
+| | Measured |
+|---|---|
+| iTunesDB | 113 tracks, **88 album entries** |
+| Musafir Cafe | **2** album entries (6 and 5 tracks) |
+| Bethlehem Kudumba Unit | **1** album entry (10 tracks) |
+| Album artist within each album | consistent on every track |
+| ArtworkDB | 97 image entries, one per track with art |
+| Embedded covers within an album | byte-identical (same SHA, same length) |
+| `iTunesControl`, `Extras.itdb` | dated **before** the sync that fixed the tags |
+
+**The current database cannot produce nine Musafir covers**: there are two
+album entries in it. So what is on screen is not being read from it. The iPod
+caches its Cover Flow carousel and had not rebuilt it. A reset (Menu + Centre)
+is the remedy; deleting `ArtworkDB` and re-syncing is the heavier one.
+
+**A real deviation found on the way, and not the cause.** pypodlib writes one
+`mhii` entry per *track*, while its own module docstring says "one per unique
+album art" - which is what iTunes writes, with many tracks linking to one
+entry. The image payloads are deduplicated in the `.ithmb` by hash, so only the
+database entries repeat. It is not what produced this symptom: Bethlehem has
+ten tracks and ten entries and showed two covers, so Cover Flow plainly does
+not enumerate them. Worth fixing upstream; worth not guessing at from here.
+
 ### A trap worth naming
 
 **A backtick inside a JavaScript template literal ends it.** Twice in one day: a
