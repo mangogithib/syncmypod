@@ -53,6 +53,44 @@ def m4a(tmp_path):
     return Path(shutil.copy(FIXTURES / "tagged.m4a", tmp_path / "track.m4a"))
 
 
+class TestAlbumGrouping:
+    """What an iPod groups a track by, which is the album and the album artist.
+
+    Fourteen songs with no album turned into fourteen "Unknown Album" tiles in
+    Cover Flow, because the album artist fell back to the track artist and that
+    became the only thing left to group on. An album artist for a track that is
+    on no album is a contradiction; written empty, they share one key.
+    """
+
+    def test_no_album_means_no_album_artist_m4a(self, m4a):
+        tagging.apply(m4a, {**TRACK, "album": None, "albumArtist": None})
+        tags = MP4(m4a)
+        assert tags.get("\xa9alb") in (None, [""], [])
+        assert tags.get("aART") in (None, [""], [])
+
+    def test_no_album_means_no_album_artist_mp3(self, mp3):
+        tagging.apply(mp3, {**TRACK, "album": None, "albumArtist": None})
+        tags = MP3(mp3).tags
+        assert "TALB" not in tags
+        assert "TPE2" not in tags
+
+    def test_an_album_with_no_album_artist_still_files_under_the_artist(self, m4a):
+        """The case the fallback was written for, and it is still right.
+
+        One artist, one album, and nothing recorded the album artist - filing
+        it under the track artist is correct and is what keeps the record
+        together on the device.
+        """
+        tagging.apply(m4a, {**TRACK, "albumArtist": None})
+        tags = MP4(m4a)
+        assert tags["\xa9alb"] == ["Longer Days"]
+        assert tags["aART"] == ["Aurora Kane, Minor Waves"]
+
+    def test_an_album_artist_is_written_when_the_manifest_has_one(self, m4a):
+        tagging.apply(m4a, TRACK)
+        assert MP4(m4a)["aART"] == ["Aurora Kane"]
+
+
 class TestSourceMetadataIsDiscarded:
     """The central rule, asserted from both directions on both formats."""
 

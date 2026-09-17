@@ -156,6 +156,9 @@ export const api = {
 
   suggestArtists: (q) => request('GET', `/api/suggest/artists?q=${encodeURIComponent(q)}`),
   suggestAlbums: (q) => request('GET', `/api/suggest/albums?q=${encodeURIComponent(q)}`),
+  duplicates: () => request('GET', '/api/library/duplicates'),
+  mergeDuplicates: (keepId, mergeIds) =>
+    request('POST', '/api/library/duplicates/merge', { keepId, mergeIds }),
   combinedArtistCount: () => request('GET', '/api/artists/combined/count'),
   repairCombinedArtists: () => request('POST', '/api/artists/combined/repair'),
 

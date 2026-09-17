@@ -47,7 +47,14 @@ export async function buildManifest(userId, deviceId) {
     `SELECT t.id,
             t.title,
             t.artist_credit  AS "artist",
-            t.album_credit   AS "album",
+            -- The resolved album name, falling back to whatever the source
+            -- called it. The two agree today, and the order still matters:
+            -- album_credit is an unverified string where albums.name is the
+            -- resolved fact, and the whole design is that the resolved fact is
+            -- what gets written. The album string is also the key an iPod
+            -- groups by, so a track carrying a different spelling of its own
+            -- album becomes a second album on the device.
+            coalesce(al.name, t.album_credit) AS "album",
             t.track_no       AS "trackNo",
             t.disc_no        AS "discNo",
             t.duration_ms    AS "durationMs",

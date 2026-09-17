@@ -282,6 +282,85 @@ export async function knownTracks(userId, { keys, isrcs, deezerIds, itunesIds, m
   );
 }
 
+// Library rows that look like the same recording twice.
+//
+// **Why the library holds a song twice at all.** A track nothing could identify
+// is keyed on its name, because there is nothing stronger to key it on. The
+// same song arriving later with an ISRC is keyed on that. Two keys, two rows,
+// and nothing reconciles them - so a playlist imported twice, or a song found
+// once through a video list and once through a catalogue, is two entries.
+//
+// The consequence reaches the iPod and is where it gets noticed: each row
+// carries its own album string, so one album becomes two on the device with the
+// songs split between them. Neither shows as a duplicate in the web tool,
+// because the unresolved row has no album row to appear under.
+//
+// **Matched on the exact normalised title, and nothing looser.** Decorations
+// are deliberately kept: "Darmiyaan" and "Darmiyaan - Unplugged" are different
+// recordings, and so are a song and its reprise. Duration is not used either -
+// the two rows for one song came from different uploads and their lengths
+// differ by twenty seconds, so a duration window would reject the very pairs
+// this is for.
+//
+// That is precision over recall on purpose. This produces a list somebody
+// looks at, so a pair it misses costs nothing and a pair it invents costs a
+// song. Merging is never automatic: an album's title track and a remaster
+// share a title, and only a person can say whether two rows are one recording.
+export async function findDuplicateGroups(userId) {
+  const rows = await many(
+    `WITH norm AS (
+       SELECT t.id,
+              t.title,
+              t.artist_credit  AS "artistCredit",
+              t.duration_ms    AS "durationMs",
+              t.metadata_state AS "metadataState",
+              t.isrc,
+              al.name          AS "albumName",
+              t.album_credit   AS "albumCredit",
+              al.artwork_url   AS "artworkUrl",
+              lt.added_at      AS "addedAt",
+              lt.source_hint   AS "sourceHint",
+              regexp_replace(lower(t.title), '[^a-z0-9]+', '', 'g') AS key
+         FROM library_tracks lt
+         JOIN tracks t   ON t.id = lt.track_id
+    LEFT JOIN albums al  ON al.id = t.album_id
+        WHERE lt.user_id = $1
+     ),
+     repeated AS (
+       SELECT key FROM norm WHERE key <> '' GROUP BY key HAVING count(*) > 1
+     )
+     SELECT n.* FROM norm n JOIN repeated r ON r.key = n.key
+      ORDER BY n.key, n.id`,
+    [userId]
+  );
+
+  const groups = new Map();
+  for (const row of rows) {
+    const { key, ...track } = row;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(track);
+  }
+
+  return [...groups.entries()].map(([key, tracks]) => ({
+    key,
+    title: tracks[0].title,
+    // Which one to keep, suggested rather than decided. Identity first, then
+    // whether it belongs to a real album, then whether it resolved at all -
+    // the same order of evidence the resolver itself ranks by.
+    suggestedKeepId: [...tracks].sort((a, b) => strength(b) - strength(a))[0].id,
+    tracks,
+  }));
+}
+
+function strength(track) {
+  let score = 0;
+  if (track.isrc) score += 8;
+  if (track.albumName) score += 4;
+  if (track.metadataState === 'resolved') score += 2;
+  if (track.metadataState === 'manual') score += 1;
+  return score;
+}
+
 export async function listAlbums(userId, { search, limit = 60, offset = 0 } = {}) {
   const params = [userId];
   const where = ['lt.user_id = $1'];

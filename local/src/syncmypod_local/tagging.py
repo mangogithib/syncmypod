@@ -148,7 +148,7 @@ def _apply_mp4(path: Path, track: dict[str, Any], artwork: Artwork | None) -> No
     _set(tags, "\xa9nam", _text(track.get("title")))
     _set(tags, "\xa9ART", _text(track.get("artist")))
     _set(tags, "\xa9alb", _text(track.get("album")))
-    _set(tags, "aART", _text(track.get("albumArtist")) or _text(track.get("artist")))
+    _set(tags, "aART", _album_artist(track))
     _set(tags, "\xa9gen", _text(track.get("genre")))
 
     year = _int(track.get("year"))
@@ -187,6 +187,27 @@ def _apply_mp4(path: Path, track: dict[str, Any], artwork: Artwork | None) -> No
 # ---------------------------------------------------------------------------
 
 
+def _album_artist(track: dict[str, Any]) -> str:
+    """Who to file the album under, or nothing when there is no album.
+
+    **An album artist without an album is the string an iPod groups by.**
+
+    That is the whole reason this is a function. Both writers used to fall back
+    to the track artist whenever the manifest carried no album artist, which is
+    right for a record whose album artist simply was not recorded - one artist,
+    one album, filed correctly.
+
+    It is wrong for a track with no album at all. Those have nothing to group
+    on but the album artist, so falling back to the track artist gave fourteen
+    album-less songs fourteen different grouping keys, and Cover Flow drew a
+    separate "Unknown Album" tile for each of them. Left empty they share one
+    key and appear once, which is what iTunes itself does.
+    """
+    if not _text(track.get("album")):
+        return ""
+    return _text(track.get("albumArtist")) or _text(track.get("artist"))
+
+
 def _apply_mp3(path: Path, track: dict[str, Any], artwork: Artwork | None) -> None:
     try:
         audio = MP3(path, ID3=ID3)
@@ -204,7 +225,7 @@ def _apply_mp3(path: Path, track: dict[str, Any], artwork: Artwork | None) -> No
     _add(tags, TIT2, _text(track.get("title")))
     _add(tags, TPE1, _text(track.get("artist")))
     _add(tags, TALB, _text(track.get("album")))
-    _add(tags, TPE2, _text(track.get("albumArtist")) or _text(track.get("artist")))
+    _add(tags, TPE2, _album_artist(track))
     _add(tags, TCON, _text(track.get("genre")))
     _add(tags, TSRC, _text(track.get("isrc")))
 

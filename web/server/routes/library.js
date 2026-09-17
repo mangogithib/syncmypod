@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import { rateLimit, requireUser } from '../auth/middleware.js';
-import { one, query, transaction } from '../db/pool.js';
+import { many, one, query, transaction } from '../db/pool.js';
 import { badRequest, handler, id, notFound, pagination, str } from '../lib/api.js';
 import { matchKey } from '../lib/normalise.js';
 import * as deezer from '../providers/deezer.js';
 import * as library from '../services/library.js';
 import { appendToPlaylist } from '../services/playlist-writes.js';
-import { countUnresolved, startRematch } from '../services/rematch.js';
+import { absorb, countUnresolved, startRematch } from '../services/rematch.js';
 import {
   resolveAndSave,
   resolveTrack,
@@ -342,6 +342,13 @@ libraryRoutes.delete(
 
 // Manual metadata correction. Sets metadata_state to 'manual', which the
 // resolver treats as sacred: automated resolution will not overwrite it.
+//
+// **Only when something actually changed.** It used to be set on every save,
+// so opening the dialog to read a track and pressing Save marked it corrected
+// by hand - and `manual` is what exempts a track from every automatic repair
+// there is. Songs sat with no artist, permanently outside the pass that exists
+// to give them one, because somebody once looked at them. A save that changes
+// nothing is not a correction.
 libraryRoutes.patch(
   '/tracks/:id',
   handler(async (req, res) => {
@@ -368,7 +375,19 @@ libraryRoutes.patch(
               genre         = COALESCE($5, genre),
               track_no      = COALESCE($6, track_no),
               disc_no       = COALESCE($7, disc_no),
-              metadata_state = 'manual',
+              -- Compared against what is stored, not against what was sent:
+              -- the dialog sends every field back whether or not it was
+              -- touched, so "something was submitted" says nothing.
+              metadata_state = CASE
+                WHEN ($2 IS NOT NULL AND $2 IS DISTINCT FROM title)
+                  OR ($3 IS NOT NULL AND $3 IS DISTINCT FROM artist_credit)
+                  OR ($4 IS NOT NULL AND $4 IS DISTINCT FROM album_credit)
+                  OR ($5 IS NOT NULL AND $5 IS DISTINCT FROM genre)
+                  OR ($6 IS NOT NULL AND $6 IS DISTINCT FROM track_no)
+                  OR ($7 IS NOT NULL AND $7 IS DISTINCT FROM disc_no)
+                THEN 'manual'
+                ELSE metadata_state
+              END,
               updated_at    = now()
         WHERE id = $1
         RETURNING id`,
@@ -485,6 +504,58 @@ libraryRoutes.post(
     });
 
     res.json({ ok: true, track: await library.getTrack(req.user.id, trackId) });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// The same song, twice
+// ---------------------------------------------------------------------------
+//
+// See findDuplicateGroups for why a library ends up holding one recording
+// under two rows, and why this lists them rather than merging them itself.
+
+libraryRoutes.get(
+  '/duplicates',
+  handler(async (req, res) => {
+    const groups = await library.findDuplicateGroups(req.user.id);
+    res.json({ groups, count: groups.length });
+  })
+);
+
+// Folds one or more rows into another.
+//
+// Everything pointing at the rows being merged - library membership, playlist
+// places, what a device is holding - is moved onto the one being kept before
+// they are deleted, so a playlist keeps its song and the next sync does not
+// re-download anything. That is `absorb`, which the automatic pass already
+// uses; this is the same operation asked for by hand.
+libraryRoutes.post(
+  '/duplicates/merge',
+  handler(async (req, res) => {
+    const keepId = id(req.body?.keepId, 'keepId');
+    const mergeIds = (Array.isArray(req.body?.mergeIds) ? req.body.mergeIds : []).map((value) =>
+      id(value, 'mergeId')
+    );
+    if (mergeIds.length === 0) throw badRequest('No tracks to merge.');
+    if (mergeIds.includes(keepId)) {
+      throw badRequest('A track cannot be merged into itself.');
+    }
+
+    // Every row named has to be in this library. Without this the endpoint
+    // would delete catalogue rows on behalf of somebody who does not hold them.
+    const owned = await many(
+      `SELECT track_id AS id FROM library_tracks
+        WHERE user_id = $1 AND track_id = ANY($2::bigint[])`,
+      [req.user.id, [keepId, ...mergeIds]]
+    );
+    const held = new Set(owned.map((row) => Number(row.id)));
+    if (!held.has(keepId) || mergeIds.some((value) => !held.has(value))) {
+      throw notFound('Those tracks are not all in your library.');
+    }
+
+    for (const mergeId of mergeIds) await absorb(mergeId, keepId);
+
+    res.json({ merged: mergeIds.length, keepId });
   })
 );
 

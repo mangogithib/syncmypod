@@ -92,12 +92,27 @@ export function scheduleRematch(userId, { delayMs = RETRY_DELAY_MS } = {}) {
   return true;
 }
 
+// Which tracks a pass will look at.
+//
+// `unresolved` is the obvious set. The second half is not: a track can read
+// `manual` and still have no artist, because `manual` used to be set on any
+// save at all - including one that changed nothing. Those are not corrections
+// anybody made; they are songs with nothing in them that had been quietly
+// exempted from the one pass that could have filled them in.
+//
+// A blank artist is what makes it safe to include them. `manual` is sacred
+// because it protects a human's answer, and an empty field is not an answer.
+const REMATCHABLE = `(
+  t.metadata_state = 'unresolved'
+  OR (t.metadata_state = 'manual' AND coalesce(t.artist_credit, '') = '')
+)`;
+
 export async function countUnresolved(userId) {
   const row = await one(
     `SELECT count(*)::int AS n
        FROM tracks t
        JOIN library_tracks lt ON lt.track_id = t.id
-      WHERE lt.user_id = $1 AND t.metadata_state = 'unresolved'`,
+      WHERE lt.user_id = $1 AND ${REMATCHABLE}`,
     [userId]
   );
   return row?.n || 0;
@@ -182,7 +197,7 @@ export async function rematchUnresolved(userId, { limit = DEFAULT_LIMIT, onProgr
     `SELECT t.id, t.title, t.duration_ms AS "durationMs", t.match_key AS "matchKey"
        FROM tracks t
        JOIN library_tracks lt ON lt.track_id = t.id
-      WHERE lt.user_id = $1 AND t.metadata_state = 'unresolved'
+      WHERE lt.user_id = $1 AND ${REMATCHABLE}
    ORDER BY t.id
       LIMIT $2`,
     [userId, limit]
@@ -248,7 +263,12 @@ async function rematchOne(track) {
 // Every insert is ON CONFLICT DO NOTHING: the resolved track may already be in
 // the same playlist or library, in which case the old row's entry is simply
 // dropped rather than duplicated.
-async function absorb(oldId, newId) {
+//
+// Exported because merging two rows by hand is the same operation. A pass that
+// resolves a track finds it has a twin; a person looking at a duplicates list
+// has already found one. What has to happen to the references is identical, and
+// there should be exactly one implementation of it.
+export async function absorb(oldId, newId) {
   await transaction(async (tx) => {
     await tx.query(
       `INSERT INTO library_tracks (user_id, track_id, added_via, added_at, source_hint, rating)

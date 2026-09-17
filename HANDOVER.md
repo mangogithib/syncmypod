@@ -19,6 +19,48 @@ which is the one rule the whole design rests on.
 
 ## 0. What changed on 17 September
 
+### Later the same day: three more, all from one afternoon with a real iPod
+
+**"No artist, still flagged" listed a song and offered no way to unflag it.**
+The bar's own predicate asked whether `metadata_state` was unresolved or
+pending; the server flags on "no artist, not accepted". A song corrected by
+hand reads `manual` and can still have no artist, so the one row the filter
+existed to surface was the one row it could not act on. Same class of mistake
+as the Overview link earlier the same day, in the other direction.
+
+**Duplicate albums on the iPod that do not exist in the web tool.** Root cause:
+the library holds some songs twice. A track nothing could identify is keyed on
+its name; the same recording arriving with an ISRC is keyed on that, and nothing
+reconciles them. Each row carries its own album string, so "Musafir Cafe" and
+"Musafir Cafe (Songs from the Netflix Series)" are two albums on the device with
+the songs split between them - and the unresolved row has no `albums` row, so
+the Albums page never showed it. There is now a duplicates review with a
+suggested keeper; merging reuses `absorb`. On the real library it found four
+candidates, of which two were genuine duplicates and two were a song and its
+other release, which is the whole argument for reviewing rather than merging.
+
+**Many "Unknown Album" tiles in Cover Flow for fourteen album-less songs.**
+`tagging.py` fell back to the track artist whenever the manifest carried no
+album artist, which is right for a record and wrong for a track on no album:
+the album artist was then the only grouping key left, so fourteen songs got
+fourteen keys. An album artist for a track that is on no album is a
+contradiction; written empty, they share one key.
+
+Two supporting fixes came out of the same dig. The manifest now sends
+`coalesce(albums.name, album_credit)` rather than the raw credit - the resolved
+fact, per the rule everything else follows. And the edit dialog no longer marks
+a track `manual` when the save changed nothing, which is how several songs came
+to be permanently exempt from the pass that would have filled them in; the
+re-match pass now also picks up `manual` rows that have no artist.
+
+**Not done, and deliberately.** Both album fixes apply as files are written, so
+an iPod synced before them keeps its old tags. Repairing it in place means
+rewriting the iTunesDB's own rows, which is the one operation that can leave a
+device unbootable, against an alpha library, with no hardware here to test on.
+The safe remedy is to remove the affected tracks and sync them again. A proper
+re-tag pass is worth building; it is worth building with a device attached.
+
+
 A pass over both halves, from a list of things noticed in use. Every item below
 was reproduced before it was changed, and the web changes were verified against
 the live instance rather than reasoned about.
@@ -86,6 +128,15 @@ The audio card stopped explaining and started offering: three options, one
 sentence each. Premium is disabled with its reason stated until a check confirms
 the account has a subscription, because an option that can be picked and then
 quietly does something else is worse than one that says it cannot be picked yet.
+
+### A trap worth naming
+
+**A backtick inside a JavaScript template literal ends it.** Twice in one day: a
+regex character class containing an apostrophe and a backtick, which silently
+broke the reference checker's view of a whole file; and a SQL comment inside a
+query that wrote `album_credit` in backticks, which broke the file outright.
+Escape them (```) or do not use them. `node --check` catches the second
+kind and nothing catches the first.
 
 ### What is still not tested
 

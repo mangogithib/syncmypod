@@ -129,12 +129,70 @@ Sources are additive: a track removed upstream stays, and removing a source
 keeps everything it brought. Same reasoning as the local app's ledger — "it
 disappeared from my library" is a far worse failure than "it is still there".
 
+### The same song, twice
+
+A track nothing could identify is keyed on its name, because there is nothing
+stronger to key it on. The same recording arriving later with an ISRC is keyed
+on that. Two keys, two rows, and nothing reconciles them — so a library quietly
+holds some songs twice.
+
+**It shows up on the iPod rather than in the web tool.** Each row carries its
+own album string, so one album becomes two on the device with the songs split
+between them, and the unresolved row has no `albums` row to appear under in the
+Albums list. The first anybody knows of it is a duplicate cover in Cover Flow.
+
+`findDuplicateGroups` lists them; it never merges. Matching is on the **exact**
+normalised title and nothing looser: decorations stay, because "Darmiyaan" and
+"Darmiyaan - Unplugged" are different recordings. Duration is not used at all —
+the two rows for one song came from different uploads and their lengths differ
+by twenty seconds, so a duration window would reject the very pairs this is for.
+
+Precision over recall, deliberately. A pair it misses costs nothing; a pair it
+invents costs a song. On the real library it found four candidates: two were the
+same recording twice, and two were a song and its other release — which is
+exactly why a person decides and the machine does not.
+
+Merging is `absorb`, the same operation the automatic re-match already uses:
+library membership, playlist places and what a device is holding all move onto
+the kept row before the other is deleted, so nothing is lost and the next sync
+re-downloads nothing.
+
+### What decides an album on the device
+
+The album string, and the album artist beside it. Both are grouping keys, and
+both have been got wrong.
+
+**The manifest sends the resolved album name**, `coalesce(al.name, album_credit)`
+— not the raw credit. The credit is an unverified string and `albums.name` is
+the resolved fact, which is the rule the whole design rests on; it also means a
+track carrying a different spelling of its own album cannot become a second
+album on the device.
+
+**An album artist is written only when there is an album.** `tagging.py` used to
+fall back to the track artist whenever the manifest carried no album artist.
+That is right for a record whose album artist was simply never recorded. It is
+wrong for a track on no album at all: those have nothing else to group on, so
+the fallback gave fourteen album-less songs fourteen different keys and Cover
+Flow drew a separate "Unknown Album" tile for each. Left empty they share one
+key and appear once, which is what iTunes itself does.
+
+Both fixes apply as files are written. A track already on a device keeps the
+tags it was given, so repairing an iPod synced before them means removing those
+tracks and syncing again.
+
 ### Another go at the songs nothing could identify
 
 A track imported from a video list arrives with a title and no artist, and a
 title alone is not enough to match on. Those used to sit in the library behind
 a notice offering to look them up, which is a chore rather than a choice —
 nobody was ever going to answer "no thanks, leave them broken".
+
+**A track reading `manual` with no artist is included in the pass.** `manual` is
+sacred because it protects a human's answer, and an empty field is not an
+answer. Those rows exist because saving the edit dialog used to set `manual`
+whether or not anything changed — so opening a song to look at it exempted it
+from every automatic repair there is. A save that changes nothing is no longer
+a correction.
 
 So it runs on its own, after every import that left something unresolved. The
 reason a second pass finds what the first missed is not cleverness: an import
