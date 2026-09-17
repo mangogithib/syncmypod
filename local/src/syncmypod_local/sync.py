@@ -1007,6 +1007,8 @@ def _wanted_tags(track: dict[str, Any]) -> dict[str, str]:
         "title": str(track.get("title") or ""),
         "artist": str(track.get("artist") or ""),
         "album": album,
+        # Stored as 0/1 in the database rather than as a boolean.
+        "compilation_flag": 1 if track.get("compilation") else 0,
         # The same rule the file tagger follows, for the same reason: an album
         # artist for a track that is on no album is a contradiction, and it is
         # the only thing left to group album-less tracks by - so writing one
@@ -1042,8 +1044,17 @@ def _stale_tag_locations(
         if track is None or current is None:
             continue
         wanted = _wanted_tags(track)
+        # `compilation_flag` is named for the database record; on the device
+        # row this application reads it is `compilation`.
+        current_values = {
+            "title": current.title or "",
+            "artist": current.artist or "",
+            "album": current.album or "",
+            "album_artist": current.album_artist or "",
+            "compilation_flag": current.compilation,
+        }
         if any(
-            str(getattr(current, name, "") or "") != value for name, value in wanted.items()
+            str(current_values.get(name, "")) != str(value) for name, value in wanted.items()
         ):
             stale.append(entry.location)
     return stale

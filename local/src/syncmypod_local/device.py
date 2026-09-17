@@ -215,6 +215,7 @@ class IpodDevice:
                         artist=track.artist,
                         album=track.album,
                         album_artist=track.album_artist or "",
+                        compilation=int(track.get("compilation_flag") or 0),
                         artwork_id=int(track.get("artwork_id_ref") or 0),
                     )
                 )
@@ -326,10 +327,14 @@ class IpodDevice:
             )
         return landed
 
-    # The four fields an iPod files a track by. Everything else in the database
-    # row is description; these decide which list it appears in and which cover
-    # it appears under, so these are the ones worth converging.
-    RETAGGED_FIELDS = ("title", "artist", "album", "album_artist")
+    # The fields an iPod files a track by. Everything else in the database row
+    # is description; these decide which list it appears in and which cover it
+    # appears under, so these are the ones worth converging.
+    #
+    # `compilation_flag` is not one of pypodlib's Track properties - it lives in
+    # the underlying record - so it is read and written through the mapping.
+    # The others are properties. `_field` and `_set_field` hide the difference.
+    RETAGGED_FIELDS = ("title", "artist", "album", "album_artist", "compilation_flag")
 
     def file_for(self, location: str) -> Path:
         """The real path of a track on this device, from its iPod location."""
@@ -375,9 +380,9 @@ class IpodDevice:
                 # database stores an absent field as an empty string and the
                 # manifest omits it, and rewriting one into the other every
                 # sync would be churn that rewrites the database for nothing.
-                if str(getattr(track, name, "") or "") == str(fields[name] or ""):
+                if _field(track, name) == str(fields[name] or ""):
                     continue
-                setattr(track, name, fields[name] or "")
+                _set_field(track, name, fields[name])
                 touched = True
             if touched:
                 changed += 1
@@ -631,6 +636,10 @@ class IpodTrack:
     # track no longer has is the reason album-less songs scatter across Cover
     # Flow. See `retag`.
     album_artist: str = ""
+    # "Part of a compilation". The switch that stops a multi-artist album being
+    # filed as one album per artist - measured as the cause of a soundtrack
+    # appearing as ten covers in Cover Flow. Stored as 0/1.
+    compilation: int = 0
     # The image this row points at in the iPod's artwork database, or 0. Art in
     # the file's own tags is invisible on the device without this, so it is the
     # only way to tell whether a track will actually show a cover.
@@ -639,6 +648,25 @@ class IpodTrack:
     @property
     def has_artwork(self) -> bool:
         return self.artwork_id > 0
+
+
+def _field(track: Any, name: str) -> str:
+    """One of the grouping fields, as text, whether property or record key.
+
+    pypodlib exposes most of them as properties on its Track and leaves
+    `compilation_flag` in the record underneath. Both are compared and written
+    here, and neither caller should have to know which is which.
+    """
+    if name == "compilation_flag":
+        return str(int(track.get(name) or 0))
+    return str(getattr(track, name, "") or "")
+
+
+def _set_field(track: Any, name: str, value: Any) -> None:
+    if name == "compilation_flag":
+        track[name] = int(value or 0)
+        return
+    setattr(track, name, value or "")
 
 
 def _file_for(mount: Path, location: str) -> Path:

@@ -197,6 +197,23 @@ the resolved fact, which is the rule the whole design rests on; it also means a
 track carrying a different spelling of its own album cannot become a second
 album on the device.
 
+**A multi-artist album is written as a compilation.** An iPod groups its browse
+lists by album *and artist*, and an album artist does not override that — a
+soundtrack whose ten tracks named ten singers, with one album artist on every
+one of them, showed as one album in the Albums menu and as a row of separate
+covers in Cover Flow. Measured on a 7th gen Classic: the only field that varied
+across the album was the track artist.
+
+The compilation flag is the switch iTunes uses for exactly this, which is why a
+various-artists soundtrack carries it there. It was hardcoded `False` here, and
+that was half right: source files arrive with it set inconsistently, and one
+track of an album carrying it while the others do not scatters the album just as
+badly, so forcing a constant fixed a real problem. The mistake was choosing the
+constant per track, where nothing knows what the rest of the album looks like.
+The server decides it once for the whole album — `count(DISTINCT artist_credit)`
+over the user's tracks on it — so it is still constant across an album and now
+it is also right. A single-artist album is unaffected.
+
 **An album artist is written only when there is an album.** `tagging.py` used to
 fall back to the track artist whenever the manifest carried no album artist.
 That is right for a record whose album artist was simply never recorded. It is

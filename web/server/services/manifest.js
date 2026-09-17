@@ -62,6 +62,20 @@ export async function buildManifest(userId, deviceId) {
             t.genre,
             t.explicit,
             t.mbid,
+            -- Whether this album's tracks disagree about who the artist is.
+            --
+            -- This is what iTunes calls "Part of a compilation", and it is the
+            -- switch that decides how an iPod files a multi-artist album. With
+            -- it off, the device groups by album AND artist, so a soundtrack
+            -- with eight singers becomes eight albums in Cover Flow - measured
+            -- on a real 7th gen Classic, where the album list was correct and
+            -- the carousel was not. With it on, the album is one album.
+            --
+            -- Counted across the tracks this user actually holds, which is the
+            -- honest scope: it is their library that gets written to their
+            -- iPod. Adding a second artist's track to an album flips it, and
+            -- the next sync corrects what is already on the device.
+            (coalesce(credits.artists, 1) > 1) AS "compilation",
             al.artwork_url   AS "artworkUrl",
             al.release_year  AS "year",
             al.total_tracks  AS "totalTracks",
@@ -78,6 +92,18 @@ export async function buildManifest(userId, deviceId) {
   LEFT JOIN albums al  ON al.id = t.album_id
   LEFT JOIN artists aa ON aa.id = al.album_artist_id
   LEFT JOIN device_tracks dt ON dt.track_id = t.id AND dt.device_id = $2
+       -- How many different artists this user's copy of the album names.
+       --
+       -- A join rather than a window function: Postgres has no
+       -- count(DISTINCT ...) OVER (...), and one grouped pass over the
+       -- library is cheaper than a correlated subquery per track anyway.
+  LEFT JOIN (
+         SELECT t2.album_id, count(DISTINCT t2.artist_credit) AS artists
+           FROM library_tracks lt2
+           JOIN tracks t2 ON t2.id = lt2.track_id
+          WHERE lt2.user_id = $1 AND t2.album_id IS NOT NULL
+       GROUP BY t2.album_id
+       ) credits ON credits.album_id = t.album_id
       WHERE lt.user_id = $1
         AND t.metadata_state IN ('resolved', 'manual', 'unresolved')
    ORDER BY lower(coalesce(aa.name, t.artist_credit)),

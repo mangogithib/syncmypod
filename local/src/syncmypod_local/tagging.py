@@ -27,6 +27,7 @@ from mutagen.id3 import (
     APIC,
     ID3,
     TALB,
+    TCMP,
     TCON,
     TDRC,
     TIT2,
@@ -70,6 +71,34 @@ class Artwork:
     @property
     def mp4_format(self) -> int:
         return MP4Cover.FORMAT_PNG if self.mime == "image/png" else MP4Cover.FORMAT_JPEG
+
+
+def _compilation(track: dict[str, Any]) -> bool:
+    """Whether to mark this track as part of a compilation.
+
+    **What the flag actually controls.** An iPod groups its album browse and its
+    Cover Flow by album *and artist*. An album artist is supposed to override
+    the artist for that purpose, and on a real 7th gen Classic it did not: a
+    soundtrack whose ten tracks named ten different singers, with one album
+    artist on every one of them, showed as one album in the Albums menu and as
+    a row of separate covers in Cover Flow. The only field that varied across
+    the album was the track artist.
+
+    The compilation flag is the switch iTunes uses for exactly this - it is what
+    "Part of a compilation" means, and it is why a various-artists soundtrack in
+    iTunes carries it. With it set, the device stops splitting on the artist.
+
+    **It was hardcoded False**, and that was half right. Source files arrive with
+    it set inconsistently, and one track of an album carrying it while the others
+    do not scatters the album just as badly - so forcing a constant fixed a real
+    problem. The mistake was choosing the constant here, per track, where nothing
+    knows what the rest of the album looks like. The server decides it once for
+    the whole album and sends it, so it is still constant across an album and now
+    it is also correct.
+
+    A single-artist album is not a compilation and is unaffected.
+    """
+    return bool(track.get("compilation"))
 
 
 def embedded_artwork(path: Path) -> Artwork | None:
@@ -201,9 +230,9 @@ def _apply_mp4(path: Path, track: dict[str, Any], artwork: Artwork | None) -> No
 
     # The iPod draws its explicit badge from this: 0 none, 1 explicit, 2 clean.
     tags["rtng"] = [1 if track.get("explicit") else 0]
-    # Without this, every album with a featured guest is filed as a compilation
-    # and scatters across the Albums list on the device.
-    tags["cpil"] = False
+    # "Part of a compilation": the switch that decides how a multi-artist
+    # album is filed. See _compilation.
+    tags["cpil"] = _compilation(track)
 
     isrc = _text(track.get("isrc"))
     if isrc:
@@ -265,6 +294,9 @@ def _apply_mp3(path: Path, track: dict[str, Any], artwork: Artwork | None) -> No
     _add(tags, TPE2, _album_artist(track))
     _add(tags, TCON, _text(track.get("genre")))
     _add(tags, TSRC, _text(track.get("isrc")))
+    # iTunes' own non-standard frame, and the one an iPod reads. See _compilation.
+    if _compilation(track):
+        tags.add(TCMP(encoding=3, text=["1"]))
 
     year = _int(track.get("year"))
     if year:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "syncmypod-local"
-version = "0.2.4"
+version = "0.2.5"
 description = "Syncs a SyncMyPod library to a classic iPod. The only component that touches audio."
 readme = "README.md"
 requires-python = ">=3.11"

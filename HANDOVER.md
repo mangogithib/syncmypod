@@ -182,6 +182,16 @@ album entries in it. So what is on screen is not being read from it. The iPod
 caches its Cover Flow carousel and had not rebuilt it. A reset (Menu + Centre)
 is the remedy; deleting `ArtworkDB` and re-syncing is the heavier one.
 
+**Then a reset did not clear it, and the real cause turned up.** Dumped every
+field of one album off the device: `Album` constant, `Album Artist` constant,
+`Artist` **eight different values**, `compilation_flag` 0 on all ten. An iPod
+groups its browse lists by album *and artist*; an album artist does not override
+that, and the compilation flag is the switch that does. It was hardcoded False
+in `tagging.py`. The server now decides it per album - more than one distinct
+artist credit among the user's tracks on it - and the re-tag pass corrects what
+is already on the device. Measured on the real library afterwards: 4 albums
+flagged, 75 single-artist albums untouched, no album disagreeing with itself.
+
 **A real deviation found on the way, and not the cause.** pypodlib writes one
 `mhii` entry per *track*, while its own module docstring says "one per unique
 album art" - which is what iTunes writes, with many tracks linking to one

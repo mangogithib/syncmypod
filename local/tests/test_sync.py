@@ -85,6 +85,99 @@ def audio_source(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+class TestMultiArtistAlbums:
+    """A soundtrack is one album, not one album per singer.
+
+    Measured on a real 7th gen Classic: ten tracks of one soundtrack, one album
+    name and one album artist on every one of them, and eight different track
+    artists between them. The Albums menu showed one album; Cover Flow showed a
+    row of separate covers. The only field that varied across the album was the
+    track artist.
+
+    An iPod groups its browse lists by album *and* artist, and the compilation
+    flag is what tells it to stop - that is what "Part of a compilation" means
+    in iTunes, and why a various-artists soundtrack carries it there.
+    """
+
+    @respx.mock
+    def test_a_multi_artist_album_is_written_as_a_compilation(self, ipod, paired, audio_source):
+        mock_server(
+            manifest(
+                [
+                    track(1, artist="Singer One", compilation=True),
+                    track(2, artist="Singer Two", compilation=True),
+                ]
+            )
+        )
+        sync.run(paired, mount=str(ipod.mount_path))
+
+        on_device = device.open_at(ipod.mount_path).tracks()
+        assert len(on_device) == 2
+        assert {t.compilation for t in on_device} == {1}
+
+    @respx.mock
+    def test_a_single_artist_album_is_not(self, ipod, paired, audio_source):
+        """Nothing regresses for an ordinary record by one artist."""
+        mock_server(manifest())
+        sync.run(paired, mount=str(ipod.mount_path))
+
+        assert {t.compilation for t in device.open_at(ipod.mount_path).tracks()} == {0}
+
+    @respx.mock
+    def test_the_whole_album_lands_in_one_group(self, ipod, paired, audio_source):
+        """What the device will actually build its album list from.
+
+        Asserted through pypodlib's own grouping rather than against a field,
+        because grouping is the thing that was wrong and a passing field check
+        is what made it look right last time.
+        """
+        from pypodlib.itunesdb_shared.album_identity import (
+            album_identity_from_track,
+            group_tracks_by_album_identity,
+        )
+
+        mock_server(
+            manifest(
+                [
+                    track(1, artist="Singer One", compilation=True),
+                    track(2, artist="Singer Two", compilation=True),
+                    track(3, artist="Singer Three", compilation=True),
+                ]
+            )
+        )
+        sync.run(paired, mount=str(ipod.mount_path))
+
+        rows = device.open_at(ipod.mount_path)._library().tracks
+        groups = group_tracks_by_album_identity(rows, album_identity_from_track)
+        assert len(groups) == 1, "three singers on one record must be one album"
+
+    @respx.mock
+    def test_a_track_already_on_the_device_is_corrected(self, ipod, paired, audio_source):
+        """The songs already on an iPod are the ones that need this most.
+
+        They were written before the flag existed, so nothing about them
+        changes except this - which is exactly the case the re-tag pass is for.
+        """
+        respx.mock(assert_all_called=False)
+        mock_server(manifest([track(1, artist="Singer One"), track(2, artist="Singer Two")]))
+        sync.run(paired, mount=str(ipod.mount_path))
+        respx.reset()
+        assert {t.compilation for t in device.open_at(ipod.mount_path).tracks()} == {0}
+
+        mock_server(
+            manifest(
+                [
+                    track(1, artist="Singer One", compilation=True),
+                    track(2, artist="Singer Two", compilation=True),
+                ]
+            )
+        )
+        report = sync.run(paired, mount=str(ipod.mount_path))
+
+        assert report.retagged == 2
+        assert {t.compilation for t in device.open_at(ipod.mount_path).tracks()} == {1}
+
+
 class TestTagsAlreadyOnTheDevice:
     """A correction made after a track was written still has to reach the iPod.
 
