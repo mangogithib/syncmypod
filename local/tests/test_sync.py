@@ -85,6 +85,111 @@ def audio_source(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+class TestTagsAlreadyOnTheDevice:
+    """A correction made after a track was written still has to reach the iPod.
+
+    A track is tagged from the manifest when it is copied across and never
+    again, so an artist fixed in the web tool afterwards - or a change to what
+    this application writes - would otherwise leave the device holding what was
+    true at the time. These fields are what an iPod files a track by, so a
+    stale one is a song under the wrong artist or an album split in two.
+
+    Run against a real virtual device, because the assertion that matters is
+    about what is in the iTunesDB after it has been re-serialised and signed.
+    """
+
+    @respx.mock
+    def test_a_corrected_artist_reaches_a_track_already_synced(
+        self, ipod, paired, audio_source
+    ):
+        respx.mock(assert_all_called=False)
+        mock_server(manifest())
+        sync.run(paired, mount=str(ipod.mount_path))
+        respx.reset()
+
+        corrected = manifest([track(1, artist="Someone Else"), track(2)])
+        mock_server(corrected)
+        report = sync.run(paired, mount=str(ipod.mount_path))
+
+        assert report.retagged == 1
+        on_device = {t.title: t for t in device.open_at(ipod.mount_path).tracks()}
+        assert on_device["Track 1"].artist == "Someone Else"
+        assert on_device["Track 2"].artist == "Aurora Kane", "the other row was left alone"
+
+    @respx.mock
+    def test_a_track_with_no_album_is_left_with_no_album_artist(
+        self, ipod, paired, audio_source
+    ):
+        """The fourteen "Unknown Album" tiles, in one assertion.
+
+        An album artist is the only thing left to group an album-less track by,
+        so falling back to the track artist gives every such song a grouping
+        key of its own and Cover Flow draws a tile for each.
+        """
+        respx.mock(assert_all_called=False)
+        mock_server(manifest())
+        sync.run(paired, mount=str(ipod.mount_path))
+        respx.reset()
+
+        orphaned = manifest(
+            [track(1, album=None, albumArtist=None), track(2, album=None, albumArtist=None)]
+        )
+        mock_server(orphaned)
+        report = sync.run(paired, mount=str(ipod.mount_path))
+
+        assert report.retagged == 2
+        on_device = device.open_at(ipod.mount_path).tracks()
+        assert {t.album for t in on_device} == {""}
+        assert {t.album_artist for t in on_device} == {""}, (
+            "an album artist for a track on no album is what splits Cover Flow"
+        )
+
+    @respx.mock
+    def test_a_device_that_is_already_right_is_not_rewritten(self, ipod, paired, audio_source):
+        """Idempotence is what makes this safe to run on every sync.
+
+        Without it, every run would rewrite the whole iTunesDB - the one
+        operation that can leave a device unusable - to change nothing.
+        """
+        respx.mock(assert_all_called=False)
+        mock_server(manifest())
+        sync.run(paired, mount=str(ipod.mount_path))
+        respx.reset()
+
+        mock_server(manifest())
+        report = sync.run(paired, mount=str(ipod.mount_path))
+
+        assert report.retagged == 0
+
+    @respx.mock
+    def test_a_track_this_tool_did_not_add_is_left_alone(self, ipod, paired, audio_source):
+        """The ledger rule, applied to tags as well as to removals.
+
+        An iPod may hold years of music put there by something else. This tool
+        corrects what it wrote and nothing more, so a stranger's track keeps
+        whatever tags it came with even when the library has a song by the same
+        name.
+        """
+        stranger = ipod.mount_path / "iPod_Control" / "Music" / "F00" / "STRANGER.m4a"
+        stranger.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(FIXTURES / "tagged.m4a", stranger)
+        device.open_at(ipod.mount_path)._handle.add_tracks([str(stranger)], raise_on_error=True)
+        before = {
+            t.location: (t.title, t.artist, t.album, t.album_artist)
+            for t in device.open_at(ipod.mount_path).tracks()
+        }
+
+        mock_server(manifest())
+        sync.run(paired, mount=str(ipod.mount_path))
+
+        after = {
+            t.location: (t.title, t.artist, t.album, t.album_artist)
+            for t in device.open_at(ipod.mount_path).tracks()
+        }
+        for location, tags in before.items():
+            assert after[location] == tags, "a track this tool never added was rewritten"
+
+
 class TestAFullRun:
     @respx.mock
     def test_tracks_reach_the_device_and_the_server_is_told(self, ipod, paired, audio_source):

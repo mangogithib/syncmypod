@@ -72,6 +72,43 @@ class Artwork:
         return MP4Cover.FORMAT_PNG if self.mime == "image/png" else MP4Cover.FORMAT_JPEG
 
 
+def embedded_artwork(path: Path) -> Artwork | None:
+    """The cover already in a file, so re-tagging can put it back.
+
+    `apply` clears every tag before writing, which is the whole point of it -
+    nothing a download source wrote survives. That is right when the artwork is
+    being supplied alongside, and destructive when it is not: re-tagging a file
+    already on an iPod would silently drop the cover embedded in it, and the
+    artwork database is rebuilt by reading the covers back out of those very
+    files. One pass of tag corrections would have quietly stripped the art off
+    the device.
+
+    Returns None for a file with no cover, an unreadable one, or a format
+    without a picture frame. The caller treats all three the same way.
+    """
+    suffix = path.suffix.lower()
+    try:
+        if suffix in {".m4a", ".m4b", ".mp4", ".m4v"}:
+            covers = MP4(path).tags.get("covr") if MP4(path).tags else None
+            if not covers:
+                return None
+            cover = covers[0]
+            mime = "image/png" if cover.imageformat == MP4Cover.FORMAT_PNG else "image/jpeg"
+            return Artwork(data=bytes(cover), mime=mime)
+        if suffix == ".mp3":
+            tags = MP3(path, ID3=ID3).tags
+            frames = tags.getall("APIC") if tags else []
+            if not frames:
+                return None
+            return Artwork(data=frames[0].data, mime=frames[0].mime or "image/jpeg")
+    except Exception:
+        # A cover that cannot be read is not a reason to refuse to re-tag. The
+        # file keeps its metadata correct and loses a picture the device holds
+        # its own copy of.
+        return None
+    return None
+
+
 def apply(path: Path, track: dict[str, Any], artwork: Artwork | None = None) -> None:
     """Replace every tag on *path* with the manifest's metadata.
 

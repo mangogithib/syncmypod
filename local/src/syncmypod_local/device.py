@@ -214,6 +214,7 @@ class IpodDevice:
                         title=track.title,
                         artist=track.artist,
                         album=track.album,
+                        album_artist=track.album_artist or "",
                         artwork_id=int(track.get("artwork_id_ref") or 0),
                     )
                 )
@@ -324,6 +325,72 @@ class IpodDevice:
                 "guessing."
             )
         return landed
+
+    # The four fields an iPod files a track by. Everything else in the database
+    # row is description; these decide which list it appears in and which cover
+    # it appears under, so these are the ones worth converging.
+    RETAGGED_FIELDS = ("title", "artist", "album", "album_artist")
+
+    def file_for(self, location: str) -> Path:
+        """The real path of a track on this device, from its iPod location."""
+        return _file_for(self.mount_path, location)
+
+    def retag(self, wanted: dict[str, dict[str, str]]) -> int:
+        """Correct the database rows for tracks whose tags have moved on.
+
+        ``wanted`` maps an iPod location to the title, artist, album and album
+        artist it should now carry. Returns how many rows were changed.
+
+        **Why the database and not only the file.** An iPod reads its own
+        database, not the tags in the files - so a file re-tagged on the device
+        looks right on a computer and is filed exactly where it was on the
+        iPod. Cover Flow, the album list and the artist list all come from
+        these rows.
+
+        **Only rows that disagree.** Idempotent by construction: a device that
+        is already correct costs one pass over the track list and no write at
+        all. That is what makes it safe to run on every sync rather than as a
+        thing to remember.
+
+        **Nothing this tool did not put there is touched**, because the caller
+        builds ``wanted`` from the ledger. A track somebody else added keeps
+        whatever it has, which is the same rule the removals follow.
+        """
+        if self._handle is None:
+            raise DeviceError("This device is not open.")
+        if not wanted:
+            return 0
+
+        library = self._library(reload=True)
+        changed = 0
+        for track in library.tracks:
+            fields = wanted.get(track.location or "")
+            if not fields:
+                continue
+            touched = False
+            for name in self.RETAGGED_FIELDS:
+                if name not in fields:
+                    continue
+                # Compared as text, with None and "" the same thing: the
+                # database stores an absent field as an empty string and the
+                # manifest omits it, and rewriting one into the other every
+                # sync would be churn that rewrites the database for nothing.
+                if str(getattr(track, name, "") or "") == str(fields[name] or ""):
+                    continue
+                setattr(track, name, fields[name] or "")
+                touched = True
+            if touched:
+                changed += 1
+
+        if not changed:
+            return 0
+
+        logger.info("Correcting the recorded tags of %d track(s) on the device", changed)
+        try:
+            self._handle.save(raise_on_error=True)
+        except Exception as err:
+            raise DeviceError(f"Could not update the iPod's database: {err}") from err
+        return changed
 
     def write_playlists(self, playlists: list[tuple[str, list[str]]]) -> None:
         """Replace the named playlists with the given tracks, in the given order.
@@ -559,6 +626,11 @@ class IpodTrack:
     title: str
     artist: str
     album: str
+    # Read as well as the album, because between them these two are what the
+    # device files a track by - and an album artist left over from an album the
+    # track no longer has is the reason album-less songs scatter across Cover
+    # Flow. See `retag`.
+    album_artist: str = ""
     # The image this row points at in the iPod's artwork database, or 0. Art in
     # the file's own tags is invisible on the device without this, so it is the
     # only way to tell whether a track will actually show a cover.

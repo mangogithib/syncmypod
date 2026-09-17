@@ -821,6 +821,11 @@ class _SyncReporter:
             self._console.print(
                 f"[dim]Building cover art for {data['count']} track(s)...[/dim]"
             )
+        elif event == "retagging":
+            self._console.print(
+                f"[dim]Correcting the tags of {data['count']} track(s) "
+                "already on the iPod...[/dim]"
+            )
 
     def _print_plan(self, plan: sync_engine.Plan) -> None:
         table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
@@ -836,6 +841,8 @@ class _SyncReporter:
             table.add_row("Playlists", str(len(plan.playlists)))
         if plan.artwork_missing:
             table.add_row("Missing cover art", str(len(plan.artwork_missing)))
+        if plan.tags_stale:
+            table.add_row("Tags to correct", str(len(plan.tags_stale)))
         if plan.excluded:
             table.add_row("Excluded (unresolved metadata)", str(len(plan.excluded)))
         self._console.print()
@@ -866,6 +873,8 @@ def _print_summary(report: sync_engine.Report, *, dry_run: bool) -> None:
         parts.append(f"{report.playlists_written} playlist(s) written")
     if report.artwork_linked:
         parts.append(f"{report.artwork_linked} with cover art")
+    if report.retagged:
+        parts.append(f"{report.retagged} retagged")
     console.print("  ".join(parts))
 
     if report.artwork_error:

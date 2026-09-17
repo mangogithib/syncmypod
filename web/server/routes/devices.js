@@ -35,7 +35,19 @@ deviceRoutes.get(
               d.ipod_generation AS "ipodGeneration",
               d.ipod_capacity_bytes AS "ipodCapacityBytes",
               d.ipod_free_bytes     AS "ipodFreeBytes",
-              (SELECT count(*)::int FROM device_tracks dt
+              -- Tracks this device holds that are still in the library.
+              --
+              -- The library membership check is the whole point. device_tracks
+              -- is append-only bookkeeping: removing a song from the library
+              -- leaves its row behind, and merging two rows moves one across,
+              -- so the raw count is a history of everything ever written to
+              -- this iPod rather than what is on it. On a real device that
+              -- read 696 for a library of 110 - six times the truth, and the
+              -- number the Devices page had been showing all along.
+              (SELECT count(*)::int
+                 FROM device_tracks dt
+                 JOIN library_tracks lt
+                   ON lt.track_id = dt.track_id AND lt.user_id = d.user_id
                 WHERE dt.device_id = d.id AND dt.state = 'synced') AS "syncedTracks",
               (SELECT max(started_at) FROM sync_runs sr WHERE sr.device_id = d.id)
                 AS "lastSyncAt"

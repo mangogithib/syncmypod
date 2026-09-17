@@ -53,12 +53,34 @@ a track `manual` when the save changed nothing, which is how several songs came
 to be permanently exempt from the pass that would have filled them in; the
 re-match pass now also picks up `manual` rows that have no artist.
 
-**Not done, and deliberately.** Both album fixes apply as files are written, so
-an iPod synced before them keeps its old tags. Repairing it in place means
-rewriting the iTunesDB's own rows, which is the one operation that can leave a
-device unbootable, against an alpha library, with no hardware here to test on.
-The safe remedy is to remove the affected tracks and sync them again. A proper
-re-tag pass is worth building; it is worth building with a device attached.
+**And then it was done, because it turned out to be testable.** The first
+answer here was that repairing an already-synced iPod means rewriting the
+iTunesDB - the one operation that can leave a device unbootable, against an
+alpha library, with no hardware to hand. What changed that: pypodlib exposes
+`IPod.save`, `Track.album` and `Track.album_artist` are settable, and the suite
+already runs against real simulated devices of the target models. So it can be
+exercised properly without a device, which is the whole reason the test suite
+is built that way.
+
+A sync now compares the device's database rows against the manifest while
+planning, and corrects the ones that disagree - so a correction made in the web
+tool reaches music already on the iPod without re-downloading anything. Only
+ledger tracks, only rows that differ, never fatal. Four tests against a signed
+HASH58 virtual device cover the correction, the album-artist rule, idempotence,
+and that a track this tool never added is left alone.
+
+**The trap inside it.** `tagging.apply` clears every tag before writing, which
+is what stops source metadata surviving - and the artwork database is rebuilt
+by reading covers back out of the files on the device. Re-tagging without
+handing the cover back would have stripped the art off the iPod one sync at a
+time. `embedded_artwork` reads it out first; there is a test for the round trip.
+
+**Also fixed here:** the Devices page reported 696 synced tracks for a library
+of 110. `device_tracks` is append-only and nothing ever removed from it, so the
+count was every track ever written to that iPod including the ones taken back
+out. Removing a track from the library now clears its rows, and the count joins
+`library_tracks`. Safe because the server is not the authority on what is
+physically on a device - the ledger on the iPod is, and removals plan from it.
 
 
 A pass over both halves, from a list of things noticed in use. Every item below

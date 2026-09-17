@@ -575,6 +575,7 @@ def _summarise(report: sync_engine.Report, *, dry_run: bool) -> dict[str, Any]:
         "removed": report.removed,
         "playlists": report.playlists_written,
         "artwork": report.artwork_linked,
+        "retagged": report.retagged,
         "artworkError": report.artwork_error,
         "backedUp": report.backed_up,
         "excluded": len(report.plan.excluded),

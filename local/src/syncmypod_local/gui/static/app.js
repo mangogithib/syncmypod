@@ -650,6 +650,9 @@ function handle(event) {
     case "artwork":
       note(`Building cover art for ${event.count} track(s)…`);
       break;
+    case "retagging":
+      note(`Correcting the tags of ${event.count} track(s) already on the iPod…`);
+      break;
     case "cancelling":
       note("Stopping after the current track…");
       break;
@@ -827,6 +830,10 @@ function showSummary(summary) {
   if (summary.removed) parts.push(`${summary.removed} removed`);
   if (summary.playlists) parts.push(`${summary.playlists} playlist(s) written`);
   if (summary.artwork) parts.push(`${summary.artwork} with cover art`);
+  // Almost always absent. Worth naming when it happens, because it is the only
+  // sign that a correction made in the web tool reached music already on the
+  // iPod without anything being downloaded again.
+  if (summary.retagged) parts.push(`${summary.retagged} retagged`);
 
   const tone = summary.failed.length ? "notice-warn" : "notice-ok";
   body.append(node("p", `notice ${tone}`, parts.join(" · ")));

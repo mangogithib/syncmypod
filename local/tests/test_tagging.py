@@ -8,6 +8,7 @@ that none of it survives.
 
 from __future__ import annotations
 
+import base64
 import shutil
 from pathlib import Path
 
@@ -51,6 +52,54 @@ def mp3(tmp_path):
 @pytest.fixture
 def m4a(tmp_path):
     return Path(shutil.copy(FIXTURES / "tagged.m4a", tmp_path / "track.m4a"))
+
+
+class TestReTagging:
+    """Correcting a file already on an iPod, without losing its cover.
+
+    `apply` clears every tag before writing, which is what stops a download
+    source's metadata surviving. It also means re-tagging with no artwork
+    argument drops the embedded cover - and the iPod's artwork database is
+    rebuilt by reading covers back out of those very files, so a pass of tag
+    corrections would have stripped the art off the device.
+    """
+
+    # A 1x1 PNG, built rather than written out, so there are no escapes in this
+    # file to get wrong.
+    COVER = tagging.Artwork(
+        data=base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        ),
+        mime="image/png",
+    )
+
+    def test_a_cover_can_be_read_back_out_m4a(self, m4a):
+        tagging.apply(m4a, TRACK, self.COVER)
+        found = tagging.embedded_artwork(m4a)
+        assert found is not None
+        assert found.data == self.COVER.data
+        assert found.mime == "image/png"
+
+    def test_a_cover_can_be_read_back_out_mp3(self, mp3):
+        tagging.apply(mp3, TRACK, self.COVER)
+        found = tagging.embedded_artwork(mp3)
+        assert found is not None
+        assert found.data == self.COVER.data
+
+    def test_a_file_with_no_cover_reports_none(self, m4a):
+        tagging.apply(m4a, TRACK)
+        assert tagging.embedded_artwork(m4a) is None
+
+    def test_re_tagging_keeps_the_cover_it_had(self, m4a):
+        """The round trip a sync makes when it corrects a track on the device."""
+        tagging.apply(m4a, TRACK, self.COVER)
+
+        kept = tagging.embedded_artwork(m4a)
+        tagging.apply(m4a, {**TRACK, "artist": "Someone Else"}, kept)
+
+        after = MP4(m4a)
+        assert after["\xa9ART"] == ["Someone Else"], "the correction was written"
+        assert bytes(after["covr"][0]) == self.COVER.data, "the cover survived"
 
 
 class TestAlbumGrouping:

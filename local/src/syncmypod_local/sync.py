@@ -121,6 +121,11 @@ class Plan:
     # track involved is already on the iPod, and before this was worked out a
     # run in that state reported "Already up to date" and wrote nothing.
     playlists_differ: bool = False
+    # Tracks on the device whose recorded tags no longer match the library -
+    # an artist corrected in the web tool, an album finally resolved. Counts as
+    # work for the same reason missing artwork does: a correction nobody has to
+    # re-download should still reach the iPod. See _retag_existing.
+    tags_stale: list[str] = field(default_factory=list)
 
     @property
     def nothing_to_do(self) -> bool:
@@ -129,6 +134,7 @@ class Plan:
             and not self.removals
             and not self.artwork_missing
             and not self.playlists_differ
+            and not self.tags_stale
         )
 
 
@@ -172,6 +178,9 @@ class Report:
     playlists_written: int = 0
     artwork_linked: int = 0
     artwork_error: str | None = None
+    # Tracks already on the device whose recorded tags were brought back in
+    # line with the library. Almost always zero - see _retag_existing.
+    retagged: int = 0
     backup_id: str | None = None
     # False only when the user turned backups off. Carried so the summary can
     # say so rather than leaving "no backup id" to be read as a failure.
@@ -267,6 +276,7 @@ def build_plan(
             )
 
     by_location = {track.location: track for track in on_device if track.location}
+    plan.tags_stale = _stale_tag_locations(manifest, record, by_location)
     plan.artwork_missing = [
         entry.location
         for track_id, entry in record.entries.items()
@@ -585,6 +595,15 @@ def _execute(
     if plan.playlists:
         say("playlists", {"count": len(plan.playlists)})
         report.playlists_written = _write_playlists(ipod, plan, record)
+
+    # Everything already on the device, brought up to date - see below for why
+    # a track's tags go stale at all. Never fatal, for the same reason artwork
+    # is not: the music is on the iPod, and failing a sync over a tag would be
+    # the wrong trade.
+    try:
+        report.retagged = _retag_existing(ipod, plan, record, say)
+    except Exception as err:  # pragma: no cover - defensive
+        logger.warning("Could not correct the tags already on the device: %s", err)
 
     # Artwork last, and never fatal. A cover is decoration: a sync that got the
     # music onto the device has done its job, and failing it at the final step
@@ -908,6 +927,126 @@ def _write_batch(
         except device_module.DeviceError as err:
             logger.warning("%s could not be written: %s", item.label, err)
     return landed
+
+
+def _retag_existing(
+    ipod: device_module.IpodDevice, plan: Plan, record: ledger.Ledger, say: Progress
+) -> int:
+    """Bring the tags of tracks already on the device up to date.
+
+    A track is tagged from the manifest when it is copied across and never
+    again, so anything that changes afterwards - an artist corrected in the web
+    tool, an album finally resolved, or this application's own rules about what
+    to write - leaves the device holding what was true at the time. Those
+    fields are what an iPod files a track by, so a stale one shows as a song
+    under the wrong artist, or an album that has split in two.
+
+    Two places hold it: the file's own tags, which a computer reads, and the
+    row in the iPod's database, which the *device* reads. Both are corrected,
+    and the row is the one that decides what appears on screen.
+
+    Which tracks is decided in the plan - see `_stale_tag_locations` - so a
+    device that is already right does no work here and says so before anything
+    is opened.
+
+    A file that cannot be written is logged and skipped. Its database row is
+    still corrected, so the iPod files it properly even if the copy on disk
+    keeps an old tag.
+    """
+    if not plan.tags_stale:
+        return 0
+
+    by_id = {int(track["id"]): track for track in plan.manifest.get("tracks") or []}
+    owner = {
+        entry.location: track_id for track_id, entry in record.entries.items() if entry.location
+    }
+
+    say("retagging", {"count": len(plan.tags_stale)})
+
+    # The files first, the database last. The database write is the one that
+    # has to land atomically and the one the device actually reads, so a file
+    # that could not be written still gets its row put right.
+    wanted: dict[str, dict[str, str]] = {}
+    for location in plan.tags_stale:
+        track = by_id.get(owner.get(location, -1))
+        if track is None:
+            continue
+        wanted[location] = _wanted_tags(track)
+        path = ipod.file_for(location)
+        if not path.is_file():
+            continue
+        try:
+            # The cover has to be read back out and written in again. `apply`
+            # clears every tag first, and the artwork database is rebuilt by
+            # reading covers out of these same files - so re-tagging without
+            # this would strip the art off the device a sync at a time.
+            tagging.apply(path, track, artwork=tagging.embedded_artwork(path))
+        except Exception as err:
+            logger.warning("Could not re-tag %s on the device: %s", path.name, err)
+
+    changed = ipod.retag(wanted)
+
+    # The ledger is what identifies a track when the database has nothing to
+    # say about it, so what it remembers has to move with the tags.
+    for location, fields in wanted.items():
+        entry = record.entries.get(owner.get(location, -1))
+        if entry is None:
+            continue
+        entry.title = fields["title"]
+        entry.artist = fields["artist"]
+        entry.album = fields["album"]
+    record.save()
+
+    return changed
+
+
+def _wanted_tags(track: dict[str, Any]) -> dict[str, str]:
+    """The four fields an iPod files a track by, as the library has them now."""
+    album = str(track.get("album") or "")
+    return {
+        "title": str(track.get("title") or ""),
+        "artist": str(track.get("artist") or ""),
+        "album": album,
+        # The same rule the file tagger follows, for the same reason: an album
+        # artist for a track that is on no album is a contradiction, and it is
+        # the only thing left to group album-less tracks by - so writing one
+        # gives every such song an "Unknown Album" of its own.
+        "album_artist": (
+            str(track.get("albumArtist") or track.get("artist") or "") if album else ""
+        ),
+    }
+
+
+def _stale_tag_locations(
+    manifest: dict[str, Any],
+    record: ledger.Ledger,
+    by_location: dict[str, device_module.IpodTrack],
+) -> list[str]:
+    """Where the device's own database disagrees with the library.
+
+    **Only tracks in the ledger**, which is the rule removals follow too: this
+    tool does not touch what it did not put there. A track added by iTunes
+    keeps its tags whatever the library says.
+
+    Compared against the database row rather than the file, because the row is
+    what the iPod reads and what decides which list a track appears in. None
+    and "" are the same thing here - the database stores an absent field as an
+    empty string and the manifest omits it, and treating those as different
+    would rewrite the database on every sync for no change at all.
+    """
+    by_id = {int(track["id"]): track for track in manifest.get("tracks") or []}
+    stale = []
+    for track_id, entry in record.entries.items():
+        track = by_id.get(int(track_id))
+        current = by_location.get(entry.location or "")
+        if track is None or current is None:
+            continue
+        wanted = _wanted_tags(track)
+        if any(
+            str(getattr(current, name, "") or "") != value for name, value in wanted.items()
+        ):
+            stale.append(entry.location)
+    return stale
 
 
 def _playlist_specs(plan: Plan, record: ledger.Ledger) -> list[tuple[str, list[str]]]:

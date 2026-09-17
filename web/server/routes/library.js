@@ -307,6 +307,7 @@ libraryRoutes.post(
             AND playlist_id IN (SELECT id FROM playlists WHERE user_id = $2)`,
         [trackIds, req.user.id]
       );
+      await forgetOnDevices(client, req.user.id, trackIds);
       return rowCount;
     });
 
@@ -335,10 +336,33 @@ libraryRoutes.delete(
           AND playlist_id IN (SELECT id FROM playlists WHERE user_id = $2)`,
       [trackId, req.user.id]
     );
+    await forgetOnDevices({ query }, req.user.id, [trackId]);
 
     res.json({ ok: true });
   })
 );
+
+// Forgets that a paired computer was holding these tracks.
+//
+// `device_tracks` is append-only bookkeeping, and nothing was ever removing
+// from it - so a library of 110 songs reported 696 on its iPod, which is every
+// track ever written to it including the ones taken back out. The Devices page
+// showed that number as "synced".
+//
+// **Safe because the server is not the authority here.** What is physically on
+// an iPod is decided by the ledger kept on the device itself, and a removal
+// sync plans from that ledger against the manifest - see `build_plan` in the
+// local app. These rows only exist so a sync can skip work it has already done,
+// and a track that is no longer in the library is no longer in the manifest, so
+// they can never be consulted again.
+async function forgetOnDevices(client, userId, trackIds) {
+  await client.query(
+    `DELETE FROM device_tracks
+      WHERE track_id = ANY($1::bigint[])
+        AND device_id IN (SELECT id FROM devices WHERE user_id = $2)`,
+    [trackIds, userId]
+  );
+}
 
 // Manual metadata correction. Sets metadata_state to 'manual', which the
 // resolver treats as sacred: automated resolution will not overwrite it.

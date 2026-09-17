@@ -176,9 +176,29 @@ the fallback gave fourteen album-less songs fourteen different keys and Cover
 Flow drew a separate "Unknown Album" tile for each. Left empty they share one
 key and appear once, which is what iTunes itself does.
 
-Both fixes apply as files are written. A track already on a device keeps the
-tags it was given, so repairing an iPod synced before them means removing those
-tracks and syncing again.
+**And a sync corrects what is already on the device.** A track used to be
+tagged from the manifest once, when it was copied across, and never again — so
+an artist fixed in the web tool afterwards, or a change to what this
+application writes, never reached an iPod that already held the song. The only
+remedy was to remove it and download it again.
+
+`_stale_tag_locations` compares the device's own database rows against the
+manifest during planning, and a disagreement counts as work in exactly the way
+missing artwork does. `_retag_existing` then rewrites those files' tags and
+`IpodDevice.retag` corrects the rows, committing once through pypodlib's own
+`save`. Four properties make it safe to run on every sync:
+
+- **Only tracks in the ledger**, the same rule removals follow — a track added
+  by iTunes keeps its own tags whatever the library says.
+- **Only rows that disagree.** A device already in step costs one pass over its
+  track list and no writes at all.
+- **The cover is read back out and written in again.** `apply` clears every tag
+  before writing, which is what stops source metadata surviving; re-tagging
+  without `embedded_artwork` would drop the embedded cover, and the artwork
+  database is rebuilt by reading covers out of those very files. One pass of
+  corrections would have stripped the art off the device.
+- **Never fatal.** The music is on the iPod; failing a sync over a tag would be
+  the wrong trade.
 
 ### Another go at the songs nothing could identify
 
