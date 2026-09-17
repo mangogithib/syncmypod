@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import { rateLimit, requireUser } from '../auth/middleware.js';
-import { many, one, query, transaction } from '../db/pool.js';
+import { one, query, transaction } from '../db/pool.js';
 import { badRequest, handler, id, notFound, pagination, str } from '../lib/api.js';
 import { matchKey } from '../lib/normalise.js';
 import * as deezer from '../providers/deezer.js';
 import * as library from '../services/library.js';
 import { appendToPlaylist } from '../services/playlist-writes.js';
-import { absorb, countUnresolved, startRematch } from '../services/rematch.js';
+import { countUnresolved, startRematch } from '../services/rematch.js';
 import {
   resolveAndSave,
   resolveTrack,
@@ -528,58 +528,6 @@ libraryRoutes.post(
     });
 
     res.json({ ok: true, track: await library.getTrack(req.user.id, trackId) });
-  })
-);
-
-// ---------------------------------------------------------------------------
-// The same song, twice
-// ---------------------------------------------------------------------------
-//
-// See findDuplicateGroups for why a library ends up holding one recording
-// under two rows, and why this lists them rather than merging them itself.
-
-libraryRoutes.get(
-  '/duplicates',
-  handler(async (req, res) => {
-    const groups = await library.findDuplicateGroups(req.user.id);
-    res.json({ groups, count: groups.length });
-  })
-);
-
-// Folds one or more rows into another.
-//
-// Everything pointing at the rows being merged - library membership, playlist
-// places, what a device is holding - is moved onto the one being kept before
-// they are deleted, so a playlist keeps its song and the next sync does not
-// re-download anything. That is `absorb`, which the automatic pass already
-// uses; this is the same operation asked for by hand.
-libraryRoutes.post(
-  '/duplicates/merge',
-  handler(async (req, res) => {
-    const keepId = id(req.body?.keepId, 'keepId');
-    const mergeIds = (Array.isArray(req.body?.mergeIds) ? req.body.mergeIds : []).map((value) =>
-      id(value, 'mergeId')
-    );
-    if (mergeIds.length === 0) throw badRequest('No tracks to merge.');
-    if (mergeIds.includes(keepId)) {
-      throw badRequest('A track cannot be merged into itself.');
-    }
-
-    // Every row named has to be in this library. Without this the endpoint
-    // would delete catalogue rows on behalf of somebody who does not hold them.
-    const owned = await many(
-      `SELECT track_id AS id FROM library_tracks
-        WHERE user_id = $1 AND track_id = ANY($2::bigint[])`,
-      [req.user.id, [keepId, ...mergeIds]]
-    );
-    const held = new Set(owned.map((row) => Number(row.id)));
-    if (!held.has(keepId) || mergeIds.some((value) => !held.has(value))) {
-      throw notFound('Those tracks are not all in your library.');
-    }
-
-    for (const mergeId of mergeIds) await absorb(mergeId, keepId);
-
-    res.json({ merged: mergeIds.length, keepId });
   })
 );
 

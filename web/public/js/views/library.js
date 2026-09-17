@@ -21,9 +21,11 @@ import {
 // can be linked to and survives a reload. The Overview links straight to
 // #/library?state=flagged on the strength of that.
 //
-// There used to be a notice at the top offering to look up the songs with no
-// artist. It is gone, and so is the button: identifying them is now something
-// the server does on its own after every import. See services/rematch.js.
+// Two notices used to live at the top of this page and both are gone, for the
+// same reason: each asked the user to authorise something that has a right
+// answer. Looking up the songs with no artist, and folding a second copy of a
+// song into the one the catalogue recognised, are both things the server now
+// does on its own after every import. See services/rematch.js.
 
 export async function renderLibrary(view, context) {
   const query = readQuery();
@@ -88,14 +90,8 @@ export async function renderLibrary(view, context) {
   });
   searchBox.addEventListener('input', onSearch);
 
-  // Offered only when there is something to offer it for. A permanent button
-  // that usually does nothing teaches people to ignore it.
-  const duplicateSlot = h('div');
-  offerDuplicates();
-
   mount(
     view,
-    duplicateSlot,
     h(
       'div.toolbar',
       h('div.search-input', icon('search', 15), searchBox),
@@ -112,152 +108,6 @@ export async function renderLibrary(view, context) {
     results,
     selectionHost
   );
-
-  // The same song, twice.
-  //
-  // A recording nothing could identify is keyed on its name; the same
-  // recording arriving with an ISRC is keyed on that. Two keys, two rows, and
-  // nothing reconciles them - so the library quietly holds some songs twice
-  // and the iPod shows one album as two, with the songs split between them.
-  //
-  // Listed rather than merged. Two rows with one title are usually one song
-  // and sometimes a remaster, and only a person can say which - see
-  // findDuplicateGroups on the server for why nothing here guesses.
-  async function offerDuplicates() {
-    let groups = [];
-    try {
-      ({ groups } = await api.duplicates());
-    } catch {
-      return; // Informational; never break the page over it.
-    }
-    if (!context.isCurrent() || groups.length === 0) {
-      mount(duplicateSlot);
-      return;
-    }
-
-    const review = h(
-      'button.btn.btn-sm.btn-primary',
-      { type: 'button', onclick: () => duplicatesDialog(groups) },
-      'Review'
-    );
-
-    mount(
-      duplicateSlot,
-      notice(
-        h(
-          'div.row-between',
-          h(
-            'div',
-            h(
-              'strong',
-              `${groups.length} song${groups.length === 1 ? ' is' : 's are'} in your library twice. `
-            ),
-            h('span', 'They reach the iPod as separate tracks, and can split an album in two.')
-          ),
-          review
-        ),
-        '',
-        'info'
-      )
-    );
-  }
-
-  function duplicatesDialog(groups) {
-    // One choice per group: which row to keep. Everything else in the group is
-    // folded into it - playlist places and what is already on a device move
-    // across, so nothing is lost and nothing is downloaded again.
-    const chosen = new Map(groups.map((group) => [group.key, group.suggestedKeepId]));
-
-    const describe = (track) =>
-      [
-        track.artistCredit || 'no artist',
-        track.albumName || track.albumCredit || 'no album',
-        formatDuration(track.durationMs),
-        track.isrc ? 'has an ISRC' : null,
-      ]
-        .filter(Boolean)
-        .join(' · ');
-
-    const body = groups.map((group) =>
-      h(
-        'div.field',
-        h('label', group.title),
-        h(
-          'div.card.card-inset',
-          h(
-            'div.list',
-            group.tracks.map((track) => {
-              const radio = h('input', {
-                type: 'radio',
-                name: `dup-${group.key}`,
-                checked: track.id === chosen.get(group.key),
-                onchange: () => chosen.set(group.key, track.id),
-              });
-              return h(
-                'label.list-row',
-                { style: { cursor: 'pointer' } },
-                radio,
-                h(
-                  'div.list-main',
-                  h('div.list-title', track.title),
-                  h('div.list-sub', describe(track))
-                )
-              );
-            })
-          )
-        ),
-        h('span.hint', 'Keep the one selected; the rest are folded into it.')
-      )
-    );
-
-    const control = modal({
-      title: 'Songs in your library twice',
-      wide: true,
-      body: [
-        ...body,
-        h(
-          'p.small.subtle',
-          'The duplicate files stay on the iPod until a sync runs with "Also remove tracks that left the library" ticked.'
-        ),
-      ],
-      footer: [
-        h('button.btn', { type: 'button', onclick: () => control.close() }, 'Cancel'),
-        h(
-          'button.btn.btn-primary',
-          {
-            type: 'button',
-            onclick: async (event) => {
-              const button = event.currentTarget;
-              button.disabled = true;
-              button.textContent = 'Merging...';
-              let merged = 0;
-              try {
-                for (const group of groups) {
-                  const keepId = chosen.get(group.key);
-                  const mergeIds = group.tracks
-                    .map((track) => track.id)
-                    .filter((value) => value !== keepId);
-                  if (mergeIds.length === 0) continue;
-                  const result = await api.mergeDuplicates(keepId, mergeIds);
-                  merged += result.merged;
-                }
-                toast(`Merged ${merged} duplicate${merged === 1 ? '' : 's'}.`, 'ok');
-                control.close();
-                context.refreshStats?.();
-                load();
-                offerDuplicates();
-              } catch (err) {
-                toast(err.message, 'error');
-                button.disabled = false;
-                button.textContent = 'Merge';
-              }
-            },
-          },
-          'Merge'
-        ),
-      ],
-    });
-  }
 
   // Playlists are needed by the "add to playlist" action on every row, so they
   // are fetched once for the page rather than per click.

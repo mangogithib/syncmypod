@@ -34,10 +34,20 @@ its name; the same recording arriving with an ISRC is keyed on that, and nothing
 reconciles them. Each row carries its own album string, so "Musafir Cafe" and
 "Musafir Cafe (Songs from the Netflix Series)" are two albums on the device with
 the songs split between them - and the unresolved row has no `albums` row, so
-the Albums page never showed it. There is now a duplicates review with a
-suggested keeper; merging reuses `absorb`. On the real library it found four
-candidates, of which two were genuine duplicates and two were a song and its
-other release, which is the whole argument for reviewing rather than merging.
+the Albums page never showed it.
+
+The first answer was a duplicates review listing every pair that shared a title.
+That was wrong and it is gone. On the real library it found four: two were a
+placeholder beside the real thing, which has a right answer the tool can work
+out, and two were a song on two releases - "Dekha Hi Nahi" on a 2024 album and
+as a 2025 duet, "Kagaz" on a studio release and a session record - which is not
+a fault at all. So half of it asked for permission to do the obvious and the
+other half asked about a non-problem.
+
+What is there instead: the re-match pass folds a **placeholder** into the one
+resolved row sharing its title, without asking. Four conditions keep it honest -
+see `identifiedTwin`. Two identified rows are left alone, because two ISRCs mean
+two recordings and a library holding both is correct.
 
 **Many "Unknown Album" tiles in Cover Flow for fourteen album-less songs.**
 `tagging.py` fell back to the track artist whenever the manifest carried no

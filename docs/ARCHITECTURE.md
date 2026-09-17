@@ -136,37 +136,25 @@ stronger to key it on. The same recording arriving later with an ISRC is keyed
 on that. Two keys, two rows, and nothing reconciles them — so a library quietly
 holds some songs twice.
 
-**It shows up on the iPod rather than in the web tool.** Each row carries its
-own album string, so one album becomes two on the device with the songs split
-between them, and the unresolved row has no `albums` row to appear under in the
-Albums list. The first anybody knows of it is a duplicate cover in Cover Flow.
+**It shows up on the iPod rather than in the web tool.** The unresolved row
+carries its own album string, lifted from a video title, so one album becomes
+two on the device with the songs split between them — and that row has no
+`albums` row to appear under in the Albums list. The first anybody knows of it
+is a duplicate cover in Cover Flow.
 
-`findDuplicateGroups` lists them; it never merges. Matching is on the **exact**
-normalised title and nothing looser: decorations stay, because "Darmiyaan" and
-"Darmiyaan - Unplugged" are different recordings. Duration is not used at all —
-the two rows for one song came from different uploads and their lengths differ
-by twenty seconds, so a duration window would reject the very pairs this is for.
+**Two rows with one title are not automatically a fault.** This distinction is
+the whole design here, and getting it wrong the first time cost a feature.
+"Dekha Hi Nahi" is on a 2024 album and again as a 2025 duet; "Kagaz" is on a
+studio release and on a session record. Different ISRCs, different lengths,
+different credits — two recordings, and a library holding both is a library
+that is correct. There is nothing to fix and nothing to ask.
 
-Precision over recall, deliberately. A pair it misses costs nothing; a pair it
-invents costs a song. On the real library it found four candidates: two were the
-same recording twice, and two were a song and its other release — which is
-exactly why a person decides and the machine does not.
-
-Merging is `absorb`, the same operation the automatic re-match already uses:
-library membership, playlist places and what a device is holding all move onto
-the kept row before the other is deleted, so nothing is lost and the next sync
-re-downloads nothing.
-
-#### What is folded without being asked
-
-Two rows that both have an identity is a judgement. **A placeholder against an
-identified row is not**, and that case is merged automatically by the re-match
-pass — see `identifiedTwin`.
-
-A placeholder is a row nothing recognised: all it carries is a title somebody
-typed into a video description. It is not a claim about a different recording;
-it is the absence of a claim. So when exactly one *resolved* row in the same
-library has the same normalised title, the placeholder is folded into it.
+What is worth fixing is only ever the other shape: a **placeholder** beside the
+real thing. A placeholder is a row nothing recognised, carrying a title
+somebody typed into a video description. It is not a claim about a different
+recording, it is the absence of a claim — so `identifiedTwin` folds it into the
+one resolved row that shares its title, during the re-match pass, without
+asking.
 
 Four conditions, each doing work:
 
@@ -175,7 +163,7 @@ Four conditions, each doing work:
 | The twin is `resolved` | two placeholders merging into each other |
 | Normalised titles match exactly | a song against its reprise or unplugged cut |
 | Placeholder has no artist, or shares a name | a cover — "Kagaz" by someone else keeps no name in common |
-| Exactly one candidate | two identified rows with one title, which is the ambiguous case |
+| Exactly one candidate | two identified rows with one title, which is not a fault |
 
 Artist names are compared as **token sets**, because the two sides never agree
 on spelling: the same song arrived once as `Garvit Priyansh,Jonita,Aniket` and
@@ -183,9 +171,20 @@ once as `Garvit-Priyansh, Priyansh Srivastava, Jonita Gandhi, Garvit Soni,
 Aniket Shukla`. Words of three letters or fewer are dropped — an initial or
 "the" matching is not evidence.
 
-The ordinary route is still preferred and runs first: if the catalogue can
-identify the placeholder, `saveResolvedTrack` returns the identity's row and
-the merge happens on evidence rather than on a title.
+The ordinary route is preferred and runs first: if the catalogue can identify
+the placeholder, `saveResolvedTrack` returns the identity's row and the merge
+happens on evidence rather than on a title. Either way the move is `absorb` —
+library membership, playlist places and what a device is holding go onto the
+kept row before the other is deleted, so nothing is lost and the next sync
+re-downloads nothing.
+
+**There is no duplicates review, and there was briefly.** It listed every pair
+of rows sharing a title and asked which to keep. On the first real library it
+found four: two placeholders, and two pairs of genuine separate releases. Half
+of what it asked had a right answer the tool could work out, and the other half
+had no answer to give — so it was asking the user to authorise work in one case
+and to confirm a non-problem in the other. Both halves are better handled by
+not asking.
 
 ### What decides an album on the device
 

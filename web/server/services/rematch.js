@@ -284,13 +284,18 @@ async function rematchOne(userId, track) {
 
 // The row this placeholder is a second copy of, if there is exactly one.
 //
-// **Why this is allowed to act on its own where the review is not.** The
-// duplicates review compares two rows that both have an identity, and deciding
-// whether they are one recording or a song and its remaster is a judgement. This
-// is the other shape: one side is a placeholder - nothing recognised it, so all
-// it carries is a title somebody typed into a video description - and the other
-// has been confirmed against a catalogue. A placeholder is not a claim about a
-// different recording; it is the absence of a claim.
+// **Why this can act on its own.** A placeholder is a row nothing recognised:
+// all it carries is a title somebody typed into a video description. It is not
+// a claim about a different recording, it is the absence of a claim - so
+// folding it into a row a catalogue has confirmed loses nothing.
+//
+// There was briefly a review for this, listing every pair of rows that shared a
+// title and asking which to keep. It was the wrong shape. Two rows that both
+// have an identity are two *recordings* - "Dekha Hi Nahi" is on a 2024 album and
+// again as a 2025 duet, with different ISRCs and different lengths - and a
+// library holding both is a library that is right. Nothing needed deciding
+// there, so nothing should have been asked. What was worth fixing is only ever
+// this: a placeholder sitting beside the real thing.
 //
 // Four conditions, and every one of them is doing work:
 //
@@ -353,10 +358,9 @@ function nameTokens(credit) {
 // the same playlist or library, in which case the old row's entry is simply
 // dropped rather than duplicated.
 //
-// Exported because merging two rows by hand is the same operation. A pass that
-// resolves a track finds it has a twin; a person looking at a duplicates list
-// has already found one. What has to happen to the references is identical, and
-// there should be exactly one implementation of it.
+// Used by both routes into a merge: a track that resolves to an identity the
+// library already holds, and a placeholder folded into the row it is a second
+// copy of. What has to happen to the references is identical either way.
 export async function absorb(oldId, newId) {
   await transaction(async (tx) => {
     await tx.query(
