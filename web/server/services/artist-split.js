@@ -162,11 +162,10 @@ export async function classify(name) {
 
   // A part nobody could confirm is still a part.
   //
-  // This used to require every name to check out, and refuse the whole credit
-  // otherwise. That was too cautious and Mohamed said so: five entries were
-  // left naming several people because one name in each - "Aaghaz", "Irine ann"
-  // - is not in any catalogue. They are still people, and "Divyam Sodhi,
-  // Khwaab & Aaghaz" was never an artist.
+  // Requiring every name to check out, and refusing the whole credit
+  // otherwise, is too cautious: a credit is left naming several people
+  // whenever one name in it is in no catalogue. Those are still people, and a
+  // credit like "A, B & C" was never the name of an artist.
   //
   // So the split happens, and an unconfirmed part is stored under its own name
   // with no provider identity. That is a smaller error than the one it

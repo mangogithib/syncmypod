@@ -2,9 +2,9 @@
 
 How SyncMyPod works, and why it is built this way.
 
-[README.md](../README.md) covers what it is and how to run it.
-[HANDOVER.md](../HANDOVER.md) covers project state and what comes next. This
-document is the design.
+[README.md](../README.md) covers what it is and how to set it up.
+[LOCAL_APP_API.md](LOCAL_APP_API.md) is the contract between the two halves.
+This document is the design.
 
 ---
 
@@ -733,9 +733,10 @@ run.
 ## Repository layout
 
 ```
-README.md              what it is, how to run it
-HANDOVER.md            project state, decisions, what is next
+README.md              what it is, how to set it up
 LICENSE                MIT, covers both halves
+CONTRIBUTING.md        how to work on it
+SECURITY.md            how to report a vulnerability
 docs/
   ARCHITECTURE.md      this document
   LOCAL_APP_API.md     the contract between the halves

@@ -5,8 +5,7 @@
 -- instance owner a trip through the Google Cloud console before the login button
 -- they wanted exists at all - create a project, enable an API, register a
 -- client, add a redirect URI, add yourself as a test user. For a self-hosted
--- tool with one user that is a great deal of ceremony for a small feature, and
--- Mohamed said so.
+-- tool with one user that is a great deal of ceremony for a small feature.
 --
 -- The second route needs none of it. The local app already signs in to YouTube
 -- to fetch higher-quality audio, and that same session can list the account's

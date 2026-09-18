@@ -13,12 +13,12 @@ differ by model. pypodlib already encodes all of that, keyed to the device
 currently open, and it is knowledge this project has no reason to duplicate and
 every reason to get wrong.
 
-**The common case is now a convert, and that is deliberate.** Until
-15 September the downloader asked for YouTube's AAC stream so that nothing here
-had to run. Measuring the streams changed that - see `downloader.py` - and the
-file that arrives is usually Opus, which an iPod cannot play at all.
+**The common case is a convert, and that is deliberate.** Asking for YouTube's
+AAC stream would mean nothing here had to run at all; measuring the streams
+ruled it out - see `downloader.py` - so the file that arrives is usually Opus,
+which an iPod cannot play.
 
-So the setting below matters more than it used to. ``lossy_quality="high"``
+That makes the setting below the one that decides quality. ``lossy_quality="high"``
 asks pypodlib for **256kbps** rather than its default 192. On the Opus that
 YouTube serves, measured against the source it was made from:
 

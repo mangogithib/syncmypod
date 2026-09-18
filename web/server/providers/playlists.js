@@ -18,8 +18,10 @@ import * as youtube from './youtube.js';
 //                track, keeping what they said is better than discarding it.
 //   `upload`     YouTube and YouTube Music playlists, which are lists of
 //                videos. The "artist" is a guess split out of a video title,
-//                so it is used as a search and never stored - see the metadata
-//                rule in HANDOVER.md.
+//                so it is used as a search and never stored. The rule is that
+//                a source's own metadata is never trusted as metadata: a track
+//                nothing can verify is written title-only rather than tagged
+//                from a video title.
 //
 // Spotify and Apple Music are read from the pages their own embeds use. Neither
 // needs a key or an account, which keeps the property that matters: paste a

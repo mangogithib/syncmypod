@@ -142,7 +142,7 @@ class TestNormalising:
 
 
 class TestAcceptingALongerUpload:
-    """The relaxed second pass, added 13 September.
+    """The relaxed second pass.
 
     Deezer's duration is the release's. For many regional and independent
     artists what YouTube has is the official *video*, which carries an intro the

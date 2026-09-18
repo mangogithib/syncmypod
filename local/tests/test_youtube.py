@@ -323,7 +323,7 @@ class TestPickingTheStream:
         A higher Opus number does not mean Premium - the Opus stream is the same
         for everybody, and the AAC bitrate is the only one that says which
         account this is. Which stream a sync actually takes is `downloader.py`'s
-        decision, and since 15 September it is usually the Opus.
+        decision, and it is usually the Opus.
         """
         entry = {
             "formats": [

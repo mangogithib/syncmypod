@@ -6,10 +6,9 @@ executable, it can use the web tool's own design tokens so the two halves look
 like one product, and the engine already reports progress as events rather than
 printing, so the browser and the terminal are two renderings of one run.
 
-Since 15 September that page is shown in a window of its own rather than a
-browser tab - see ``window.py``, which wraps this exact page in the webview the
-operating system already has. The reasoning above is unchanged; only where the
-page is displayed is.
+That page is shown in a window of its own rather than a browser tab - see
+``window.py``, which wraps this exact page in the webview the operating system
+already has. None of the reasoning above depends on which of the two is used.
 
 What it is not is a web application. It binds to the loopback interface on a
 port the operating system picks, it is reachable only with a token generated at

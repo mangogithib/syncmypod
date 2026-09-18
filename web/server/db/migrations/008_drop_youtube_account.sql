@@ -6,8 +6,8 @@
 -- application. So every instance owner had to create a Google Cloud project,
 -- enable an API, register a client, and paste two values into Settings - and
 -- then, because `youtube.readonly` is a sensitive scope, add their own address
--- to that client's Test users list before sign-in would work at all. Mohamed
--- did all of it and still met "Error 403: access_denied".
+-- to that client's Test users list before sign-in would work at all - and even
+-- then it commonly ends at "Error 403: access_denied".
 --
 -- Following a public playlist link does the same job, from five services, and
 -- asks for none of it.

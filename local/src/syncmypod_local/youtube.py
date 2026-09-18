@@ -604,8 +604,8 @@ def best_aac_bitrate(entry: dict) -> int | None:
     """The highest-bitrate AAC audio stream in a yt-dlp result.
 
     This is the Premium probe, not a judgement about which stream to download -
-    `downloader.py` decides that, and since 15 September it prefers Opus to the
-    128kbps AAC offered to everyone else. AAC is what is measured here because
+    `downloader.py` decides that, and it prefers Opus to the 128kbps AAC
+    offered to everyone else. AAC is what is measured here because
     it is the only stream whose bitrate says anything about the account: 256kbps
     is offered to Premium and 128kbps to everybody, while the Opus stream is the
     same for both.

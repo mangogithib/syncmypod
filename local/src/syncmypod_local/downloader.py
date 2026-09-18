@@ -16,9 +16,8 @@ re-upload. Both are weighted heavily below.
 
 **The stream chosen is the one that sounds best on the device, not the one
 that avoids work.** YouTube serves the same audio as AAC and as Opus, and an
-iPod plays only the AAC - so taking AAC means no re-encode, which is why this
-module asked for it first until 15 September. Measuring the two settled it the
-other way.
+iPod plays only the AAC - so taking AAC means no re-encode, which is the
+obvious choice until the two are measured against each other.
 
 Signed out, YouTube's AAC stream is brickwalled at **15.8kHz**: everything above
 it is gone, at -90dB or lower. Measured on three unrelated tracks, the figure was
@@ -65,9 +64,9 @@ MAX_DURATION_DRIFT_SECONDS = 12.0
 #
 # Deezer's duration is the release's; what YouTube has for many regional and
 # independent artists is the official video, which carries an intro the release
-# does not. That is a systematic offset rather than noise - measured on the ten
-# tracks that failed the 13 September sync, the closest upload was 15, 25, 31
-# and 39 seconds long, all of them the right recording and all rejected.
+# does not. That is a systematic offset rather than noise: across ten tracks a
+# sync could not find, the closest upload ran 15, 25, 31 and 39 seconds long,
+# all of them the right recording and all rejected by the strict limit.
 #
 # Asymmetric on purpose. Longer is explainable: an intro, an outro, a few
 # seconds of applause. Shorter is not - a shorter upload is a clip, a snippet or

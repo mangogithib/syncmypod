@@ -1,14 +1,14 @@
 -- What the local app found when it went looking for a track's audio.
 --
--- Until now the only way to learn that a song could not be found was to run a
--- whole sync with the iPod plugged in and read the failures afterwards. The
+-- Without this the only way to learn that a song could not be found is to run
+-- a whole sync with the iPod plugged in and read the failures afterwards. The
 -- local app can answer the same question in seconds per track without
 -- downloading anything - it already has the search, the scoring and the
--- duration check - so it now does that on demand and reports back here.
+-- duration check - so it does that on demand and reports back here.
 --
 -- **Why the check stays in the local app.** Searching from this server would be
--- the obvious place for it, and it does not work: measured on 13 September, a
--- home connection was blocked after one large sync, with every search returning
+-- the obvious place for it, and it does not work: one large sync is enough to
+-- get a home connection blocked, with every search returning
 -- "Sign in to confirm you're not a bot". A datacentre address is the primary
 -- target of that check and would be blocked harder and permanently, and the only
 -- known fix is a signed-in session - which would mean a Google credential on a
