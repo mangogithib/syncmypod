@@ -1208,10 +1208,11 @@ code {
   .track-title-line .badge { display: none; }
 
   /* Wide enough for the three icon buttons at a size a finger can hit, plus the
-     gap that sets the destructive one apart below, so the title gets the rest
-     and stops short of them rather than sliding under. */
+     rule that sets the destructive one apart below - and not a pixel more. Every
+     one of these is taken from the title beside it, which on a 375px screen is
+     already down to a few words. */
   td.actions,
-  th.col-actions { width: 156px; }
+  th.col-actions { width: 144px; }
 
   td.actions .icon-btn { min-width: 44px; min-height: 44px; }
 
@@ -1233,7 +1234,6 @@ code {
     border-left: 1px solid var(--border);
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
-    padding-left: var(--space-2);
   }
 
   /* A little air between the longest title and the first button. */
