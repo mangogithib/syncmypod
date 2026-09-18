@@ -309,6 +309,18 @@ async function rematchOne(userId, track) {
 //   * there must be exactly one candidate. Two identified rows with the same
 //     title is precisely the ambiguous case, and it belongs in the review.
 async function identifiedTwin(userId, track) {
+  // A title that normalises to nothing is not evidence of anything.
+  //
+  // The fold below keeps letters and digits in any script. An earlier version
+  // kept only `[a-z0-9]`, which erased a title written entirely in Malayalam,
+  // Devanagari, Arabic or CJK down to the empty string - and two empty strings
+  // compare equal, so the first such placeholder would have been absorbed into
+  // the first such resolved track and the two songs merged into one. Guarded
+  // here as well as fixed below, because "no key" must never mean "matches
+  // everything".
+  const key = normaliseTitle(track.title);
+  if (!key) return null;
+
   const candidates = await many(
     `SELECT t.id, t.artist_credit AS "artistCredit"
        FROM library_tracks lt
@@ -316,8 +328,9 @@ async function identifiedTwin(userId, track) {
       WHERE lt.user_id = $1
         AND t.id <> $2
         AND t.metadata_state = 'resolved'
-        AND regexp_replace(lower(t.title), '[^a-z0-9]+', '', 'g') = $3`,
-    [userId, track.id, normaliseTitle(track.title)]
+        AND regexp_replace(lower(t.title), '[^[:alnum:]]+', '', 'g') = $3
+        AND regexp_replace(lower(t.title), '[^[:alnum:]]+', '', 'g') <> ''`,
+    [userId, track.id, key]
   );
   if (candidates.length !== 1) return null;
 
@@ -328,10 +341,17 @@ async function identifiedTwin(userId, track) {
   return [...mine].some((token) => theirs.has(token)) ? twin : null;
 }
 
+// The title fold used to decide whether two rows are the same song.
+//
+// `\p{L}\p{N}` rather than `a-z0-9`, so a title in a non-Latin script keeps its
+// letters instead of collapsing to nothing. This has to stay in step with the
+// `[^[:alnum:]]` expression in the query above - Postgres's `alnum` class is
+// unicode-aware on a UTF-8 database, and both sides drop combining marks, so
+// the two agree character for character.
 function normaliseTitle(value) {
   return String(value || '')
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '');
+    .replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
 // The words in an artist credit, for asking whether two credits name any of the

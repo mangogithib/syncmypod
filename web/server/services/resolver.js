@@ -586,22 +586,47 @@ export async function saveResolvedTrack(resolved, { client } = {}) {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
                'resolved', now())
        ON CONFLICT (match_key) DO UPDATE
-          SET title        = EXCLUDED.title,
-              album_id     = COALESCE(EXCLUDED.album_id, tracks.album_id),
-              track_no     = COALESCE(EXCLUDED.track_no, tracks.track_no),
-              disc_no      = COALESCE(EXCLUDED.disc_no, tracks.disc_no),
+          -- A track a human has corrected stays exactly as they left it.
+          --
+          -- The six columns the correction dialog writes - title, artist,
+          -- album, genre, track and disc number, and the album row the album
+          -- name resolves to - are held back when the stored row is already
+          -- 'manual'. Keeping only the *flag* was not enough: the flag said
+          -- "corrected by hand" while the values underneath had been replaced
+          -- by whichever provider answered last, and the automatic passes that
+          -- call this run unattended - the re-match sweep, and the followed
+          -- playlists that are re-read every half hour - so a correction could
+          -- be undone hours later with nothing to show it had happened.
+          --
+          -- Everything below the guarded block is catalogue fact rather than
+          -- opinion: identifiers, duration, the explicit flag. Those are worth
+          -- improving on a manual row and nobody types them by hand.
+          SET title        = CASE WHEN tracks.metadata_state = 'manual'
+                                  THEN tracks.title ELSE EXCLUDED.title END,
+              artist_credit = CASE WHEN tracks.metadata_state = 'manual'
+                                  THEN tracks.artist_credit ELSE EXCLUDED.artist_credit END,
+              album_credit  = CASE WHEN tracks.metadata_state = 'manual'
+                                  THEN tracks.album_credit ELSE EXCLUDED.album_credit END,
+              album_id     = CASE WHEN tracks.metadata_state = 'manual'
+                                  THEN tracks.album_id
+                                  ELSE COALESCE(EXCLUDED.album_id, tracks.album_id) END,
+              genre        = CASE WHEN tracks.metadata_state = 'manual'
+                                  THEN tracks.genre
+                                  ELSE COALESCE(EXCLUDED.genre, tracks.genre) END,
+              track_no     = CASE WHEN tracks.metadata_state = 'manual'
+                                  THEN tracks.track_no
+                                  ELSE COALESCE(EXCLUDED.track_no, tracks.track_no) END,
+              disc_no      = CASE WHEN tracks.metadata_state = 'manual'
+                                  THEN tracks.disc_no
+                                  ELSE COALESCE(EXCLUDED.disc_no, tracks.disc_no) END,
               duration_ms  = COALESCE(EXCLUDED.duration_ms, tracks.duration_ms),
               isrc         = COALESCE(tracks.isrc, EXCLUDED.isrc),
               deezer_id    = COALESCE(tracks.deezer_id, EXCLUDED.deezer_id),
               itunes_id    = COALESCE(tracks.itunes_id, EXCLUDED.itunes_id),
               mbid         = COALESCE(tracks.mbid, EXCLUDED.mbid),
               explicit     = COALESCE(EXCLUDED.explicit, tracks.explicit),
-              genre        = COALESCE(EXCLUDED.genre, tracks.genre),
-              artist_credit = EXCLUDED.artist_credit,
-              album_credit  = EXCLUDED.album_credit,
-              metadata_source = EXCLUDED.metadata_source,
-              -- A track a human has corrected stays 'manual'. Automated
-              -- resolution must never silently overwrite a manual fix.
+              metadata_source = CASE WHEN tracks.metadata_state = 'manual'
+                                  THEN tracks.metadata_source ELSE EXCLUDED.metadata_source END,
               metadata_state  = CASE WHEN tracks.metadata_state = 'manual'
                                      THEN 'manual' ELSE 'resolved' END,
               resolved_at  = now(),

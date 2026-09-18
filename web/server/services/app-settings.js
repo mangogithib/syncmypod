@@ -120,9 +120,10 @@ export async function setMany(updates, userId) {
     applied.push({ key, cleared: false });
   }
 
-  // Anything holding derived state from these values has to be told.
-  for (const listener of listeners) listener(applied.map((entry) => entry.key));
-
+  // The cache above is the only derived state these values have, and it is
+  // updated in step as each key is written. There is deliberately no listener
+  // registry: nothing else in the server holds a copy of a setting past the
+  // call that read it, so there is nobody to notify.
   return { applied, rejected };
 }
 

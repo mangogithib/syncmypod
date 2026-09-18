@@ -51,7 +51,7 @@ _NON_WORD = re.compile(r"[^\w\s]", re.UNICODE)
 
 @dataclass(slots=True)
 class Entry:
-    """One track this tool wrote, and how to find it again."""
+    """One track this tool knows about, and how to find it again."""
 
     track_id: int
     location: str
@@ -61,9 +61,19 @@ class Entry:
     format: str
     size: int
     added_at: str
+    # Whether this file was recognised rather than written.
+    #
+    # A first sync to an iPod that already holds the library matches tracks on
+    # title, artist and album and records them, so they are not downloaded a
+    # second time. That is a claim about identity, not about ownership: the file
+    # was put there by iTunes, or by another tool, or by this one before the
+    # ledger existed. The module's governing rule is that nothing this tool did
+    # not add is ever removed, so an adopted entry is remembered for the diff
+    # and excluded from deletion. Writing the track properly later clears it.
+    adopted: bool = False
 
     def as_json(self) -> dict[str, Any]:
-        return {
+        payload = {
             "location": self.location,
             "title": self.title,
             "artist": self.artist,
@@ -72,6 +82,11 @@ class Entry:
             "size": self.size,
             "addedAt": self.added_at,
         }
+        # Only when true, so the common case stays the shape it always was and
+        # a ledger written by an older version reads back identically.
+        if self.adopted:
+            payload["adopted"] = True
+        return payload
 
     @property
     def fingerprint(self) -> str:
@@ -96,6 +111,7 @@ class Ledger:
         track: dict[str, Any],
         file_format: str,
         size: int,
+        adopted: bool = False,
     ) -> None:
         self.entries[int(track_id)] = Entry(
             track_id=int(track_id),
@@ -106,6 +122,7 @@ class Ledger:
             format=file_format,
             size=int(size or 0),
             added_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            adopted=adopted,
         )
 
     def forget(self, track_id: int) -> None:
@@ -183,6 +200,7 @@ def load(mount_path: Path, server_url: str, user_id: Any) -> Ledger:
                 format=str(value.get("format") or ""),
                 size=int(value.get("size") or 0),
                 added_at=str(value.get("addedAt") or ""),
+                adopted=bool(value.get("adopted")),
             )
         except (TypeError, ValueError):
             continue

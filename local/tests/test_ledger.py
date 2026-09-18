@@ -140,3 +140,72 @@ class TestFingerprint:
 
     def test_the_same_title_by_a_different_artist_does_not_collide(self):
         assert ledger.fingerprint("Halo", "A", "X") != ledger.fingerprint("Halo", "B", "X")
+
+
+class TestAdoption:
+    """The flag that separates "this tool wrote it" from "this tool found it"."""
+
+    def test_the_flag_survives_a_write_and_a_read(self, tmp_path):
+        record = ledger.load(tmp_path, "https://pod.example.org", 1)
+        record.record(
+            1,
+            location=":F00:ONE.m4a",
+            track={"title": "One"},
+            file_format="m4a",
+            size=1,
+            adopted=True,
+        )
+        record.record(
+            2, location=":F00:TWO.m4a", track={"title": "Two"}, file_format="m4a", size=1
+        )
+        record.save()
+
+        reloaded = ledger.load(tmp_path, "https://pod.example.org", 1)
+        assert reloaded.entries[1].adopted is True
+        assert reloaded.entries[2].adopted is False
+
+    def test_writing_the_track_properly_clears_it(self, tmp_path):
+        """Adoption is not permanent: downloading the track takes ownership."""
+        record = ledger.load(tmp_path, "https://pod.example.org", 1)
+        record.record(
+            1,
+            location=":F00:ONE.m4a",
+            track={"title": "One"},
+            file_format="m4a",
+            size=0,
+            adopted=True,
+        )
+        record.record(
+            1, location=":F00:ONE.m4a", track={"title": "One"}, file_format="m4a", size=4096
+        )
+        assert record.entries[1].adopted is False
+
+    def test_an_older_ledger_reads_as_not_adopted(self, tmp_path):
+        """Every entry written before the flag existed was one this tool wrote."""
+        path = tmp_path / "iPod_Control" / "Device" / "SyncMyPod.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "libraries": {
+                        "https://pod.example.org#1": {
+                            "tracks": {
+                                "1": {
+                                    "location": ":F00:ONE.m4a",
+                                    "title": "One",
+                                    "artist": "A",
+                                    "album": "B",
+                                    "format": "m4a",
+                                    "size": 10,
+                                    "addedAt": "2026-01-01T00:00:00+00:00",
+                                }
+                            }
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        record = ledger.load(tmp_path, "https://pod.example.org", 1)
+        assert record.entries[1].adopted is False
