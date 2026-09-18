@@ -9,9 +9,17 @@ FROM node:22-alpine
 # Postgres - so there is no reason for it to own its own files.
 WORKDIR /app
 
-# Dependencies first, so a code change does not re-run npm install.
-COPY package.json package-lock.json* ./
-RUN npm install --omit=dev --no-audit --no-fund
+# Dependencies first, so a code change does not re-install them.
+#
+# `npm ci` and not `npm install`, against a committed lockfile and with no `*`
+# making it optional. The difference is the whole point of shipping a lockfile:
+# `ci` installs the exact tree that was resolved and reviewed, fails if the
+# lockfile and package.json disagree, and never quietly writes a new one. With
+# `install` against a floating range, two people building this on different days
+# get different dependency trees, and a compromised patch release lands without
+# anything in the repository changing.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
 
 COPY server ./server
 COPY public ./public

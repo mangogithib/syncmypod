@@ -64,9 +64,21 @@ export async function fetchJson(url, options = {}) {
       });
 
       if (response.status === 429) {
-        // Respect the server's own backoff figure when it gives one.
-        const retryAfter = Number(response.headers.get('retry-after'));
-        const waitMs = Number.isFinite(retryAfter) ? retryAfter * 1000 : 2000;
+        // Respect the server's own backoff figure when it gives one, and fall
+        // back to two seconds when it does not.
+        //
+        // The header is read explicitly rather than through `Number()` alone,
+        // because a missing header reads as `null` and `Number(null)` is `0` -
+        // which is a perfectly finite number, so the previous form waited zero
+        // milliseconds and retried immediately. That is the opposite of backing
+        // off, and it is the case that matters: the providers that rate limit
+        // this client mostly do not send the header at all.
+        //
+        // A date-form `Retry-After` is also legal and gives NaN here, which
+        // takes the same fallback.
+        const header = response.headers.get('retry-after');
+        const seconds = header === null ? NaN : Number(header);
+        const waitMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 2000;
         lastError = new ProviderError(`${provider} rate limited`, {
           status: 429,
           provider,

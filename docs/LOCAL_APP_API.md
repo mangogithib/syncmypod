@@ -71,6 +71,12 @@ the server's own canonical address.
 
 For headless setups where reading a code off a web page is awkward.
 
+**Disabled unless the server sets `ALLOW_PASSWORD_PAIRING=1`.** It is off by
+default because nothing in this project uses it - the pairing code above is what
+the local app does - and an endpoint that accepts an account password is not
+something every instance should expose without choosing to. A server with it off
+answers `404` with a message saying so, before reading the body.
+
 ```http
 POST /api/devices/token
 ```

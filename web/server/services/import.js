@@ -362,7 +362,35 @@ async function importTrackList(jobId, userId, parsed, options) {
 // the row is only marked done once the job's own total has been reached -
 // otherwise the first playlist to finish would close the job while the rest
 // were still running.
-async function processItems(
+// Every import goes through here, and every import can fail partway: a provider
+// stops answering, the database refuses a write, a playlist is deleted while it
+// is being filled. The job row is inserted as 'running' before any of that, and
+// only `runItems` below ever moves it off that status - so an exception left it
+// claiming to be in progress for ever. The Import page polls a running job, so
+// the user saw a spinner that would never stop and had no way to clear it.
+//
+// Wrapping here rather than at each of the three call sites, because the next
+// caller added would have to remember, and this is not a thing to remember.
+async function processItems(jobId, userId, items, options = {}) {
+  try {
+    return await runItems(jobId, userId, items, options);
+  } catch (err) {
+    try {
+      await query(
+        `UPDATE import_jobs
+            SET status = 'error', error = $2, finished_at = now()
+          WHERE id = $1 AND status <> 'done'`,
+        [jobId, String(err?.message || err).slice(0, 500)]
+      );
+    } catch {
+      // The original failure is the one worth reporting. If the database is
+      // what broke, this second write was never going to land either.
+    }
+    throw err;
+  }
+}
+
+async function runItems(
   jobId,
   userId,
   items,

@@ -63,6 +63,17 @@ export const config = {
   // peer really is the proxy, and ignored otherwise.
   trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
 
+  // Whether a device may be paired by sending the account password.
+  //
+  // Off, because nothing this project ships uses it. The local app pairs with a
+  // short single-use code read off the web UI, which is the whole point of that
+  // design: the password never leaves the browser it was typed into. The
+  // password route exists for a headless box where reading a code off a page is
+  // awkward, and it is a second door that accepts credentials on an instance
+  // that may be on the public internet - so it is opt-in rather than something
+  // every deployment exposes without knowing it is there.
+  allowPasswordPairing: /^(1|true|yes|on)$/i.test(process.env.ALLOW_PASSWORD_PAIRING || ''),
+
   session: {
     cookieName: 'syncmypod_sid',
     // Long enough that a personal music library does not nag for a password

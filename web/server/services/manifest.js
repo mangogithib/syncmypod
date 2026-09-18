@@ -30,11 +30,10 @@ export async function buildManifest(userId, deviceId) {
   // The central rule, and the one place it is enforced: nothing is written to an
   // iPod tagged from an unverified source title.
   //
-  // **That is not the same as refusing to write the track.** Until now an
-  // unresolved track was held back entirely, which meant a song somebody had
-  // deliberately added never reached the device and the only remedy was typing
-  // an artist in by hand. Mohamed asked for the opposite, and he is right: the
-  // song goes on, and the fields nobody could confirm go on empty.
+  // **That is not the same as refusing to write the track.** Holding an
+  // unresolved track back entirely would mean a song somebody deliberately
+  // added never reaches the device, with no remedy but typing an artist in by
+  // hand. The song goes on; the fields nobody could confirm go on empty.
   //
   // An unresolved row already stores an empty artist and a null album - see
   // saveUnresolvedTrack - so including it here writes exactly those. The iPod
@@ -75,6 +74,13 @@ export async function buildManifest(userId, deviceId) {
             -- honest scope: it is their library that gets written to their
             -- iPod. Adding a second artist's track to an album flips it, and
             -- the next sync corrects what is already on the device.
+            --
+            -- An unresolved track carries an empty artist credit, and an
+            -- unknown artist is not evidence of a second one - so blanks are
+            -- excluded from the count below. Without that, a single song whose
+            -- metadata nobody could confirm turned its whole album into a
+            -- compilation on the device, which is exactly the grouping this
+            -- flag exists to fix.
             (coalesce(credits.artists, 1) > 1) AS "compilation",
             al.artwork_url   AS "artworkUrl",
             al.release_year  AS "year",
@@ -98,7 +104,8 @@ export async function buildManifest(userId, deviceId) {
        -- count(DISTINCT ...) OVER (...), and one grouped pass over the
        -- library is cheaper than a correlated subquery per track anyway.
   LEFT JOIN (
-         SELECT t2.album_id, count(DISTINCT t2.artist_credit) AS artists
+         SELECT t2.album_id,
+                count(DISTINCT nullif(btrim(t2.artist_credit), '')) AS artists
            FROM library_tracks lt2
            JOIN tracks t2 ON t2.id = lt2.track_id
           WHERE lt2.user_id = $1 AND t2.album_id IS NOT NULL
@@ -242,46 +249,74 @@ function buildSearchTerms(track) {
 export async function recordSyncResults(deviceId, results) {
   let synced = 0;
   let failed = 0;
+  const rejected = [];
 
   for (const result of results) {
     const trackId = Number(result.trackId);
-    if (!Number.isInteger(trackId)) continue;
+    if (!Number.isInteger(trackId)) {
+      rejected.push({ trackId: result.trackId ?? null, reason: 'Not a track id.' });
+      continue;
+    }
 
     const state = ['synced', 'failed', 'skipped', 'removed'].includes(result.state)
       ? result.state
       : 'failed';
-    if (state === 'synced') synced++;
-    if (state === 'failed') failed++;
 
-    await one(
-      `INSERT INTO device_tracks
-         (device_id, track_id, state, synced_at, file_size, bitrate, format, source_used, error, attempts)
-       VALUES ($1, $2, $3, CASE WHEN $3 = 'synced' THEN now() ELSE NULL END,
-               $4, $5, $6, $7, $8, 1)
-       ON CONFLICT (device_id, track_id) DO UPDATE
-          SET state       = EXCLUDED.state,
-              synced_at   = COALESCE(EXCLUDED.synced_at, device_tracks.synced_at),
-              file_size   = COALESCE(EXCLUDED.file_size, device_tracks.file_size),
-              bitrate     = COALESCE(EXCLUDED.bitrate, device_tracks.bitrate),
-              format      = COALESCE(EXCLUDED.format, device_tracks.format),
-              source_used = COALESCE(EXCLUDED.source_used, device_tracks.source_used),
-              error       = EXCLUDED.error,
-              -- Counts retries, so a track that fails every time is visible as a
-              -- persistent problem rather than looking like a one-off.
-              attempts    = device_tracks.attempts + 1
-       RETURNING device_id`,
-      [
-        deviceId,
-        trackId,
-        state,
-        result.fileSize ?? null,
-        result.bitrate ?? null,
-        result.format ?? null,
-        result.sourceUsed ?? null,
-        result.error ? String(result.error).slice(0, 2000) : null,
-      ]
-    );
+    // One bad row must not take the batch with it.
+    //
+    // A batch is up to 500 results and each row is its own statement, so an
+    // exception halfway through left the earlier rows committed and answered
+    // the whole request with a 500 - and the local app, told the batch failed,
+    // has no way to know which half landed. The realistic cause is ordinary:
+    // a song removed from the library while the sync that was writing it ran,
+    // leaving a foreign key with nothing to point at.
+    //
+    // So each row stands alone and the rejects are named in the reply.
+    try {
+      await one(
+        `INSERT INTO device_tracks
+           (device_id, track_id, state, synced_at, file_size, bitrate, format, source_used, error, attempts)
+         VALUES ($1, $2, $3, CASE WHEN $3 = 'synced' THEN now() ELSE NULL END,
+                 $4, $5, $6, $7, $8, 1)
+         ON CONFLICT (device_id, track_id) DO UPDATE
+            SET state       = EXCLUDED.state,
+                synced_at   = COALESCE(EXCLUDED.synced_at, device_tracks.synced_at),
+                file_size   = COALESCE(EXCLUDED.file_size, device_tracks.file_size),
+                bitrate     = COALESCE(EXCLUDED.bitrate, device_tracks.bitrate),
+                format      = COALESCE(EXCLUDED.format, device_tracks.format),
+                source_used = COALESCE(EXCLUDED.source_used, device_tracks.source_used),
+                error       = EXCLUDED.error,
+                -- Counts retries, so a track that fails every time is visible as
+                -- a persistent problem rather than looking like a one-off.
+                attempts    = device_tracks.attempts + 1
+         RETURNING device_id`,
+        [
+          deviceId,
+          trackId,
+          state,
+          result.fileSize ?? null,
+          result.bitrate ?? null,
+          result.format ?? null,
+          result.sourceUsed ?? null,
+          result.error ? String(result.error).slice(0, 2000) : null,
+        ]
+      );
+      if (state === 'synced') synced++;
+      if (state === 'failed') failed++;
+    } catch (err) {
+      // Counted after the write, not before, so the totals describe what was
+      // actually recorded rather than what was attempted.
+      rejected.push({ trackId, reason: 'Could not be recorded.' });
+      console.warn(
+        `[sync] device ${deviceId} track ${trackId}: result not recorded - ${err.message}`
+      );
+    }
   }
 
-  return { synced, failed, recorded: results.length };
+  return {
+    synced,
+    failed,
+    recorded: results.length - rejected.length,
+    ...(rejected.length > 0 ? { rejected } : {}),
+  };
 }

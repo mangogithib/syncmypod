@@ -7,7 +7,7 @@ import {
   createPairingCode,
   revokeDevice,
 } from '../auth/tokens.js';
-import { baseUrl } from '../config.js';
+import { baseUrl, config } from '../config.js';
 import { many, one } from '../db/pool.js';
 import { handler, id, notFound, str } from '../lib/api.js';
 
@@ -153,13 +153,27 @@ deviceRoutes.post(
   })
 );
 
-// The credentials route from the concept, kept as a fallback for headless setups
-// where reading a code off a web page is awkward. The password is used once and
-// never stored by the local app.
+// Pairing with the account password, for headless setups where reading a code
+// off a web page is awkward. The password is used once and never stored by the
+// local app.
+//
+// **Off unless ALLOW_PASSWORD_PAIRING says otherwise.** Nothing this project
+// ships calls it - the local app uses the pairing code - so on a normal install
+// it is a second credential-accepting endpoint that exists only to be attacked.
+// Refused before the body is read, so a probe cannot even tell whether a
+// username exists.
 deviceRoutes.post(
   '/token',
   rateLimit({ windowMs: 60_000, max: 10 }),
   handler(async (req, res) => {
+    if (!config.allowPasswordPairing) {
+      return res.status(404).json({
+        error:
+          'Pairing with a password is not enabled on this server. ' +
+          'Use a pairing code from the Devices page.',
+      });
+    }
+
     const username = str(req.body?.username, 'Username', { required: true, max: 60 });
     const password = String(req.body?.password || '');
     const name = str(req.body?.deviceName, 'Device name', { max: 120 }) || 'Local app';

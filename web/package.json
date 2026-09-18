@@ -9,7 +9,8 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "migrate": "node server/db/migrate.js",
-    "create-user": "node server/scripts/create-user.js"
+    "create-user": "node server/scripts/create-user.js",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

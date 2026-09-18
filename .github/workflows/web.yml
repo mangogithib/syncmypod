@@ -38,7 +38,7 @@ jobs:
           node-version: "22"
 
       - name: Install
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       # Every file, server and browser alike. The frontend has no build step, so
       # nothing else would catch a syntax error in it before a user loaded the
@@ -137,7 +137,7 @@ jobs:
           node-version: "22"
 
       - name: Install
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Apply every migration from empty
         env:
@@ -152,3 +152,48 @@ jobs:
           DATABASE_URL: postgres://syncmypod:ci@localhost:5432/syncmypod
           SESSION_SECRET: ci-placeholder
         run: npm run migrate
+
+  # The server, run for real and driven over HTTP.
+  #
+  # Its own job rather than a step in `check`, because it needs a database and
+  # `check` deliberately does not. What it covers is narrow on purpose: the
+  # class of mistake that parses, imports, and then fails the moment a request
+  # reaches it. `node --check` cannot see those and neither can the reference
+  # scan - a settings save shipped throwing ReferenceError because the
+  # identifier it blew up on was iterated rather than called.
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: syncmypod
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: syncmypod
+        options: >-
+          --health-cmd "pg_isready -U syncmypod"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      # No test framework and no HTTP client: the suite starts the real server
+      # as a child process and talks to it with the fetch Node already has. Two
+      # runtime dependencies is a deliberate property of this project, and a
+      # test suite carrying five of its own would undo it.
+      - name: Tests
+        env:
+          TEST_DATABASE_URL: postgres://syncmypod:ci@localhost:5432/syncmypod
+        run: npm test
