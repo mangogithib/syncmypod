@@ -535,7 +535,13 @@ class GuiServer:
             )
         elif event == "database":
             self.session.add("database")
-        elif event in {"backup", "backup-skipped"}:
+        elif event == "backup":
+            # A full snapshot re-reads every file on the device and can take
+            # minutes; the database one is over before the page redraws. The
+            # page says which is happening so a long pause is explained rather
+            # than looking like a hang.
+            self.session.add("backup", full=bool(data.get("full")))
+        elif event == "backup-skipped":
             self.session.add(event)
         elif event == "checking":
             self.session.add("checking", total=data["total"], skipped=data["skipped"])

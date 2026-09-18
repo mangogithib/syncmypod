@@ -102,6 +102,87 @@ def test_backup_returns_a_snapshot(classic):
     assert snapshot
 
 
+class TestDatabaseSnapshots:
+    """The cheap backup taken before every sync, and putting one back.
+
+    A sync only ever adds audio files; what it rewrites is the database. So the
+    default snapshot copies the database and leaves the music alone, which is
+    the difference between a backup that costs a fraction of a second and one
+    that re-reads every byte on the device. The exhaustive copy is still there
+    behind ``full=True``.
+    """
+
+    def test_it_copies_the_database_and_not_the_music(self, classic, tmp_path, monkeypatch):
+        monkeypatch.setenv("SYNCMYPOD_BACKUP_DIR", str(tmp_path / "backups"))
+
+        music = classic.mount_path / "iPod_Control" / "Music" / "F00"
+        music.mkdir(parents=True, exist_ok=True)
+        (music / "BIG.m4a").write_bytes(b"\0" * 5_000_000)
+
+        snapshot_id = classic.backup(reason="test")
+        assert snapshot_id
+
+        root = tmp_path / "backups" / classic.serial / snapshot_id
+        copied = {p.name for p in root.rglob("*") if p.is_file()}
+        assert "iTunesDB" in copied
+        assert "manifest.json" in copied
+        assert "BIG.m4a" not in copied, "copied the music, which is the expensive mistake"
+
+    def test_a_restored_database_is_byte_for_byte_the_original(
+        self, classic, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("SYNCMYPOD_BACKUP_DIR", str(tmp_path / "backups"))
+        itunesdb = classic.mount_path / "iPod_Control" / "iTunes" / "iTunesDB"
+        before = itunesdb.read_bytes()
+
+        snapshot_id = classic.backup(reason="test")
+
+        # Whatever a bad write would have done to it.
+        itunesdb.write_bytes(b"corrupted")
+        assert itunesdb.read_bytes() != before
+
+        written = classic.restore_database(snapshot_id)
+        assert written >= 1
+        assert itunesdb.read_bytes() == before
+
+    def test_restoring_something_that_is_not_there_says_so(
+        self, classic, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("SYNCMYPOD_BACKUP_DIR", str(tmp_path / "backups"))
+        with pytest.raises(device.DeviceError, match="no snapshot"):
+            classic.restore_database("db-does-not-exist")
+
+    def test_snapshots_are_listed_newest_first(self, classic, tmp_path, monkeypatch):
+        monkeypatch.setenv("SYNCMYPOD_BACKUP_DIR", str(tmp_path / "backups"))
+        # Stamped to the second, so two in the same second are one directory.
+        # Written directly rather than by taking two backups a second apart.
+        first = classic.backup(reason="one")
+        root = tmp_path / "backups" / classic.serial
+        later = root / "db-29990101T000000Z"
+        later.mkdir(parents=True)
+        (later / "manifest.json").write_text(
+            '{"takenAt": "29990101T000000Z", "reason": "two", "files": []}', encoding="utf-8"
+        )
+
+        held = [s["id"] for s in classic.database_snapshots()]
+        assert held[0] == "db-29990101T000000Z"
+        assert first in held
+
+    def test_pruning_keeps_the_newest(self, classic, tmp_path, monkeypatch):
+        monkeypatch.setenv("SYNCMYPOD_BACKUP_DIR", str(tmp_path / "backups"))
+        root = tmp_path / "backups" / classic.serial
+        for stamp in ("20260101T000000Z", "20260102T000000Z", "20260103T000000Z"):
+            directory = root / f"db-{stamp}"
+            directory.mkdir(parents=True)
+            (directory / "manifest.json").write_text(
+                f'{{"takenAt": "{stamp}", "reason": "x", "files": []}}', encoding="utf-8"
+            )
+
+        assert classic.prune_database_snapshots(keep=2) == 1
+        remaining = [s["id"] for s in classic.database_snapshots()]
+        assert remaining == ["db-20260103T000000Z", "db-20260102T000000Z"]
+
+
 class TestCapacityParsing:
     """The string-to-bytes conversion, including the shapes that must not crash."""
 

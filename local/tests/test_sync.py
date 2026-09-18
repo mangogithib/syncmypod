@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 
 import httpx
@@ -586,6 +587,60 @@ class TestRemovals:
         assert not report.plan.removals
         assert len(device.open_at(ipod.mount_path).tracks()) == 1
 
+    @respx.mock
+    def test_an_adopted_track_is_never_removed(self, ipod, paired, audio_source):
+        """Recognising a file is not the same as having written it.
+
+        The dangerous sequence, and the one the fingerprint match creates: a
+        track already on the iPod is adopted so it is not downloaded twice,
+        which writes it into the ledger - and the ledger is the only thing
+        standing between somebody else's music and a `--remove` run. If the
+        song then leaves the library, a file this tool never wrote would be
+        deleted.
+        """
+        mock_server(manifest(tracks=[track(1)]))
+        sync.run(paired, mount=str(ipod.mount_path))
+
+        location = ledger.load(ipod.mount_path, SERVER, 1).entries[1].location
+        on_disk = ipod.mount_path.joinpath(*[p for p in location.split(":") if p])
+
+        # Losing the ledger is what makes the next run adopt rather than
+        # recognise its own work - the state an iPod filled by iTunes is in.
+        (ipod.mount_path / "iPod_Control" / "Device" / "SyncMyPod.json").unlink()
+        audio_source.clear()
+        adopting = sync.run(paired, mount=str(ipod.mount_path))
+        assert len(adopting.plan.adopted) == 1
+        assert ledger.load(ipod.mount_path, SERVER, 1).entries[1].adopted
+
+        # The song now leaves the library, with removals explicitly asked for.
+        respx.get(f"{SERVER}/api/sync/manifest").mock(
+            return_value=httpx.Response(200, json=manifest(tracks=[]))
+        )
+        report = sync.run(paired, mount=str(ipod.mount_path), remove=True)
+
+        assert not report.plan.removals, "offered to delete a file it only adopted"
+        assert report.removed == 0
+        assert on_disk.exists()
+
+    @respx.mock
+    def test_a_track_this_tool_wrote_is_still_removable(self, ipod, paired, audio_source):
+        """The adoption guard must not make everything undeletable.
+
+        The pair to the test above: a track this tool downloaded and wrote is
+        its own, and removing it when the library drops it is the feature.
+        """
+        mock_server(manifest(tracks=[track(1), track(2)]))
+        sync.run(paired, mount=str(ipod.mount_path))
+        assert not any(
+            e.adopted for e in ledger.load(ipod.mount_path, SERVER, 1).entries.values()
+        )
+
+        respx.get(f"{SERVER}/api/sync/manifest").mock(
+            return_value=httpx.Response(200, json=manifest(tracks=[track(1)]))
+        )
+        report = sync.run(paired, mount=str(ipod.mount_path), remove=True)
+        assert report.removed == 1
+
 
 class TestFailures:
     @respx.mock
@@ -712,7 +767,7 @@ class TestTranscoding:
 
         Measured against the Opus it is made from, the default of 192kbps rolls
         the top octave off from 19.5kHz and lands at -28.7dB of error; 256kbps
-        keeps the full 20.1kHz at -32.1dB. Since 15 September the downloader
+        keeps the full 20.1kHz at -32.1dB. The downloader
         prefers Opus precisely for that top octave, so letting the conversion
         throw it away would undo the point of taking it.
         """
@@ -974,7 +1029,7 @@ class TestFetchingSeveralAtOnce:
 
 
 class TestOneBadFileDoesNotEndTheRun:
-    """What stopped a 431-track sync after 45 on 12 September.
+    """What stops a 431-track sync after 45 tracks.
 
     `add_files` writes the batch and commits the database in one call, so a file
     the device will not take used to take the whole batch - and the whole run -
@@ -1043,7 +1098,7 @@ class TestOneBadFileDoesNotEndTheRun:
 class TestWhenYouTubeRefusesTheMachine:
     """ "Sign in to confirm you're not a bot" is not "track not found".
 
-    Measured on 13 September, after a 399-track sync: every search from this
+    Measured after a 399-track sync: every search from this
     machine came back with six bot-check errors and no results - including
     "Queen - Bohemian Rhapsody". The search runs with `ignoreerrors`, so those
     errors were swallowed and every track was recorded as "No audio could be
@@ -1096,7 +1151,7 @@ class TestWhenYouTubeRefusesTheMachine:
 class TestPlaylistsAreReconciledEverySync:
     """A playlist edit is work, even when every song is already on the iPod.
 
-    Asked for on 13 September: "even if all songs are already there, check if
+    The requirement: "even if all songs are already there, check if
     there is any update in the playlist". Before this, `nothing_to_do` looked
     only at downloads, removals and artwork, so a run in that state reported
     "Already up to date" and never touched the playlists.
@@ -1177,7 +1232,7 @@ class TestPlaylistsAreReconciledEverySync:
 class TestADeviceAlreadyMissingTheMirrorIsRepaired:
     """The self-healing half of the MHSD 3 fix.
 
-    Every playlist written before 13 September went into dataset 2 only, so
+    A playlist written into dataset 2 only is invisible to the iPod, so
     every device synced by this tool is in that state. The repair has to happen
     on its own: if "have the playlists changed?" only looked at dataset 2 it
     would answer "no" and skip the write, and the iPod would stay wrong for
@@ -1305,7 +1360,7 @@ class TestCheckingMatches:
     def test_the_bot_check_stops_the_run_rather_than_failing_every_track(
         self, paired, monkeypatch
     ):
-        """The lesson from 13 September, applied here too.
+        """The same lesson, applied here too.
 
         Once YouTube has decided this machine is a robot, every remaining search
         returns nothing - so carrying on would record a hundred perfectly
@@ -1338,3 +1393,94 @@ class TestCheckingMatches:
         report = sync.check_matches(paired)
         assert report.checked == 0
         assert report.message
+
+
+class TestArtworkIsFetchedOncePerCover:
+    """A record's tracks share one cover, so they share one download."""
+
+    def test_one_url_is_fetched_once_however_many_tracks_want_it(self):
+        calls: list[str] = []
+
+        def fetch(url):
+            calls.append(url)
+            return f"bytes for {url}"
+
+        cache = sync.ArtworkCache(fetch)
+        results = [cache.get("https://cdn/cover.jpg") for _ in range(12)]
+
+        assert calls == ["https://cdn/cover.jpg"]
+        assert results == ["bytes for https://cdn/cover.jpg"] * 12
+
+    def test_different_covers_are_fetched_separately(self):
+        calls: list[str] = []
+        cache = sync.ArtworkCache(lambda url: calls.append(url) or url)
+        cache.get("https://cdn/a.jpg")
+        cache.get("https://cdn/b.jpg")
+        cache.get("https://cdn/a.jpg")
+        assert calls == ["https://cdn/a.jpg", "https://cdn/b.jpg"]
+
+    def test_a_cover_that_could_not_be_had_is_not_retried(self):
+        """A 404 cover is a 404 for every track on the record."""
+        calls: list[str] = []
+        cache = sync.ArtworkCache(lambda url: calls.append(url) or None)
+        assert cache.get("https://cdn/gone.jpg") is None
+        assert cache.get("https://cdn/gone.jpg") is None
+        assert len(calls) == 1
+
+    def test_no_url_costs_nothing(self):
+        cache = sync.ArtworkCache(lambda url: pytest.fail("should not fetch"))
+        assert cache.get(None) is None
+        assert cache.get("") is None
+
+    def test_threads_asking_together_still_fetch_once(self):
+        """The case a plain dict gets wrong: four workers, one album."""
+        import threading as _threading
+
+        started = _threading.Event()
+        calls: list[str] = []
+
+        def slow(url):
+            calls.append(url)
+            started.set()
+            time.sleep(0.05)
+            return "cover"
+
+        cache = sync.ArtworkCache(slow)
+        results: list[object] = []
+        threads = [
+            _threading.Thread(target=lambda: results.append(cache.get("https://cdn/x.jpg")))
+            for _ in range(4)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(calls) == 1
+        assert results == ["cover"] * 4
+
+    def test_a_fetch_that_raises_does_not_strand_the_other_threads(self):
+        cache = sync.ArtworkCache(lambda url: (_ for _ in ()).throw(RuntimeError("boom")))
+        with pytest.raises(RuntimeError):
+            cache.get("https://cdn/x.jpg")
+        # The entry is settled, so a later caller gets the cached None rather
+        # than hanging on an event nobody will set.
+        assert cache.get("https://cdn/x.jpg") is None
+
+
+class TestBatchSize:
+    """How many tracks are written between full database rewrites."""
+
+    def test_a_small_run_keeps_the_default(self):
+        assert sync._batch_for(sync.DEFAULT_BATCH_SIZE, 6) == sync.DEFAULT_BATCH_SIZE
+
+    def test_a_large_run_commits_less_often(self):
+        assert sync._batch_for(sync.DEFAULT_BATCH_SIZE, 400) == sync.MAX_BATCH_SIZE
+
+    def test_it_scales_between_the_two(self):
+        assert sync._batch_for(sync.DEFAULT_BATCH_SIZE, 80) == 10
+
+    def test_an_explicit_batch_is_obeyed(self):
+        """Somebody who names a number has a reason."""
+        assert sync._batch_for(1, 400) == 1
+        assert sync._batch_for(50, 6) == 50

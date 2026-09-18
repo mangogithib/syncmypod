@@ -84,29 +84,249 @@ class IpodDevice:
     def describe(self) -> str:
         return self.model or self.name or str(self.mount_path)
 
-    def backup(self, reason: str = "before sync") -> str | None:
-        """Snapshot the iPod's database before modifying it.
+    def backup(self, reason: str = "before sync", *, full: bool = False) -> str | None:
+        """Snapshot what a sync can damage, before it damages it.
 
-        Worth doing every run. Writing a database is the one operation here that
-        can leave a device unusable, and pypodlib is alpha, so a restore point
-        costs a moment and removes the worst outcome. Returns the snapshot id,
-        or None if the library declined - a failed backup is reported by the
-        caller, never silently swallowed.
+        Writing a database is the one operation here that can leave a device
+        unusable, and pypodlib is alpha, so a restore point is worth taking
+        every run. The question is what has to be in it.
+
+        **By default, the database and nothing else.** A sync only ever *adds*
+        audio files; it never rewrites one. What it rewrites is the iTunesDB,
+        the play counts, the preferences and the artwork database, and those are
+        the only files a bad write can corrupt. On a real 160GB Classic they
+        come to well under a megabyte, beside 815MB of music that is not at
+        risk.
+
+        ``full=True`` hands the whole device to pypodlib's snapshot instead.
+        That is a genuine preservation copy - every file, content-addressed, so
+        a second snapshot of an unchanged device costs no extra *space*. It
+        costs a great deal of *time*, because it re-hashes every byte on the
+        device each run rather than trusting a timestamp, deliberately: a
+        removable filesystem can keep a coarse mtime across a content change.
+        Measured on an iPod holding 897MB, that was 77 seconds - and it scales
+        with the music on the device rather than with the work the sync has to
+        do, so a full 160GB device would spend the better part of an hour on it
+        before downloading anything.
+
+        So the cheap snapshot is the default and the exhaustive one is a choice.
+        Returns the snapshot id, or None if nothing could be taken - a failed
+        backup is reported by the caller, never silently swallowed.
         """
         if self._handle is None:
             raise DeviceError("This device is not open.")
 
-        # The destination is named explicitly. Left to itself the library files
-        # snapshots under the name of the project it was extracted from, which
-        # is not a directory anyone would think to look in.
+        if full:
+            # The destination is named explicitly. Left to itself the library
+            # files snapshots under the name of the project it was extracted
+            # from, which is not a directory anyone would think to look in.
+            from .config import backups_dir
+
+            destination = backups_dir()
+            destination.mkdir(parents=True, exist_ok=True)
+            try:
+                return self._handle.backup(str(destination), reason=reason)
+            except Exception as err:
+                raise DeviceError(f"Could not back up the iPod: {err}") from err
+
+        return self._backup_database(reason)
+
+    # The files a sync can rewrite, relative to the mount point. Everything here
+    # is either the database itself or something written alongside it.
+    #
+    # `iTunesControl` is deliberately absent: it is a pre-allocated placeholder,
+    # 60MB of nothing on this device, and copying it would cost more than every
+    # other file here put together while protecting nothing.
+    _DATABASE_FILES = (
+        "iPod_Control/iTunes/iTunesDB",
+        "iPod_Control/iTunes/iTunesDB.backup",
+        "iPod_Control/iTunes/iTunesSD",
+        "iPod_Control/iTunes/Extras.itdb",
+        "iPod_Control/iTunes/Play Counts",
+        "iPod_Control/iTunes/iTunesPrefs",
+        "iPod_Control/iTunes/iTunesPrefs.plist",
+        "iPod_Control/iTunes/iTunesStats",
+    )
+
+    # The artwork database, which `write_artwork` rewrites. Kept separate
+    # because the .ithmb image files are large and regenerable - a restore that
+    # brought back the database without them would simply rebuild them on the
+    # next sync.
+    _ARTWORK_DIR = "iPod_Control/Artwork"
+
+    def _backup_database(self, reason: str) -> str | None:
+        """Copy the database files to a timestamped snapshot directory.
+
+        Deliberately plain: a directory of ordinary files with a manifest beside
+        them, so somebody can restore one by hand with a file manager if this
+        application is not available to do it for them. That matters more than
+        cleverness - the moment a restore is needed is the moment the tool that
+        would have been clever is the thing under suspicion.
+        """
+        import hashlib
+        import json
+        from datetime import UTC, datetime
+
         from .config import backups_dir
 
-        destination = backups_dir()
-        destination.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        root = backups_dir() / (self.serial or "unidentified") / f"db-{stamp}"
+
+        entries: list[dict[str, Any]] = []
         try:
-            return self._handle.backup(str(destination), reason=reason)
-        except Exception as err:
+            root.mkdir(parents=True, exist_ok=True)
+            for relative in self._DATABASE_FILES:
+                source = self.mount_path / relative
+                if not source.is_file():
+                    continue
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+                entries.append(
+                    {
+                        "path": relative,
+                        "bytes": target.stat().st_size,
+                        "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                    }
+                )
+
+            artwork = self.mount_path / self._ARTWORK_DIR
+            if artwork.is_dir():
+                for source in sorted(artwork.iterdir()):
+                    # The database, not the images it points at.
+                    if not source.is_file() or source.suffix.lower() == ".ithmb":
+                        continue
+                    target = root / self._ARTWORK_DIR / source.name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+                    entries.append(
+                        {
+                            "path": f"{self._ARTWORK_DIR}/{source.name}",
+                            "bytes": target.stat().st_size,
+                            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                        }
+                    )
+        except OSError as err:
             raise DeviceError(f"Could not back up the iPod database: {err}") from err
+
+        if not entries:
+            # No database to snapshot. The caller decides whether that is fatal;
+            # on a freshly restored iPod it is simply the truth.
+            with contextlib.suppress(OSError):
+                root.rmdir()
+            return None
+
+        manifest = {
+            "kind": "database",
+            "reason": reason,
+            "takenAt": stamp,
+            "device": {
+                "serial": self.serial,
+                "model": self.model,
+                "generation": self.generation,
+            },
+            "files": entries,
+        }
+        try:
+            (root / "manifest.json").write_text(
+                json.dumps(manifest, indent=2), encoding="utf-8"
+            )
+        except OSError as err:
+            raise DeviceError(f"Could not back up the iPod database: {err}") from err
+
+        total = sum(entry["bytes"] for entry in entries)
+        logger.info(
+            "Snapshotted the database: %d file(s), %.1f MB, in %s",
+            len(entries),
+            total / (1024 * 1024),
+            root,
+        )
+        return root.name
+
+    def restore_database(self, snapshot_id: str) -> int:
+        """Put a database snapshot back on the device.
+
+        Returns how many files were written. The audio is untouched: this puts
+        back the database that describes it, which is the thing a bad write
+        breaks.
+        """
+        import json
+
+        from .config import backups_dir
+
+        root = backups_dir() / (self.serial or "unidentified") / snapshot_id
+        manifest_path = root / "manifest.json"
+        if not manifest_path.is_file():
+            raise DeviceError(f"There is no snapshot called {snapshot_id!r} for this iPod.")
+
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as err:
+            raise DeviceError(f"Snapshot {snapshot_id!r} could not be read: {err}") from err
+
+        written = 0
+        try:
+            for entry in manifest.get("files") or []:
+                source = root / str(entry["path"])
+                if not source.is_file():
+                    continue
+                target = self.mount_path / str(entry["path"])
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+                written += 1
+        except OSError as err:
+            raise DeviceError(f"Could not restore the iPod database: {err}") from err
+
+        return written
+
+    def database_snapshots(self) -> list[dict[str, Any]]:
+        """Every database snapshot held for this device, newest first."""
+        import json
+
+        from .config import backups_dir
+
+        root = backups_dir() / (self.serial or "unidentified")
+        if not root.is_dir():
+            return []
+
+        found: list[dict[str, Any]] = []
+        for directory in root.iterdir():
+            manifest_path = directory / "manifest.json"
+            if not manifest_path.is_file():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            found.append(
+                {
+                    "id": directory.name,
+                    "takenAt": manifest.get("takenAt") or "",
+                    "reason": manifest.get("reason") or "",
+                    "files": len(manifest.get("files") or []),
+                    "bytes": sum(int(f.get("bytes") or 0) for f in manifest.get("files") or []),
+                }
+            )
+        return sorted(found, key=lambda item: item["takenAt"], reverse=True)
+
+    def prune_database_snapshots(self, keep: int) -> int:
+        """Delete all but the newest ``keep`` snapshots. Returns how many went.
+
+        Without this the directory grows by one snapshot per sync forever. They
+        are small, but "small forever" is still a disk filling up on somebody
+        who syncs daily for two years.
+        """
+        from .config import backups_dir
+
+        if keep < 0:
+            return 0
+        root = backups_dir() / (self.serial or "unidentified")
+        removed = 0
+        for snapshot in self.database_snapshots()[keep:]:
+            with contextlib.suppress(OSError):
+                shutil.rmtree(root / snapshot["id"])
+                removed += 1
+        return removed
 
     # -- the database itself ------------------------------------------------
 

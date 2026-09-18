@@ -139,7 +139,7 @@ class TestTheDeviceDatabase:
 
 class TestRepairingAnExistingLibrary:
     """A library synced before artwork existed must pick it up without
-    re-downloading every track. That is the case Mohamed is actually in."""
+    re-downloading every track - the state any upgraded install is in."""
 
     @respx.mock
     def test_missing_art_counts_as_work_to_do(self, ipod, paired, audio_with_art):

@@ -10,6 +10,8 @@ Subcommands, each doing one thing:
     syncmypod gui                    the same thing, in a browser
     syncmypod youtube                sign in for higher quality audio
     syncmypod eject                  make it safe to unplug
+    syncmypod snapshots              the database backups taken before each sync
+    syncmypod restore <id>           put one of them back
     syncmypod unpair                 forget the local pairing
 
 This is one of two front ends over the engine in ``sync.py``; the GUI is the
@@ -268,6 +270,34 @@ def _build_parser() -> argparse.ArgumentParser:
     eject.add_argument("--mount", default=None, help="Eject a specific mount point")
     eject.set_defaults(handler=_cmd_eject)
 
+    snapshots = subparsers.add_parser(
+        "snapshots",
+        help="List the database snapshots taken before each sync",
+        description=(
+            "Every sync snapshots the iPod's database before writing to it. This "
+            "lists what is held for the attached device, newest first."
+        ),
+    )
+    snapshots.add_argument("--mount", default=None, help="Use a specific mount point")
+    snapshots.set_defaults(handler=_cmd_snapshots)
+
+    restore = subparsers.add_parser(
+        "restore",
+        help="Put a database snapshot back on the iPod",
+        description=(
+            "Restores the iTunes database from a snapshot taken before a sync. The "
+            "music on the device is not touched - this puts back the database that "
+            "describes it, which is what a bad write damages. Run `snapshots` to "
+            "see the ids."
+        ),
+    )
+    restore.add_argument("snapshot", help="The snapshot id, as shown by `snapshots`")
+    restore.add_argument("--mount", default=None, help="Use a specific mount point")
+    restore.add_argument(
+        "--yes", action="store_true", help="Do not ask before overwriting the database"
+    )
+    restore.set_defaults(handler=_cmd_restore)
+
     sync = subparsers.add_parser(
         "sync",
         help="Sync the library to the attached iPod",
@@ -325,6 +355,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Skip the snapshot taken before writing. Faster and uses no disk, "
             "but there is nothing to restore from if the write goes wrong."
+        ),
+    )
+    sync.add_argument(
+        "--full-backup",
+        action="store_true",
+        help=(
+            "Snapshot every file on the iPod, not just the database. A complete "
+            "preservation copy, but it re-reads the whole device each run"
         ),
     )
     sync.add_argument("--yes", action="store_true", help="Do not ask before removing tracks")
@@ -561,6 +599,7 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         # None rather than True, so the stored preference is what applies when
         # the flag is not given. The flag only ever turns backups off.
         backup=False if args.no_backup else None,
+        full_backup=args.full_backup,
         progress=reporter,
     )
 
@@ -721,16 +760,92 @@ def _cmd_eject(args: argparse.Namespace) -> int:
     return EXIT_FAILURE if failures else EXIT_OK
 
 
+def _one_ipod(mount: str | None) -> device.IpodDevice | None:
+    """The device to act on, or None having already said why not."""
+    found = [device.open_at(mount)] if mount else device.scan()
+    if not found:
+        console.print("[yellow]No iPod detected.[/yellow]")
+        return None
+    if len(found) > 1:
+        console.print(
+            "[yellow]More than one iPod is attached.[/yellow]  Use --mount to choose:"
+        )
+        for ipod in found:
+            console.print(f"  {ipod.mount_path}  {ipod.describe()}")
+        return None
+    return found[0]
+
+
+def _cmd_snapshots(args: argparse.Namespace) -> int:
+    ipod = _one_ipod(args.mount)
+    if ipod is None:
+        return EXIT_OK
+
+    held = ipod.database_snapshots()
+    if not held:
+        console.print("No snapshots yet. One is taken before every sync.")
+        return EXIT_OK
+
+    table = Table(box=None, show_header=True, header_style="bold", padding=(0, 2, 0, 0))
+    table.add_column("Snapshot")
+    table.add_column("Taken")
+    table.add_column("Reason")
+    table.add_column("Files", justify="right")
+    table.add_column("Size", justify="right")
+    for snapshot in held:
+        table.add_row(
+            snapshot["id"],
+            snapshot["takenAt"].replace("T", " ").replace("Z", " UTC"),
+            snapshot["reason"],
+            str(snapshot["files"]),
+            _bytes(snapshot["bytes"]),
+        )
+    console.print(table)
+    console.print()
+    console.print(f"Restore one with:  syncmypod restore {held[0]['id']}")
+    return EXIT_OK
+
+
+def _cmd_restore(args: argparse.Namespace) -> int:
+    ipod = _one_ipod(args.mount)
+    if ipod is None:
+        return EXIT_OK
+
+    # Restoring replaces the database the iPod is using right now. That is the
+    # point, and it is also worth being sure about, so it is confirmed unless
+    # the user has said not to ask.
+    if not args.yes and sys.stdin.isatty():
+        console.print(
+            f"This replaces the iTunes database on [bold]{ipod.describe()}[/bold] "
+            f"with snapshot [bold]{args.snapshot}[/bold]."
+        )
+        console.print("The music files on the device are not touched.")
+        answer = console.input("Restore it? [y/N] ")
+        if answer.strip().lower() not in {"y", "yes"}:
+            console.print("Left as it was.")
+            return EXIT_OK
+
+    try:
+        written = ipod.restore_database(args.snapshot)
+    except device.DeviceError as err:
+        console.print(f"[red]Not restored.[/red] {err}")
+        return EXIT_FAILURE
+
+    console.print(f"[green]Restored.[/green] {written} file(s) written.")
+    console.print("Eject the iPod before unplugging it:  syncmypod eject")
+    return EXIT_OK
+
+
 def _cmd_gui(args: argparse.Namespace) -> int:
     from . import gui as gui_module
     from .gui import window as window_module
 
     _configure_logging(args.verbose)
 
-    # A window by default, since 15 September. The page is identical either way
-    # - see gui/window.py for why this is pywebview rather than a rewrite - and
-    # the flags are the escape hatches: --browser for the old behaviour, and
-    # --no-browser for a headless box or for debugging the server on its own.
+    # A window by default. The page is identical either way - see gui/window.py
+    # for why this is pywebview rather than a rewrite - and the flags are the
+    # escape hatches: --browser to open a browser tab instead, and --no-browser
+    # for a headless box or for debugging the server on its own.
     want_window = not args.browser and not args.no_browser
 
     server = gui_module.serve(

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import threading
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
@@ -46,6 +47,35 @@ logger = logging.getLogger(__name__)
 # already copied invisible to the device.
 DEFAULT_BATCH_SIZE = 5
 
+# The ceiling `_batch_for` will scale up to. Past this the exposure of an
+# interrupted run - the tracks copied but not yet in the database - is worth
+# more than the writes saved.
+MAX_BATCH_SIZE = 25
+
+
+def _batch_for(requested: int, planned: int) -> int:
+    """How many tracks to write between database commits.
+
+    A flat five is the right answer for a handful of tracks and the wrong one
+    for a first sync of a whole library: committing rewrites and re-signs the
+    entire iTunesDB, so 400 tracks meant 80 full rewrites of a file that grows
+    with the library. Measured on a 119-track device each commit cost 4 to 6
+    seconds, and that figure climbs as the library does.
+
+    So the batch grows with the size of the run, to a ceiling. The thing being
+    traded away is how much an interrupted sync loses: the tracks in the current
+    batch are on the device but not yet in its database, and the next run
+    notices them missing and copies them again. Twenty-five is a few seconds of
+    duplicated work in the worst case, against a large fraction of the writes.
+
+    An explicit --batch is honoured as given; somebody who names a number has a
+    reason.
+    """
+    if requested != DEFAULT_BATCH_SIZE:
+        return max(1, requested)
+    return max(DEFAULT_BATCH_SIZE, min(MAX_BATCH_SIZE, planned // 8))
+
+
 # How many tracks are fetched at once.
 #
 # Downloading, converting and tagging a track touches nothing another track
@@ -53,17 +83,22 @@ DEFAULT_BATCH_SIZE = 5
 # sync parallelises cleanly. Only the write to the iPod has to stay serialised,
 # and it already happens a batch at a time.
 #
-# Four, not sixteen. The limit here is YouTube rather than this machine: a run
-# on 12 September took a `403 Forbidden` after eighteen downloads in quick
-# succession, and asking for more at once is asking for more of those. Four is
-# roughly a three-fold speed-up on a large library while still looking like
-# somebody using a browser.
+# Four, not sixteen. The limit here is YouTube rather than this machine:
+# eighteen downloads in quick succession has been enough to earn a
+# `403 Forbidden` for the whole machine, and asking for more at once is asking
+# for more of those. Four is roughly a three-fold speed-up on a large library
+# while still looking like somebody using a browser.
 DEFAULT_CONCURRENCY = 4
 
 # Below this, the sync stops rather than filling the device completely. An iPod
 # with no free space cannot rewrite its own database, which is a much worse
 # state to be in than one track short.
 FREE_SPACE_FLOOR_BYTES = 200 * 1024 * 1024
+
+# How many database snapshots to keep per device. Enough to step back past a
+# run that went wrong without noticing at the time; few enough that a daily
+# syncer is not carrying a year of them.
+KEEP_DATABASE_SNAPSHOTS = 10
 
 
 class SyncError(Exception):
@@ -88,6 +123,54 @@ class TrackPlan:
         return (
             f"{self.track.get('artist') or 'Unknown'} - {self.track.get('title') or 'Untitled'}"
         )
+
+
+class ArtworkCache:
+    """One download per cover, however many tracks on the album want it.
+
+    Every track on a record carries the same ``artworkUrl``, so fetching per
+    track meant downloading the same image twelve times for a twelve-track
+    album - up to 4MB each, on the connection the audio is also coming down.
+
+    Threads are the reason this is not a plain dict. Four tracks are prepared at
+    once and they are often from the same album, so the naive check-then-fetch
+    has all four miss together and download anyway. The first caller for a URL
+    claims it and the others wait for that one result.
+
+    Failures are cached too. A cover that 404s does so for every track on the
+    record, and retrying it once per track is the same waste in a slower form.
+    """
+
+    def __init__(self, fetch: Callable[[str], Any]) -> None:
+        self._fetch = fetch
+        self._lock = threading.Lock()
+        self._entries: dict[str, tuple[threading.Event, list[Any]]] = {}
+
+    def get(self, url: str | None) -> Any:
+        if not url:
+            return None
+
+        with self._lock:
+            entry = self._entries.get(url)
+            if entry is None:
+                entry = (threading.Event(), [None])
+                self._entries[url] = entry
+                mine = True
+            else:
+                mine = False
+
+        done, slot = entry
+        if not mine:
+            done.wait()
+            return slot[0]
+
+        try:
+            slot[0] = self._fetch(url)
+        finally:
+            # Set even when the fetch raised, or every other thread waiting on
+            # this cover would block for the rest of the run.
+            done.set()
+        return slot[0]
 
 
 @dataclass(slots=True)
@@ -118,8 +201,8 @@ class Plan:
     artwork_missing: list[str] = field(default_factory=list)
     # Whether the device's playlists already match the library's. Adding or
     # removing a song from a playlist is a change worth syncing even when every
-    # track involved is already on the iPod, and before this was worked out a
-    # run in that state reported "Already up to date" and wrote nothing.
+    # track involved is already on the iPod. Without this a run in that state
+    # reports "Already up to date" and writes nothing.
     playlists_differ: bool = False
     # Tracks on the device whose recorded tags no longer match the library -
     # an artist corrected in the web tool, an album finally resolved. Counts as
@@ -258,6 +341,10 @@ def build_plan(
                 track=raw,
                 file_format=Path(match.location).suffix.lstrip(".").lower(),
                 size=0,
+                # Recognised, not written. See ledger.Entry.adopted: the file
+                # may well have been put there by iTunes, and the rule this
+                # module rests on is that such a file is never removed.
+                adopted=True,
             )
             plan.adopted.append(item)
             continue
@@ -266,6 +353,13 @@ def build_plan(
 
     wanted_ids = {int(t["id"]) for t in manifest.get("tracks") or []}
     for track_id, entry in record.entries.items():
+        # Adopted entries are deliberately not offered for removal. The ledger
+        # records them so the track is not downloaded twice, which is a claim
+        # about which row this is - not a claim that this tool put the file
+        # there. Deleting one would break the rule in this module's docstring
+        # and take music the user added with something else.
+        if entry.adopted:
+            continue
         if track_id not in wanted_ids and entry.location in locations:
             plan.removals.append(
                 Removal(
@@ -277,10 +371,25 @@ def build_plan(
 
     by_location = {track.location: track for track in on_device if track.location}
     plan.tags_stale = _stale_tag_locations(manifest, record, by_location)
+
+    # A track counts as missing its cover only if the library has a cover to
+    # give it. The artwork database is built from the picture embedded in each
+    # file, and that picture comes from the manifest's `artworkUrl` - so a track
+    # the catalogue has no image for can never be linked, however many times the
+    # attempt is made.
+    #
+    # Counting those tracks anyway meant `nothing_to_do` was never true: a
+    # library with even one art-less track reported work on every run, rebuilt
+    # the whole artwork database, and never once said "Already up to date".
+    with_artwork_available = {
+        int(track["id"])
+        for track in manifest.get("tracks") or []
+        if str(track.get("artworkUrl") or "").strip()
+    }
     plan.artwork_missing = [
         entry.location
         for track_id, entry in record.entries.items()
-        if track_id in wanted_ids
+        if track_id in with_artwork_available
         and entry.location in by_location
         and not by_location[entry.location].has_artwork
     ]
@@ -330,6 +439,7 @@ def run(
     concurrency: int = DEFAULT_CONCURRENCY,
     keep_downloads: bool = False,
     backup: bool | None = None,
+    full_backup: bool = False,
     progress: Progress | None = None,
     cancel: Callable[[], bool] | None = None,
 ) -> Report:
@@ -417,8 +527,13 @@ def run(
         # somebody says after losing a device.
         take_backup = stored.backup_before_sync if backup is None else backup
         if take_backup:
-            say("backup", {})
-            report.backup_id = _backup(ipod)
+            say("backup", {"full": full_backup})
+            report.backup_id = _backup(ipod, full=full_backup)
+            if not full_backup:
+                # One snapshot per sync accumulates forever otherwise. They are
+                # under a megabyte each, which is exactly why nobody would
+                # notice them filling a disk.
+                ipod.prune_database_snapshots(KEEP_DATABASE_SNAPSHOTS)
         else:
             logger.warning("Backups are turned off - nothing was snapshotted before this sync")
             report.backed_up = False
@@ -438,7 +553,7 @@ def run(
                 record,
                 report,
                 say,
-                batch_size,
+                _batch_for(batch_size, len(plan.to_download)),
                 remove,
                 keep_downloads,
                 stop,
@@ -490,6 +605,10 @@ def _execute(
         httpx.Client(timeout=20.0, follow_redirects=True) as artwork_client,
         ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool,
     ):
+        # One download per cover rather than one per track. Scoped to the run,
+        # so a cover corrected in the web tool between syncs is fetched again.
+        artwork = ArtworkCache(lambda url: tagging.fetch_artwork(url, client=artwork_client))
+
         pending: list[Result] = []
         staged: list[tuple[TrackPlan, Path, Result]] = []
         queue = list(plan.to_download)
@@ -498,15 +617,24 @@ def _execute(
         done_count = 0
         cancelled = False
         out_of_space = False
+        device_gone = False
         blocked: str | None = None
 
         def submit_until_full() -> None:
-            nonlocal cancelled, out_of_space
+            nonlocal cancelled, out_of_space, device_gone
             while queue and len(in_flight) < max(1, concurrency):
                 if blocked:
                     return
                 if stop():
                     cancelled = True
+                    return
+                # The iPod being pulled out of the socket is a first-class
+                # outcome, not a disk that reports no free space. Without this
+                # check the run carried on downloading every remaining track
+                # and failed each one at the write, which takes a long time to
+                # say "the iPod is not there".
+                if not _device_present(ipod):
+                    device_gone = True
                     return
                 # Checked before starting a track rather than during one, so
                 # what is already staged still gets written and recorded below.
@@ -514,7 +642,7 @@ def _execute(
                     out_of_space = True
                     return
                 item = queue.pop(0)
-                in_flight[pool.submit(_prepare_one, item, work, artwork_client)] = item
+                in_flight[pool.submit(_prepare_one, item, work, artwork)] = item
 
         submit_until_full()
 
@@ -564,15 +692,31 @@ def _execute(
                 staged.append((item, prepared, result))
                 say("track-ready", {"item": item, "result": result})
 
+            # Refilled *before* the device write, not after.
+            #
+            # Writing a batch rewrites the whole iTunesDB and takes seconds -
+            # measured at 4 to 6 on a 119-track device, and longer as a library
+            # grows. Topping the pool up afterwards meant those seconds were
+            # spent with fewer downloads running than the concurrency setting
+            # asked for, every batch, for the whole run. The downloads and the
+            # write touch nothing in common, so there is no reason for one to
+            # wait on the other.
+            submit_until_full()
+
             if len(staged) >= batch_size:
                 pending.extend(_commit_batch(ipod, record, staged, work, say))
                 staged.clear()
                 pending = _flush(api, report, pending)
 
-            submit_until_full()
-
         remaining = len(queue)
-        if blocked:
+        if device_gone:
+            report.status = "error"
+            report.message = (
+                f"The iPod was disconnected with {remaining} track(s) left. "
+                "What had already been written is on it."
+            )
+            logger.warning(report.message)
+        elif blocked:
             report.status = "error"
             report.message = f"Stopped with {remaining} track(s) left. {blocked}"
         elif cancelled:
@@ -647,7 +791,7 @@ def _execute(
 
 
 def _prepare_one(
-    item: TrackPlan, work: workspace.Workspace, artwork_client: httpx.Client
+    item: TrackPlan, work: workspace.Workspace, artwork: ArtworkCache
 ) -> tuple[Path, Result]:
     """Download one track, convert it if needed, and tag it from the manifest.
 
@@ -661,8 +805,8 @@ def _prepare_one(
     download = downloader.fetch(item.track, directory)
     converted = transcode.prepare(download.path, directory)
 
-    artwork = tagging.fetch_artwork(item.track.get("artworkUrl"), client=artwork_client)
-    tagging.apply(converted.path, item.track, artwork)
+    cover = artwork.get(item.track.get("artworkUrl"))
+    tagging.apply(converted.path, item.track, cover)
 
     return converted.path, Result(
         track_id=item.id,
@@ -697,17 +841,17 @@ def check_matches(
 ) -> MatchReport:
     """Find out which tracks have audio available, without downloading any.
 
-    **Why this exists.** Until now the only way to discover that a song could
-    not be found was to run a whole sync with the iPod plugged in and read the
+    **Why this exists.** The alternative is discovering that a song cannot be
+    found by running a whole sync with the iPod plugged in and reading the
     failures afterwards - minutes of downloading before the first bad news. The
     search is the cheap half of a sync and needs no device at all, so it can be
     run on its own and the answer sent to the server, where the web tool shows
     it per track.
 
     **Why it runs here and not on the server.** Searching from the server would
-    be the obvious design and it does not work: a home connection was blocked
-    after one large sync on 13 September, with every search returning the bot
-    check, and a datacentre address is what that check is aimed at. The only
+    be the obvious design and it does not work: one large sync is enough to get
+    a home connection blocked, with every search returning the bot check, and a
+    datacentre address is what that check is aimed at squarely. The only
     known remedy is a signed-in session, which would mean a Google credential on
     a public box. So the searching stays on this machine and only the result
     travels.
@@ -829,9 +973,9 @@ def _commit_batch(
 
     **One bad file must not end the run.** `add_files` writes the batch and
     commits the database in a single call, so anything it refuses takes the
-    whole batch with it - and on 12 September that ended a 431-track sync after
-    45, because one downloaded file was no longer on disk when its turn came.
-    An hour of downloading thrown away over one track is the wrong trade.
+    whole batch with it. One downloaded file missing from disk when its turn
+    comes is enough to end a 431-track sync after 45, and an hour of
+    downloading thrown away over one track is the wrong trade.
 
     So the batch is tried, and if it fails the files are written one at a time:
     whatever is wrong then fails alone and is reported as a failed track, which
@@ -1159,9 +1303,9 @@ def _detect(mount: str | None) -> device_module.IpodDevice:
     return found[0]
 
 
-def _backup(ipod: device_module.IpodDevice) -> str | None:
+def _backup(ipod: device_module.IpodDevice, *, full: bool = False) -> str | None:
     """Snapshot the database, refusing to continue if it cannot be taken."""
-    snapshot = ipod.backup(reason="before sync")
+    snapshot = ipod.backup(reason="before sync", full=full)
     if snapshot is None:
         raise SyncError(
             "The iPod's database could not be backed up, so the sync stopped before "
@@ -1170,7 +1314,30 @@ def _backup(ipod: device_module.IpodDevice) -> str | None:
     return str(getattr(snapshot, "snapshot_id", None) or snapshot)
 
 
+def _device_present(ipod: device_module.IpodDevice) -> bool:
+    """Whether the iPod is still attached.
+
+    Asked before starting each track, because the answer changes mid-run more
+    often than anything else here: a sync is minutes long and the cable is right
+    there. Checked for the control directory rather than the mount point, since
+    on Windows the drive letter can survive the device briefly.
+    """
+    try:
+        return (ipod.mount_path / "iPod_Control").is_dir()
+    except OSError:
+        return False
+
+
 def _free_bytes(ipod: device_module.IpodDevice) -> int:
+    """Free space on the device, or the last figure known.
+
+    The fallback is for a stat that fails on a device that is still there -
+    a momentary permission or timing problem - and it is deliberately the
+    optimistic answer, so one bad call does not abandon a working sync.
+    A device that has actually gone is caught by ``_device_present`` instead,
+    which is a question this function cannot answer: "I could not read it" and
+    "it is not there" are the same OSError.
+    """
     try:
         return shutil.disk_usage(ipod.mount_path).free
     except OSError:
