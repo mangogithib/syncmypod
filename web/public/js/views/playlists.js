@@ -5,6 +5,7 @@ import {
   artwork,
   confirmDialog,
   emptyState,
+  field,
   formatDuration,
   formatTotalDuration,
   modal,
@@ -71,7 +72,7 @@ export async function renderPlaylists(view, context) {
                     playlist.source === 'deezer' ? 'from Deezer' : null,
                   ]
                     .filter(Boolean)
-                    .join(' - ')
+                    .join(' · ')
                 )
               ),
               h(
@@ -374,7 +375,7 @@ export async function renderPlaylist(view, context) {
                   playlist.source === 'deezer' ? 'imported from Deezer' : null,
                 ]
                   .filter(Boolean)
-                  .join(' - ')
+                  .join(' · ')
               )
             ),
             h('div', { style: { flex: 1 } }),
@@ -429,8 +430,8 @@ export function createPlaylistDialog(onCreated) {
   const control = modal({
     title: 'New playlist',
     body: [
-      h('div.field', h('label', 'Name'), name),
-      h('div.field', h('label', 'Description'), description),
+      field('Name', name),
+      field('Description', description),
       h(
         'label.checkbox',
         sync,
@@ -478,8 +479,8 @@ function editPlaylistDialog(playlist, onSaved) {
   const control = modal({
     title: 'Playlist settings',
     body: [
-      h('div.field', h('label', 'Name'), name),
-      h('div.field', h('label', 'Description'), description),
+      field('Name', name),
+      field('Description', description),
       h(
         'label.checkbox',
         sync,

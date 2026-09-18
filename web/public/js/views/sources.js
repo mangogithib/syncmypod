@@ -4,6 +4,7 @@ import {
   artwork,
   badge,
   emptyState,
+  field,
   formatNumber,
   formatRelative,
   notice,
@@ -119,7 +120,7 @@ export async function renderSources(view, context) {
             },
           },
           h('div.field', input),
-          h('div.field', h('label', 'Add its songs to'), target),
+          field('Add its songs to', target),
           h('div', submit)
         )
       )

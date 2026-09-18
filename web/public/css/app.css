@@ -64,7 +64,13 @@ a:hover { text-decoration: underline; }
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-width) 1fr;
+  /* `dvh` and not `vh`, with `vh` left as the fallback for anything that does
+     not know the newer unit. On a mobile browser `100vh` is the height the
+     viewport has with the address bar hidden, which is taller than the space
+     actually on screen - so a full-height element is cut off at the bottom by
+     however much chrome is showing. `dvh` tracks the real height. */
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 /* ---------------------------------------------------------------------------
@@ -79,7 +85,10 @@ a:hover { text-decoration: underline; }
   padding: var(--space-4) var(--space-3);
   position: sticky;
   top: 0;
+  /* See .app above. As a drawer this is the difference between "Sign out" being
+     reachable and being under the browser's own toolbar. */
   height: 100vh;
+  height: 100dvh;
 }
 
 .brand {
@@ -644,6 +653,33 @@ thead tr:hover .row-check-all { opacity: 1; }
   .selecting .row-check { opacity: 1; }
 }
 
+/* Sixteen pixels in every field a finger can focus.
+   ---------------------------------------------------------------------------
+   Not a typographic choice. Safari on iOS zooms the whole page in when a form
+   control smaller than 16px takes focus, and it does not zoom back out - so
+   tapping the library's search box left the interface magnified and scrolled
+   sideways, and every subsequent tap was aimed at the wrong place. The page's
+   own base size is 14px, which is right for reading on a desktop and is exactly
+   the trigger.
+
+   Keyed on `pointer: coarse` rather than on a width, because the trigger is the
+   input method rather than the screen: a small window on a laptop should keep
+   the 14px, and a large tablet should not. */
+@media (pointer: coarse) {
+  .input,
+  .select,
+  .textarea,
+  select.select,
+  input[type='text'],
+  input[type='search'],
+  input[type='password'],
+  input[type='email'],
+  input[type='url'],
+  input[type='number'] {
+    font-size: 16px;
+  }
+}
+
 tr.row-selected > td,
 .list-row.row-selected {
   background: var(--accent-soft);
@@ -804,6 +840,7 @@ tr.row-selected > td,
   width: 100%;
   max-width: 520px;
   max-height: calc(100vh - 64px);
+  max-height: calc(100dvh - 64px);
   display: flex;
   flex-direction: column;
 }
@@ -830,6 +867,7 @@ tr.row-selected > td,
 
 .auth {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   padding: var(--space-5);
@@ -1120,7 +1158,7 @@ code {
    Phones
    ---------------------------------------------------------------------------
 
-   Mohamed expects this to be the device most people use, which makes the
+   A phone is the device this interface is most used from, which makes the
    narrow layout the real one rather than a courtesy. The sidebar already
    becomes a drawer above; what follows is the rest of it.
 
@@ -1169,12 +1207,34 @@ code {
      row actually has. */
   .track-title-line .badge { display: none; }
 
-  /* Wide enough for the three icon buttons at a size a finger can hit, so the
-     title gets the rest and stops short of them rather than sliding under. */
+  /* Wide enough for the three icon buttons at a size a finger can hit, plus the
+     gap that sets the destructive one apart below, so the title gets the rest
+     and stops short of them rather than sliding under. */
   td.actions,
-  th.col-actions { width: 136px; }
+  th.col-actions { width: 156px; }
 
-  td.actions .icon-btn { min-width: 36px; min-height: 36px; }
+  td.actions .icon-btn { min-width: 44px; min-height: 44px; }
+
+  /* Set the destructive action apart from the two beside it.
+     -------------------------------------------------------------------------
+     Add-to-playlist, re-resolve and remove sat as three identical grey icons in
+     a row barely wider than a fingertip, so the one that deletes a song looked
+     exactly like the two that do not. `.icon-btn.danger` only takes its colour
+     on :hover, which on a touch screen never happens at all - the styling that
+     was meant to distinguish it was invisible on the device it mattered most
+     on.
+
+     So on a touch screen it is always red, and it is pushed away from its
+     neighbours with a rule between them. The confirmation dialog stays; it
+     should be the second thing that prevents a mistake, not the first. */
+  td.actions .icon-btn.danger {
+    color: var(--danger);
+    margin-left: var(--space-2);
+    border-left: 1px solid var(--border);
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    padding-left: var(--space-2);
+  }
 
   /* A little air between the longest title and the first button. */
   .track-cell { padding-right: var(--space-2); }
@@ -1235,10 +1295,10 @@ code {
   /* Anything that gets tapped needs to be tappable. 44px is the size a finger
      actually is; the desktop icon buttons are 28. */
   .icon-btn {
-    min-width: 40px;
-    min-height: 40px;
+    min-width: 44px;
+    min-height: 44px;
   }
-  .btn { min-height: 40px; }
+  .btn { min-height: 44px; }
 
   /* Row actions stop being pinned: with three columns gone there is room for
      them, and a sticky column on a non-scrolling table just covers content. */

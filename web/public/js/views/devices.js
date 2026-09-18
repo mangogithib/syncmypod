@@ -71,9 +71,9 @@ function deviceCard(device, onChanged) {
   // than being a silent branch inside the local app.
   const generationNote =
     device.ipodGeneration && /6|7|classic/i.test(device.ipodGeneration)
-      ? 'Classic 6th/7th gen - database signature required'
+      ? 'Classic 6th/7th gen · database signature required'
       : device.ipodGeneration
-        ? `${device.ipodGeneration} - no database signature needed`
+        ? `${device.ipodGeneration} · no database signature needed`
         : null;
 
   const usedBytes =
@@ -134,14 +134,14 @@ function deviceCard(device, onChanged) {
         h('dt', 'Token'),
         h('dd', h('span.mono', `${device.tokenPrefix}...`)),
         device.platform ? h('dt', 'Platform') : null,
-        device.platform ? h('dd', `${device.platform}${device.appVersion ? ` - app ${device.appVersion}` : ''}`) : null,
+        device.platform ? h('dd', `${device.platform}${device.appVersion ? ` · app ${device.appVersion}` : ''}`) : null,
         h('dt', 'iPod'),
         h(
           'dd',
           device.ipodName || device.ipodModel
             ? h(
                 'div',
-                h('div', [device.ipodName, device.ipodModel].filter(Boolean).join(' - ')),
+                h('div', [device.ipodName, device.ipodModel].filter(Boolean).join(' · ')),
                 generationNote ? h('div.small.subtle', generationNote) : null
               )
             : h('span.subtle', 'Not seen yet')
@@ -150,7 +150,7 @@ function deviceCard(device, onChanged) {
         device.ipodCapacityBytes
           ? h(
               'dd',
-              `${formatBytes(usedBytes)} used of ${formatBytes(device.ipodCapacityBytes)} - ${formatBytes(device.ipodFreeBytes)} free`
+              `${formatBytes(usedBytes)} of ${formatBytes(device.ipodCapacityBytes)} used · ${formatBytes(device.ipodFreeBytes)} free`
             )
           : null,
         h('dt', 'Tracks synced'),
@@ -164,7 +164,7 @@ function deviceCard(device, onChanged) {
 
 async function historyDialog(device) {
   const body = h('div', h('p.muted', 'Loading...'));
-  modal({ title: `${device.name} - sync history`, wide: true, body });
+  modal({ title: `${device.name} · sync history`, wide: true, body });
 
   try {
     const { runs } = await api.deviceHistory(device.id);
@@ -212,7 +212,17 @@ async function historyDialog(device) {
 // app has claimed it so the user gets confirmation rather than having to guess.
 async function pairDialog(onPaired) {
   const body = h('div', h('p.muted', 'Generating a code...'));
-  const control = modal({ title: 'Pair a computer', body });
+  // Declared before the modal so `onClose` can stop the poll; see the note
+  // where `tick` is started.
+  let stopped = false;
+
+  const control = modal({
+    title: 'Pair a computer',
+    body,
+    onClose: () => {
+      stopped = true;
+    },
+  });
 
   try {
     // The ids that exist before the code is issued. A claim is detected as an
@@ -253,7 +263,6 @@ async function pairDialog(onPaired) {
 
     // Poll for the claim, and drive the countdown off the same timer.
     const expiresAt = new Date(pairing.expiresAt).getTime();
-    let stopped = false;
 
     const tick = async () => {
       if (stopped) return;
@@ -291,12 +300,12 @@ async function pairDialog(onPaired) {
       setTimeout(tick, 1000);
     };
 
-    const originalClose = control.close;
-    control.close = () => {
-      stopped = true;
-      originalClose();
-    };
-
+    // The poll is stopped by `onClose` on the modal above, not by wrapping
+    // `control.close`. Escape, the backdrop and the X button all call the
+    // modal's internal close and never touch the returned object, so the
+    // wrapper only ever caught the programmatic path - and a pairing dialog
+    // dismissed the ordinary way kept listing devices once a second until the
+    // code expired.
     tick();
   } catch (err) {
     mount(body, notice(err.message, 'danger', 'warn'));

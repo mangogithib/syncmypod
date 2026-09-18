@@ -7,6 +7,7 @@ import {
   confirmDialog,
   debounce,
   emptyState,
+  field,
   formatDuration,
   modal,
   notice,
@@ -263,10 +264,9 @@ export async function renderLibrary(view, context) {
               // "Manual" went with them. It means the resolver will not
               // overwrite an edit, which is worth saying once in the dialog
               // that makes the edit rather than on every row forever.
-              // The local app has always reported a track it could not fetch and
-              // the server has always stored it. Until now nothing showed it, so
-              // a song that never reached the iPod looked exactly like one that
-              // did.
+              // The local app reports a track it could not fetch and the server
+              // stores it. Shown here because otherwise a song that never
+              // reached the iPod looks exactly like one that did.
               track.syncError
                 ? h(
                     'span.badge.badge-danger',
@@ -508,7 +508,7 @@ export async function renderLibrary(view, context) {
             ? tracks[0].title
             : `${tracks.length} songs`
         ),
-        h('div.field', h('label', 'Playlist'), select),
+        field('Playlist', select),
       ],
       footer: [
         h('button.btn', { type: 'button', onclick: () => control.close() }, 'Cancel'),
@@ -611,18 +611,18 @@ export function editTrackDialog(track, onSaved) {
     title: 'Edit metadata',
     body: [
       statusSlot,
-      h('div.field', h('label', 'Title'), title),
+      field('Title', title),
       h(
         'div.field',
         h('label', 'Artist'),
         artistField.element,
         h('span.hint', 'Separate several artists with a comma.')
       ),
-      h('div.field', h('label', 'Album'), albumField.element),
+      field('Album', albumField.element),
       h(
         'div.row',
-        h('div.field', { style: { flex: 1 } }, h('label', 'Track no.'), trackNo),
-        h('div.field', { style: { flex: 1 } }, h('label', 'Disc no.'), discNo)
+        field('Track no.', trackNo, { style: { flex: 1 } }),
+        field('Disc no.', discNo, { style: { flex: 1 } })
       ),
       h(
         'div.field',

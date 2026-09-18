@@ -38,7 +38,15 @@ export function formatBytes(bytes) {
     scaled /= 1024;
     index++;
   }
-  return `${scaled.toFixed(scaled < 10 && index > 0 ? 1 : 0)} ${units[index]}`;
+  // One decimal from gigabytes upwards, whatever the magnitude.
+  //
+  // Dropping it there is what made an iPod read "59 GB used of 59 GB, 59 GB
+  // free": the capacity was 59.5 and the free space 58.6, and rounding both to
+  // whole gigabytes collapsed a real difference into an apparent contradiction.
+  // A gigabyte is a big enough unit that the decimal is carrying information.
+  // Below that it is noise, so a file size still reads "8 MB".
+  const decimals = index >= 3 || (scaled < 10 && index > 0) ? 1 : 0;
+  return `${scaled.toFixed(decimals)} ${units[index]}`;
 }
 
 // Relative for recent things, absolute once it stops being useful. "3 min ago"
@@ -171,6 +179,36 @@ export function artwork(url, { size = 36, large = false, round = false } = {}) {
 // ---------------------------------------------------------------------------
 
 // A modal with focus handling and Escape to close. Returns { close }.
+// A labelled form control, with the label actually attached to it.
+//
+// The markup this replaces was `h('div.field', h('label', 'Name'), input)` -
+// a label element sitting beside an input with nothing joining them. It looks
+// identical and it is not the same thing: with no `for`, a screen reader falls
+// back to announcing the placeholder, so "Name" was read as "Morning drive",
+// and clicking the label did not focus the field.
+//
+// The id is generated rather than asked for, because every call site would
+// otherwise have to invent one and keep it unique on a page that renders
+// several dialogs.
+let fieldSeq = 0;
+
+export function field(label, control, { hint = null, ...attrs } = {}) {
+  const id = control.id || `field-${++fieldSeq}`;
+  control.id = id;
+  if (hint) {
+    const hintId = `${id}-hint`;
+    control.setAttribute('aria-describedby', hintId);
+    return h(
+      'div.field',
+      attrs,
+      h('label', { for: id }, label),
+      control,
+      h('p.small.subtle', { id: hintId }, hint)
+    );
+  }
+  return h('div.field', attrs, h('label', { for: id }, label), control);
+}
+
 export function modal({ title, body, footer, onClose, wide = false }) {
   const previousFocus = document.activeElement;
 

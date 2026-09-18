@@ -1,7 +1,7 @@
 import { state as appState } from '../app.js';
 import { api } from '../lib/api.js';
 import { h, icon, mount } from '../lib/dom.js';
-import { badge, modal, notice, renderAsync, toast } from '../lib/ui.js';
+import { badge, field as uiField, modal, notice, renderAsync, toast } from '../lib/ui.js';
 
 // Settings: account, provider configuration, and instance information.
 //
@@ -376,9 +376,11 @@ function openPasswordDialog() {
       },
     },
     statusSlot,
-    h('div.field', h('label', 'Current password'), current),
-    h('div.field', h('label', 'New password'), next, h('span.hint', 'At least 10 characters.')),
-    h('div.field', h('label', 'Confirm new password'), confirm),
+    // `uiField` and not `field`: this module already has a `field` of its own,
+    // for provider settings, with an entirely different signature.
+    uiField('Current password', current),
+    uiField('New password', next, { hint: 'At least 10 characters.' }),
+    uiField('Confirm new password', confirm),
     // Inside the form, so Enter submits it. In the modal footer it would be a
     // button sitting outside the thing it is meant to submit.
     h('div.row', { style: { justifyContent: 'flex-end' } }, submit)

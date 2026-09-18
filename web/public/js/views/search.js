@@ -5,6 +5,7 @@ import {
   artwork,
   debounce,
   emptyState,
+  field,
   formatDuration,
   modal,
   notice,
@@ -210,7 +211,7 @@ export async function renderSearch(view, context) {
           'div.small.subtle',
           [result.albumName, result.year, result.explicit ? 'Explicit' : null]
             .filter(Boolean)
-            .join(' - ')
+            .join(' · ')
         )
       ),
       h('span.small.subtle.nowrap', formatDuration(result.durationMs)),
@@ -255,7 +256,7 @@ export async function renderSearch(view, context) {
         'div.tile-sub.subtle',
         [result.year, result.totalTracks ? `${result.totalTracks} songs` : null]
           .filter(Boolean)
-          .join(' - ')
+          .join(' · ')
       )
     );
   }
@@ -338,7 +339,7 @@ export async function renderSearch(view, context) {
 
     const control = modal({
       title: 'Add to playlist',
-      body: [h('p.small.muted', result.title), h('div.field', h('label', 'Playlist'), select)],
+      body: [h('p.small.muted', result.title), field('Playlist', select)],
       footer: [
         h('button.btn', { type: 'button', onclick: () => control.close() }, 'Cancel'),
         h(

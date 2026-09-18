@@ -9,6 +9,7 @@ import {
   formatRelative,
   modal,
   notice,
+  pager,
   spinner,
   toast,
 } from '../lib/ui.js';
@@ -132,10 +133,19 @@ export async function renderArtists(view, context) {
     });
 
     let q = '';
+    // Paged rather than a flat cap. The list used to ask for 200 and show
+    // whatever came back, so a library with more artists than that simply had
+    // no way to reach the rest of the alphabet - and 200 is also the server's
+    // own ceiling, so asking for more would not have helped.
+    const state = { limit: 50, offset: 0 };
+
     searchBox.addEventListener(
       'input',
       debounce(() => {
         q = searchBox.value.trim();
+        // A new search starts at the beginning; keeping the offset would show
+        // an empty page and look like no matches.
+        state.offset = 0;
         load();
       })
     );
@@ -145,7 +155,7 @@ export async function renderArtists(view, context) {
     async function load() {
       mount(listSlot, spinner('Loading artists...'));
       try {
-        const data = await api.artists({ q, limit: 200 });
+        const data = await api.artists({ q, limit: state.limit, offset: state.offset });
         if (!context.isCurrent()) return;
 
         if (data.total === 0) {
@@ -251,7 +261,22 @@ export async function renderArtists(view, context) {
                 )
               )
             )
-          )
+          ),
+          // Only when there is more than one page of them. The "Unknown
+          // artist" row is not part of the paged set, so the count the pager
+          // is given is the server's, not the length of what was rendered.
+          data.total > state.limit
+            ? pager({
+                total: data.total,
+                limit: state.limit,
+                offset: state.offset,
+                onChange: ({ limit, offset }) => {
+                  state.limit = limit;
+                  state.offset = offset;
+                  load();
+                },
+              })
+            : null
         );
       } catch (err) {
         if (err.status === 401) return;
@@ -348,7 +373,7 @@ export async function renderArtists(view, context) {
             follow.targetPlaylistName ? `to "${follow.targetPlaylistName}"` : null,
           ]
             .filter(Boolean)
-            .join(' - ')
+            .join(' · ')
         ),
         h('div.small.subtle', `Last checked ${formatRelative(follow.lastCheckedAt)}`)
       ),

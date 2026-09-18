@@ -13,7 +13,7 @@
   a reload mid-sync picks the run back up rather than losing it.
 */
 
-const state = { since: 0, timer: null, tracks: new Map(), total: 0 };
+const state = { since: 0, timer: null, tracks: new Map(), total: 0, startedAt: 0, done: 0 };
 
 const el = (id) => document.getElementById(id);
 
@@ -52,6 +52,33 @@ function bytes(value) {
     index += 1;
   }
   return `${size.toFixed(index >= 3 ? 1 : 0)} ${units[index]}`;
+}
+
+// ", about 4 min left" - or nothing at all until the estimate means something.
+//
+// Downloading is the part of a sync that takes the time and it is the part
+// nobody can see, so "7 of 40" answers how far along without answering the
+// question people actually have. The rate is measured from this run rather than
+// assumed: a track is a few seconds on a fast line and most of a minute on a
+// slow one, and the difference between those two is the difference between
+// waiting and giving up.
+//
+// Nothing is shown for the first two tracks. An average over one sample is
+// noise, and a wrong estimate that then doubles is worse than no estimate.
+function remainingLabel(index, total) {
+  const done = index - 1;
+  if (done < 2 || !state.startedAt) return "";
+
+  const perTrack = (Date.now() - state.startedAt) / done;
+  const seconds = Math.round((perTrack * (total - done)) / 1000);
+  if (seconds < 30) return ", nearly done";
+  if (seconds < 90) return ", about a minute left";
+
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `, about ${minutes} min left`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `, about ${hours}h ${rest}m left`;
 }
 
 function row(list, label, value) {
@@ -533,6 +560,7 @@ async function start({ dryRun }) {
   el("run-panel").hidden = dryRun;
   el("progress-track").hidden = true;
   el("progress-count").textContent = "";
+  state.startedAt = Date.now();
 
   setRunning(true);
   try {
@@ -606,7 +634,8 @@ function handle(event) {
       trackRow(event.id, event.label).className = "track track-working";
       setState(event.id, "working…");
       el("progress-track").hidden = false;
-      el("progress-count").textContent = `${event.index} of ${event.total}`;
+      el("progress-count").textContent =
+        `${event.index} of ${event.total}${remainingLabel(event.index, event.total)}`;
       el("progress-fill").style.width = `${((event.index - 1) / event.total) * 100}%`;
       break;
     case "track-ready": {

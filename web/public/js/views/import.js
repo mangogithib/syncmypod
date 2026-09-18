@@ -112,8 +112,15 @@ export async function renderImport(view, context) {
     const statusLine = h('p.muted', 'Starting...');
     const detail = h('div');
 
+    // `stopped` is declared before the modal so `onClose` can set it. Closing
+    // the dialog by any route must stop the poll - see below.
+    let stopped = false;
+
     const control = modal({
       title: `Importing ${label}`,
+      onClose: () => {
+        stopped = true;
+      },
       body: [
         statusLine,
         h('div.progress', progressBar),
@@ -122,7 +129,6 @@ export async function renderImport(view, context) {
       ],
     });
 
-    let stopped = false;
     const poll = async () => {
       if (stopped) return;
       try {
@@ -196,14 +202,13 @@ export async function renderImport(view, context) {
       }
     };
 
-    // Stop polling once the dialog is gone, so a closed dialog does not keep
-    // requesting forever.
-    const originalClose = control.close;
-    control.close = () => {
-      stopped = true;
-      originalClose();
-    };
-
+    // Stopping the poll is `onClose` above rather than a wrapper around
+    // `control.close`, because that wrapper only caught the one route nobody
+    // uses. Escape, a click on the backdrop and the X button all call the
+    // modal's own internal close, which never looks at the returned object -
+    // so a dialog dismissed the ordinary way went on polling every 1.2s for as
+    // long as the page stayed open. `onClose` is the hook every route runs
+    // through.
     poll();
   }
 

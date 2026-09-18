@@ -6,6 +6,7 @@ import {
   confirmDialog,
   debounce,
   emptyState,
+  field,
   modal,
   notice,
   pager,
@@ -302,7 +303,7 @@ export async function renderAlbums(view, context) {
       title: 'Add to playlist',
       body: [
         h('p.small.muted', `${albums.length} album${albums.length === 1 ? '' : 's'}`),
-        h('div.field', h('label', 'Playlist'), select),
+        field('Playlist', select),
       ],
       footer: [
         h('button.btn', { type: 'button', onclick: () => control.close() }, 'Cancel'),
